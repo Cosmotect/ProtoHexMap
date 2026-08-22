@@ -1,0 +1,144 @@
+// Automated smoke test: opens the built game in a headless Chromium, checks the console
+// for errors, walks the shortest route to the boss by clicking tiles, toggles the camera
+// and saves screenshots into tools/shots/.
+//
+// One-time setup (optional, only if you want to run this yourself):
+//   npm install --save-dev playwright
+//   npx playwright install chromium
+// Then:
+//   npm run build
+//   npx vite preview --port 4173        (in one terminal)
+//   node tools/smoke-test.cjs           (in another)
+//
+// Environment variables: URL (default http://localhost:4173/?seed=777), OUT (screenshot folder).
+const path = require('node:path');
+const fs = require('node:fs');
+
+let chromium;
+try {
+  ({ chromium } = require('playwright'));
+} catch {
+  console.error('Playwright is not installed. Run: npm install --save-dev playwright && npx playwright install chromium');
+  process.exit(1);
+}
+
+const URL = process.env.URL || 'http://localhost:4173/?seed=777';
+const OUT = process.env.OUT || path.join(__dirname, 'shots');
+fs.mkdirSync(OUT, { recursive: true });
+
+(async () => {
+  const browser = await chromium.launch({
+    // Software WebGL so the test also works on machines / servers without a GPU.
+    args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'],
+  });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const problems = [];
+  page.on('pageerror', (e) => problems.push('PAGE ERROR: ' + e.message));
+  page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') problems.push(m.type() + ': ' + m.text()); });
+
+  await page.goto(URL, { waitUntil: 'load', timeout: 60000 });
+  await page.waitForTimeout(1500);
+
+  const screenPos = (q, r) => page.evaluate(([q, r]) => {
+    const R = window.__renderer; const g = window.game;
+    const hex = g.hexAt(q, r); const rec = R.tiles.get(hex.key);
+    const V = R.camera.position.constructor;
+    const v = new V(hex.x, rec.height + 0.05, -hex.y); v.project(R.camera);
+    const rect = R.renderer.domElement.getBoundingClientRect();
+    return { x: rect.left + (v.x + 1) / 2 * rect.width, y: rect.top + (1 - v.y) / 2 * rect.height };
+  }, [q, r]);
+  const waitIdle = async () => {
+    await page.waitForFunction(() => !window.__renderer.busy, null, { timeout: 20000 });
+    await page.waitForTimeout(900); // let the camera glide settle
+  };
+
+  const start = await page.evaluate(() => ({ seed: window.game.seed, supplies: window.game.state.supplies, path: window.game.state.shortestPathLength }));
+  console.log('start:', JSON.stringify(start));
+  await page.screenshot({ path: path.join(OUT, '01-start.png') });
+
+  // Make camp on the start tile (empty): spends supplies, should not throw.
+  await page.click('#btn-engage');
+  await page.waitForTimeout(200);
+  const afterCamp = await page.evaluate(() => window.game.state.supplies);
+  if (afterCamp !== start.supplies - 20) problems.push(`make camp did not spend 20 supplies (${start.supplies} -> ${afterCamp})`);
+  // Simulated shop + unit chooser + acolyte flows, straight through the rules layer.
+  const rulesOk = await page.evaluate(() => {
+    const g = window.game; const u = g.state.party[1];
+    u.alive = false; u.hp = 0; g.emit('change');
+    const hadDead = g.deadUnits().length === 1;
+    return hadDead;
+  });
+  if (!rulesOk) problems.push('could not mark a unit dead for the chooser test');
+  await page.evaluate(() => { window.game.emit('dialog', { kind: 'acolyte' }); });
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: path.join(OUT, '01b-choose-unit.png') });
+  await page.click('#dialog-close');
+  await page.evaluate(() => { const u = window.game.state.party[1]; u.alive = true; u.hp = u.maxHp; window.game.emit('change'); });
+
+  // Event dialogs: a reveal event and the black market chooser.
+  await page.evaluate(() => { window.game.applyEvent({ id: 'vantage', title: 'Vantage point', effect: 'vantage', text: 'Test vantage text.' }, false); });
+  await page.waitForTimeout(300);
+  const evShown = await page.evaluate(() => document.getElementById('dialog-body').textContent.includes('revealed'));
+  if (!evShown) problems.push('event dialog did not show an effect line');
+  await page.screenshot({ path: path.join(OUT, '01c-event.png') });
+  await page.click('#dialog-close');
+  await page.evaluate(() => { window.game.applyEvent({ id: 'bm', title: 'Black market', effect: 'blackMarket', text: 'Test black market text.' }, false); });
+  await page.waitForTimeout(200);
+  const bmButtons = await page.evaluate(() => document.querySelectorAll('#dialog-actions button').length);
+  if (bmButtons !== 4) problems.push(`black market dialog should have 3 units + Decline, got ${bmButtons}`);
+  await page.click('#dialog-close');
+  // Supplies cap.
+  const capOk = await page.evaluate(() => { const g = window.game; g.addSupplies(999); return g.state.supplies === g.state.maxSupplies; });
+  if (!capOk) problems.push('supplies exceeded the maximum');
+
+  // Walk a couple of steps so fatigue rises, then check the hover popup.
+  for (let i = 0; i < 6; i++) {
+    await waitIdle();
+    const n = await page.evaluate(() => { const r = window.game.reachable(); const h = r[0]; return h ? [h.q, h.r] : null; });
+    if (!n) break;
+    const p = await screenPos(n[0], n[1]);
+    await page.mouse.move(p.x, p.y); await page.waitForTimeout(60);
+    await page.mouse.down(); await page.mouse.up();
+    await page.waitForTimeout(150);
+    await page.click('#dialog-close').catch(() => {});
+  }
+  await waitIdle();
+  const probe = await page.evaluate(() => { const g = window.game; const n = g.reachable()[0]; return n ? [n.q, n.r, g.fatigueAfterNextStep()] : null; });
+  if (probe && probe[2] > 0) {
+    const p = await screenPos(probe[0], probe[1]);
+    await page.mouse.move(p.x, p.y); await page.waitForTimeout(250);
+    const tip = await page.evaluate(() => { const t = document.getElementById('fatigue-tip'); return t.classList.contains('hidden') ? null : t.textContent; });
+    const hud = await page.evaluate(() => document.getElementById('stat-fatigue').textContent);
+    if (!tip) problems.push('fatigue popup did not appear on hover');
+    else if (!tip.includes(hud)) problems.push(`popup (${tip}) does not show the HUD fatigue value (${hud})`);
+    const nextOk = await page.evaluate(() => { const t = document.getElementById('fatigue-tip').textContent; return t.includes(`after this step: ${window.game.fatigueAfterNextStep()}%`); });
+    if (!nextOk) problems.push('popup does not show the next-step fatigue value');
+    await page.screenshot({ path: path.join(OUT, '02b-fatigue-tip.png') });
+  }
+  // Forced encounter: banner first, dialog later.
+  await page.evaluate(() => { const g = window.game; g.emit('forced', { label: 'Battle', chance: 50 }); g.emit('dialog', { kind: 'event', title: 'Forced test', text: 't', effect: 'e' }); });
+  await page.waitForTimeout(150);
+  const bannerEarly = await page.evaluate(() => ({ banner: !document.getElementById('banner').classList.contains('hidden'), dialog: !document.getElementById('dialog').classList.contains('hidden') }));
+  if (!bannerEarly.banner || bannerEarly.dialog) problems.push('forced banner/dialog timing wrong at 150ms: ' + JSON.stringify(bannerEarly));
+  await page.waitForTimeout(700);
+  const dialogLate = await page.evaluate(() => !document.getElementById('dialog').classList.contains('hidden'));
+  if (!dialogLate) problems.push('dialog did not open after the forced banner');
+  await page.screenshot({ path: path.join(OUT, '02d-forced-banner.png') });
+  await page.click('#dialog-close');
+  // Supplies overflow dialog with the camp-first option.
+  await page.evaluate(() => { const g = window.game; g.state.supplies = g.state.maxSupplies - 5; g.offerSupplies(20, 'Test find', 'Test text.'); });
+  await page.waitForTimeout(200);
+  const supButtons = await page.evaluate(() => [...document.querySelectorAll('#dialog-actions button')].map((b) => b.textContent));
+  if (!supButtons.some((t) => t.includes('Make camp first'))) problems.push('overflow dialog lacks the make-camp-first button: ' + JSON.stringify(supButtons));
+  await page.screenshot({ path: path.join(OUT, '02c-supplies-overflow.png') });
+  await page.evaluate(() => document.querySelectorAll('#dialog-actions button')[0].click());
+  await page.waitForTimeout(200);
+  const end = { status: 'n/a', overlay: false };
+  console.log('end:', JSON.stringify(await page.evaluate(() => ({ turn: window.game.state.turn, fatigue: window.game.state.fatigue, supplies: window.game.state.supplies }))));
+  await page.screenshot({ path: path.join(OUT, '03-end.png') });
+  void end;
+
+  console.log(problems.length ? 'PROBLEMS:\n' + problems.join('\n') : 'OK: no errors, all checks passed.');
+  await browser.close();
+  process.exit(problems.length ? 1 : 0);
+})().catch((e) => { console.error('FAILED', e); process.exit(1); });

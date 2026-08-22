@@ -1,0 +1,30 @@
+# --- Зависимости ---
+node_modules/
+
+# --- Сборка (Vite) ---
+dist/
+dist-single/
+.vite/
+
+# --- Локальные ручные бэкапы (архивные папки с датой в названии) ---
+_archive_*/
+
+# --- Переменные окружения / секреты ---
+.env
+.env.local
+.env.*.local
+
+# --- Логи ---
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# --- Системные файлы ОС ---
+.DS_Store
+Thumbs.db
+
+# --- Файлы редакторов/IDE ---
+.vscode/
+.idea/
+*.swp
