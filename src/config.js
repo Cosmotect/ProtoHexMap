@@ -25,9 +25,8 @@ export const CONFIG = {
   run: {
     startGold: 50,
     // Supplies are the currency: camps (20), shop rest (35), shop upgrades (25); treasure gives 40.
-    // Either a fixed number, or 'auto' = (shortest path length + supplySlack) from the old rules.
+    // This is also the maximum: gains never exceed it.
     startSupplies: 60,
-    supplySlack: 12,
     revealRadius: 0,          // how many rings around the player get uncovered (0 = only the tile you stand on)
     bossAlwaysVisible: false, // false = the bosses hide under the fog like everything else
     revealStartRadius: 1,     // rings uncovered around the start tile at the beginning

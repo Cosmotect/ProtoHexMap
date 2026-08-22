@@ -47,6 +47,13 @@ fs.mkdirSync(OUT, { recursive: true });
     const rect = R.renderer.domElement.getBoundingClientRect();
     return { x: rect.left + (v.x + 1) / 2 * rect.width, y: rect.top + (1 - v.y) / 2 * rect.height };
   }, [q, r]);
+  // Windows have no close button: press their last option, and confirm if asked.
+  const dismissDialog = async () => {
+    await page.evaluate(() => { const b = document.querySelectorAll('#dialog-actions button'); if (b.length) b[b.length - 1].click(); });
+    await page.waitForTimeout(80);
+    await page.evaluate(() => { const c = document.getElementById('confirm'); if (!c.classList.contains('hidden')) document.getElementById('btn-confirm-yes').click(); });
+    await page.waitForTimeout(80);
+  };
   const waitIdle = async () => {
     await page.waitForFunction(() => !window.__renderer.busy, null, { timeout: 20000 });
     await page.waitForTimeout(900); // let the camera glide settle
@@ -57,7 +64,7 @@ fs.mkdirSync(OUT, { recursive: true });
   await page.screenshot({ path: path.join(OUT, '01-start.png') });
 
   // Make camp on the start tile (empty): spends supplies, should not throw.
-  await page.click('#btn-engage');
+  await page.click('#btn-enter');
   await page.waitForTimeout(200);
   const afterCamp = await page.evaluate(() => window.game.state.supplies);
   if (afterCamp !== start.supplies - 20) problems.push(`make camp did not spend 20 supplies (${start.supplies} -> ${afterCamp})`);
@@ -72,7 +79,7 @@ fs.mkdirSync(OUT, { recursive: true });
   await page.evaluate(() => { window.game.emit('dialog', { kind: 'acolyte' }); });
   await page.waitForTimeout(200);
   await page.screenshot({ path: path.join(OUT, '01b-choose-unit.png') });
-  await page.click('#dialog-close');
+  await dismissDialog();
   await page.evaluate(() => { const u = window.game.state.party[1]; u.alive = true; u.hp = u.maxHp; window.game.emit('change'); });
 
   // Event dialogs: a reveal event and the black market chooser.
@@ -81,12 +88,21 @@ fs.mkdirSync(OUT, { recursive: true });
   const evShown = await page.evaluate(() => document.getElementById('dialog-body').textContent.includes('revealed'));
   if (!evShown) problems.push('event dialog did not show an effect line');
   await page.screenshot({ path: path.join(OUT, '01c-event.png') });
-  await page.click('#dialog-close');
+  await dismissDialog();
   await page.evaluate(() => { window.game.applyEvent({ id: 'bm', title: 'Black market', effect: 'blackMarket', text: 'Test black market text.' }, false); });
   await page.waitForTimeout(200);
   const bmButtons = await page.evaluate(() => document.querySelectorAll('#dialog-actions button').length);
   if (bmButtons !== 4) problems.push(`black market dialog should have 3 units + Decline, got ${bmButtons}`);
-  await page.click('#dialog-close');
+  // Decline asks for confirmation.
+  await page.evaluate(() => { const b = document.querySelectorAll('#dialog-actions button'); b[b.length - 1].click(); });
+  await page.waitForTimeout(100);
+  const confirmShown = await page.evaluate(() => !document.getElementById('confirm').classList.contains('hidden'));
+  if (!confirmShown) problems.push('declining the black market did not ask for confirmation');
+  await page.evaluate(() => document.getElementById('btn-confirm-yes').click());
+  await page.waitForTimeout(100);
+  // No close button on windows; clicking the world flashes the open one.
+  const hasClose = await page.evaluate(() => !!document.getElementById('dialog-close'));
+  if (hasClose) problems.push('dialog still has a close button');
   // Supplies cap.
   const capOk = await page.evaluate(() => { const g = window.game; g.addSupplies(999); return g.state.supplies === g.state.maxSupplies; });
   if (!capOk) problems.push('supplies exceeded the maximum');
@@ -100,7 +116,7 @@ fs.mkdirSync(OUT, { recursive: true });
     await page.mouse.move(p.x, p.y); await page.waitForTimeout(60);
     await page.mouse.down(); await page.mouse.up();
     await page.waitForTimeout(150);
-    await page.click('#dialog-close').catch(() => {});
+    await dismissDialog();
   }
   await waitIdle();
   const probe = await page.evaluate(() => { const g = window.game; const n = g.reachable()[0]; return n ? [n.q, n.r, g.fatigueAfterNextStep()] : null; });
@@ -124,7 +140,7 @@ fs.mkdirSync(OUT, { recursive: true });
   const dialogLate = await page.evaluate(() => !document.getElementById('dialog').classList.contains('hidden'));
   if (!dialogLate) problems.push('dialog did not open after the forced banner');
   await page.screenshot({ path: path.join(OUT, '02d-forced-banner.png') });
-  await page.click('#dialog-close');
+  await dismissDialog();
   // Supplies overflow dialog with the camp-first option.
   await page.evaluate(() => { const g = window.game; g.state.supplies = g.state.maxSupplies - 5; g.offerSupplies(20, 'Test find', 'Test text.'); });
   await page.waitForTimeout(200);
@@ -137,6 +153,128 @@ fs.mkdirSync(OUT, { recursive: true });
   console.log('end:', JSON.stringify(await page.evaluate(() => ({ turn: window.game.state.turn, fatigue: window.game.state.fatigue, supplies: window.game.state.supplies }))));
   await page.screenshot({ path: path.join(OUT, '03-end.png') });
   void end;
+
+  // New player experience: HUD hidden, first card visible, party revealed after step 2.
+  await page.goto(URL.replace(/\?.*$/, '') + '?npe=1', { waitUntil: 'load', timeout: 60000 });
+  await page.waitForTimeout(1500);
+  const npe0 = await page.evaluate(() => ({
+    card: !document.getElementById('tutorial').classList.contains('hidden'),
+    party: document.getElementById('party').classList.contains('npe-hidden'),
+    stats: document.getElementById('statusbar').classList.contains('npe-hidden'),
+    menuVisible: !document.getElementById('menu-wrap').classList.contains('npe-hidden'),
+    blocker: !document.getElementById('input-block').classList.contains('hidden'),
+  }));
+  if (!npe0.card || !npe0.party || !npe0.stats || !npe0.menuVisible || !npe0.blocker) problems.push('NPE start state wrong: ' + JSON.stringify(npe0));
+  await page.waitForTimeout(300);
+  const lineToTile = await page.evaluate(() => { const l = document.querySelector('#tutorial-lines line'); if (!l) return null; const p = window.__renderer.tileTopScreen('0,0'); return { x2: +l.getAttribute('x2'), y2: +l.getAttribute('y2'), tx: p.x, ty: p.y, ring: window.__renderer.highlightRing.visible }; });
+  if (!lineToTile || Math.abs(lineToTile.x2 - lineToTile.tx) > 2 || Math.abs(lineToTile.y2 - lineToTile.ty) > 2 || !lineToTile.ring) problems.push('welcome card line does not end on the centre tile: ' + JSON.stringify(lineToTile));
+  // The menu still opens while a card is showing.
+  await page.click('#btn-menu'); await page.waitForTimeout(100);
+  const menuWhileCard = await page.evaluate(() => !document.getElementById('menu').classList.contains('hidden'));
+  if (!menuWhileCard) problems.push('menu did not open while an NPE card was showing');
+  await page.keyboard.press('Escape'); await page.waitForTimeout(100);
+  await page.screenshot({ path: path.join(OUT, '05-npe-start.png') });
+  // Input is blocked while the card is open.
+  {
+    const n = await page.evaluate(() => { const h = window.game.reachable()[0]; return [h.q, h.r]; });
+    const p = await screenPos(n[0], n[1]);
+    await page.mouse.move(p.x, p.y); await page.waitForTimeout(60); await page.mouse.down(); await page.mouse.up();
+    await page.waitForTimeout(200);
+    const turn = await page.evaluate(() => window.game.state.turn);
+    if (turn !== 0) problems.push('NPE let the player move while a card was open');
+  }
+  await page.click('#btn-tutorial-ok');
+  for (let i = 0; i < 2; i++) {
+    await waitIdle();
+    const n = await page.evaluate(() => { const h = window.game.reachable()[0]; return [h.q, h.r]; });
+    const p = await screenPos(n[0], n[1]);
+    await page.mouse.move(p.x, p.y); await page.waitForTimeout(60); await page.mouse.down(); await page.mouse.up();
+    await page.waitForTimeout(300);
+    await page.click('#btn-tutorial-ok').catch(() => {});
+    await page.waitForTimeout(100);
+  }
+  await waitIdle();
+  const npe2 = await page.evaluate(() => ({ turn: window.game.state.turn, party: document.getElementById('party').classList.contains('npe-hidden') }));
+  if (npe2.turn !== 2 || npe2.party) problems.push('NPE did not reveal the party after step 2: ' + JSON.stringify(npe2));
+  await page.screenshot({ path: path.join(OUT, '06-npe-step2.png') });
+  // Legend texts are generated from the config (no stale numbers).
+  const legendOk = await page.evaluate(() => document.getElementById('legend-items').textContent.includes('20 supplies'));
+  if (!legendOk) problems.push('legend text does not reflect the config camp cost');
+  // Skip the guide (everything comes back).
+  await page.evaluate(() => document.getElementById('btn-tutorial-skip').click());
+  await page.waitForTimeout(200);
+  const blockerGone = await page.evaluate(() => document.getElementById('input-block').classList.contains('hidden'));
+  if (!blockerGone) problems.push('input blocker stayed after skipping the guide');
+  await page.click('#btn-menu'); await page.waitForTimeout(150);
+  const blurred = await page.evaluate(() => document.getElementById('scene').classList.contains('blurred'));
+  if (!blurred) problems.push('world did not blur with the menu open');
+  await page.screenshot({ path: path.join(OUT, '07-menu.png') });
+  // Settings: opens, keeps the blur, a change takes effect and persists; reset restores it.
+  await page.click('#btn-settings'); await page.waitForTimeout(200);
+  const settingsState = await page.evaluate(() => ({ open: !document.getElementById('settings').classList.contains('hidden'), blurred: document.getElementById('scene').classList.contains('blurred'), rows: document.querySelectorAll('#settings-body .settings-row').length }));
+  if (!settingsState.open || !settingsState.blurred || settingsState.rows < 5) problems.push('settings window state wrong: ' + JSON.stringify(settingsState));
+  await page.evaluate(() => document.querySelector('[data-tab="encounters"]').click());
+  await page.waitForTimeout(100);
+  await page.evaluate(() => { const i = document.querySelector('[data-path="rest.cost"]'); i.value = '33'; i.dispatchEvent(new Event('change')); });
+  await page.waitForTimeout(100);
+  const applied = await page.evaluate(() => ({ cost: window.game.config.rest.cost, label: document.getElementById('btn-enter').textContent, legend: document.getElementById('legend-items').textContent.includes('33 supplies'), stored: localStorage.getItem('hexmap-settings-v1') }));
+  if (applied.cost !== 33 || !applied.label.includes('33') || !applied.legend || !applied.stored.includes('rest.cost')) problems.push('setting change did not apply everywhere: ' + JSON.stringify(applied));
+  await page.screenshot({ path: path.join(OUT, '08-settings.png') });
+  await page.evaluate(() => document.querySelector('[data-reset="rest.cost"]').click());
+  await page.waitForTimeout(100);
+  const resetOk = await page.evaluate(() => window.game.config.rest.cost === 20);
+  if (!resetOk) problems.push('reset did not restore the config value');
+  // Language switch: Russian everywhere, then back to English.
+  await page.evaluate(() => document.querySelector('[data-tab="general"]').click());
+  await page.waitForTimeout(100);
+  await page.selectOption('#settings-language', 'ru');
+  await page.waitForTimeout(200);
+  const ruState = await page.evaluate(() => ({
+    fatigue: document.querySelector('[data-i18n="status.fatigue"]').textContent,
+    enter: document.getElementById('btn-enter').textContent,
+    legend: document.getElementById('legend-items').textContent.slice(0, 40),
+    log: document.getElementById('log').textContent.slice(0, 30),
+    tab: document.querySelector('.tabs .tab.active').textContent,
+    lang: localStorage.getItem('hexmap-lang'),
+  }));
+  if (ruState.fatigue !== 'Усталость' || !/лагерь/i.test(ruState.enter) || !/Луг/.test(ruState.legend) || !/забег/i.test(ruState.log) || ruState.tab !== 'Общие' || ruState.lang !== 'ru') problems.push('Russian did not apply everywhere: ' + JSON.stringify(ruState));
+  await page.screenshot({ path: path.join(OUT, '10-russian.png') });
+  await page.selectOption('#settings-language', 'en');
+  await page.waitForTimeout(200);
+  await page.click('#btn-settings-close'); await page.waitForTimeout(100);
+  const unblurred = await page.evaluate(() => !document.getElementById('scene').classList.contains('blurred'));
+  if (!unblurred) problems.push('blur stayed after closing settings');
+  // Encounter card precedes a forced encounter: arriving on an encounter tile with the guide active holds the arrival.
+  await page.goto(URL.replace(/\?.*$/, '') + '?npe=1', { waitUntil: 'load', timeout: 60000 });
+  await page.waitForTimeout(1200);
+  await page.click('#btn-tutorial-ok'); await page.waitForTimeout(100);
+  await page.evaluate(() => { const g = window.game; g.state.fatigueSteps = 9; g.state.fatigue = 100; g.emit('change'); });
+  {
+    // Plant a battle on a neighbouring tile (ring 1 is kept empty by the generator) and rebuild the scene.
+    const n = await page.evaluate(() => { const g = window.game; const h = g.reachable()[0]; h.encounter = 'battle'; h.enemies = [{ name: 'Test', hp: 10, maxHp: 10, power: 9, alive: true }]; window.__renderer.loadGame(g); return [h.q, h.r]; });
+    await page.waitForTimeout(400);
+    const p = await screenPos(n[0], n[1]);
+    await page.mouse.move(p.x, p.y); await page.waitForTimeout(60); await page.mouse.down(); await page.mouse.up();
+    await page.waitForTimeout(700);
+    // step 1 also queues the "fog" card first; dismiss until the encounters card shows, without ever seeing a battle dialog first
+    let sawBattleEarly = false, title = '';
+    for (let i = 0; i < 4; i++) {
+      title = await page.evaluate(() => document.getElementById('tutorial-title').textContent);
+      const dlg = await page.evaluate(() => !document.getElementById('dialog').classList.contains('hidden'));
+      if (dlg) { sawBattleEarly = true; break; }
+      if (title === 'Encounters') break;
+      await page.click('#btn-tutorial-ok'); await page.waitForTimeout(150);
+    }
+    if (sawBattleEarly || title !== 'Encounters') problems.push(`encounter card did not precede the forced encounter (title: ${title}, dialog early: ${sawBattleEarly})`);
+    const markerHl = await page.evaluate(() => !!window.__renderer.highlightMarker);
+    if (!markerHl) problems.push('encounter card did not outline the 3D marker');
+    const chev = await page.evaluate(() => { const g = window.game; const rec = window.__renderer.tiles.get(g.state.position.key); return rec?.marker?.userData.chevrons.length; });
+    console.log('chevrons on this battle:', chev);
+    await page.screenshot({ path: path.join(OUT, '09-npe-encounter-card.png') });
+    await page.click('#btn-tutorial-ok'); await page.waitForTimeout(1200);
+    const after = await page.evaluate(() => ({ dialog: !document.getElementById('dialog').classList.contains('hidden'), title: document.getElementById('tutorial-title').textContent }));
+    if (!after.dialog) problems.push('forced encounter did not run after the encounter card: ' + JSON.stringify(after));
+  }
 
   console.log(problems.length ? 'PROBLEMS:\n' + problems.join('\n') : 'OK: no errors, all checks passed.');
   await browser.close();

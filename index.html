@@ -11,45 +11,75 @@
     <div id="scene"></div>
 
     <div id="hud">
-      <div class="panel top-left">
-        <div class="title">HEX WORLD MAP <span class="version">prototype v0.1</span></div>
-        <div class="stats">
-          <div class="stat"><span class="label" title="Chance of a forced encounter when you arrive on your next tile (if it has a battle or event)">Fatigue</span><span id="stat-fatigue" class="value">-</span></div>
-          <div class="stat"><span class="label">Gold</span><span id="stat-gold" class="value">-</span></div>
-          <div class="stat"><span class="label">Supplies</span><span id="stat-supplies" class="value">-</span></div>
-          <div class="stat"><span class="label">Turn</span><span id="stat-turn" class="value">-</span></div>
+      <div class="top-right menu-wrap" id="menu-wrap">
+        <button id="btn-menu" class="menu-toggle" data-i18n="menu.button" data-i18n-title="menu.button.title">Menu</button>
+        <div id="menu" class="panel menu hidden">
+          <div class="title"><span data-i18n="menu.title">HEX WORLD MAP</span> <span class="version" data-i18n="menu.version">prototype</span></div>
+          <div class="menu-section">
+            <div class="menu-title" data-i18n="menu.section.map">Map</div>
+            <div class="seed-bar">
+              <span><span data-i18n="menu.seed">Seed</span> <b id="seed-value">-</b></span>
+              <span id="path-info" class="muted"></span>
+            </div>
+            <div class="seed-bar">
+              <input id="seed-input" type="text" data-i18n-placeholder="menu.seed.placeholder" data-i18n-title="menu.seed.input.title" placeholder="type a seed" />
+              <button id="btn-load-seed" data-i18n="menu.load" data-i18n-title="menu.load.title">Load</button>
+              <button id="btn-copy" data-i18n="menu.copy" data-i18n-title="menu.copy.title">Copy link</button>
+            </div>
+            <div class="menu-row">
+              <button id="btn-new" data-i18n="menu.new" data-i18n-title="menu.new.title">New map</button>
+              <button id="btn-restart" data-i18n="menu.restart" data-i18n-title="menu.restart.title">Restart</button>
+              <button id="btn-reveal" data-i18n="menu.reveal" data-i18n-title="menu.reveal.title">Reveal map</button>
+            </div>
+          </div>
+          <div class="menu-section">
+            <div class="menu-title" data-i18n="menu.section.tuning">Tuning</div>
+            <div class="menu-row">
+              <button id="btn-settings" data-i18n="menu.settings" data-i18n-title="menu.settings.title">Settings</button>
+            </div>
+          </div>
+          <div class="menu-section">
+            <div class="menu-title" data-i18n="menu.section.learn">Learn</div>
+            <div class="menu-row">
+              <button id="btn-npe" class="npe" data-i18n="menu.npe" data-i18n-title="menu.npe.title">New player experience</button>
+            </div>
+          </div>
         </div>
-        <div class="seed-bar">
-          <span>Seed <b id="seed-value">-</b></span>
-          <span id="path-info" class="muted"></span>
-          <input id="seed-input" type="text" placeholder="type a seed" title="Type a seed (number or word) and press Enter" />
-          <button id="btn-load-seed" title="Load the map for the typed seed">Load</button>
-          <button id="btn-copy" title="Copy a link to this exact map">Copy link</button>
-        </div>
-      </div>
-
-      <div class="panel top-right toolbar">
-        <button id="btn-new" title="Generate a new random map (N)">New map</button>
-        <button id="btn-restart" title="Restart this same map (R)">Restart</button>
-        <button id="btn-camera" title="Switch camera (C)">Camera: perspective</button>
-        <button id="btn-reveal" title="Debug: lift the fog everywhere">Reveal map</button>
-        <button id="btn-help" title="Controls (H)">?</button>
       </div>
 
       <div class="panel left-mid party" id="party">
-        <div class="party-title">Party</div>
+        <div class="party-title" data-i18n="party.title">Party</div>
         <div id="party-units"></div>
       </div>
 
-      <!-- Generic top-centre dialog: shop, events, battle reports, "choose a unit". -->
+      <!-- Encounter window (top centre): shop, events, battle reports, "choose a unit".
+           It has no close button: the player always picks one of its options. -->
       <div id="dialog" class="panel dialog hidden">
-        <div class="dialog-head"><span id="dialog-title" class="dialog-title"></span><button id="dialog-close" class="small" title="Close (Esc)">x</button></div>
+        <div class="dialog-head"><span id="dialog-title" class="dialog-title"></span></div>
         <div id="dialog-body" class="dialog-body"></div>
         <div id="dialog-actions" class="dialog-actions"></div>
       </div>
 
-      <div class="engage-wrap">
-        <button id="btn-engage" class="engage" disabled title="Enter the encounter on the tile you stand on (E)">Engage</button>
+      <!-- "Are you sure?" box for choices that skip a reward -->
+      <div id="confirm" class="modal hidden">
+        <div class="modal-box">
+          <h2 id="confirm-title">Are you sure?</h2>
+          <p id="confirm-text"></p>
+          <div class="row"><button id="btn-confirm-no" data-i18n="confirm.no">Go back</button><button id="btn-confirm-yes" data-i18n="confirm.yes">Yes, do it</button></div>
+        </div>
+      </div>
+
+      <!-- Status bar: fatigue and turn on the left, the Enter button in the middle, gold and supplies on the right -->
+      <div class="panel bottom-center statusbar" id="statusbar">
+        <div class="stats">
+          <div class="stat"><span class="label" data-i18n="status.fatigue" data-i18n-title="status.fatigue.title">Fatigue</span><span id="stat-fatigue" class="value">-</span></div>
+          <div class="stat"><span class="label" data-i18n="status.turn">Turn</span><span id="stat-turn" class="value">-</span></div>
+        </div>
+        <button id="btn-enter" class="enter" disabled>Enter</button>
+        <div class="stats">
+          <div class="stat"><span class="label" data-i18n="status.gold">Gold</span><span id="stat-gold" class="value">-</span></div>
+          <div class="stat"><span class="label" data-i18n="status.supplies">Supplies</span><span id="stat-supplies" class="value">-</span></div>
+        </div>
       </div>
 
       <div id="fatigue-tip" class="fatigue-tip hidden"></div>
@@ -61,7 +91,32 @@
 
       <div class="panel bottom-right">
         <div id="hover-info" class="hover-info hidden"></div>
-        <div id="legend" class="legend"></div>
+        <div id="legend" class="legend">
+          <div class="legend-label"><span data-i18n="legend.label">Legend</span> <span class="muted" data-i18n="legend.hover">(hover)</span></div>
+          <div id="legend-items" class="legend-items"></div>
+        </div>
+      </div>
+
+      <!-- Transparent sheet that swallows clicks while the guide waits for "Got it" (the menu stays above it) -->
+      <div id="input-block" class="input-block hidden"></div>
+      <!-- Green line from the guide card to the HUD piece it talks about -->
+      <svg id="tutorial-lines" class="tutorial-lines" aria-hidden="true"></svg>
+
+      <!-- Settings window: the config files, editable at runtime -->
+      <div id="settings" class="modal settings hidden">
+        <div class="modal-box settings-box">
+          <div class="dialog-head"><h2 data-i18n="settings.title">Settings</h2><div class="row"><button id="btn-settings-reset-tab" class="small" data-i18n="settings.resetTab" data-i18n-title="settings.resetTab.title">Reset tab</button><button id="btn-settings-close" data-i18n="settings.close">Close</button></div></div>
+          <div id="settings-tabs" class="tabs"></div>
+          <div id="settings-body" class="settings-body"></div>
+        </div>
+      </div>
+
+      <!-- New player experience card -->
+      <div id="tutorial" class="panel tutorial hidden">
+        <div class="tutorial-kicker" data-i18n="npe.kicker">New player experience</div>
+        <div id="tutorial-title" class="tutorial-title"></div>
+        <div id="tutorial-body" class="tutorial-body"></div>
+        <div class="row"><button id="btn-tutorial-skip" class="small" data-i18n="npe.skip" data-i18n-title="npe.skip.title">Skip guide</button><button id="btn-tutorial-ok" data-i18n="npe.ok">Got it</button></div>
       </div>
 
       <div id="overlay" class="modal hidden">
@@ -69,25 +124,13 @@
           <h2 id="overlay-title">Run over</h2>
           <p id="overlay-text"></p>
           <div class="row">
-            <button id="btn-overlay-restart">Retry this map</button>
-            <button id="btn-overlay-new">New map</button>
+            <button id="btn-overlay-inspect" data-i18n="end.inspect" data-i18n-title="end.inspect.title">Inspect the map</button>
+            <button id="btn-overlay-restart" data-i18n="end.retry">Retry this map</button>
+            <button id="btn-overlay-new" data-i18n="end.new">New map</button>
           </div>
         </div>
       </div>
 
-      <div id="help" class="modal hidden">
-        <div class="modal-box">
-          <h2>How to play</h2>
-          <p><b>Goal:</b> you start on the bright tile in the centre of the map. The boss is hidden somewhere on the outer edge. Fog hides the map until you get next to it.</p>
-          <p><b>Move:</b> click a glowing neighbouring tile. Stepping on an encounter does not start it: press <b>Engage</b> (or <b>E</b>) to enter it, or walk on.</p>
-          <p><b>Encounters:</b> Battle runs an automatic fight (your units vs enemies, damage depends on power). Treasure gives supplies. Shop sells a rest (fatigue reset) and unit upgrades (+1 power). Events tell a story and then do something: reveal parts of the map, hand out supplies or power, offer a dark bargain, or turn into a fight. Mountains can be crossed for 10 supplies and 5 HP per unit, and you see 2 rings further from the top. The Acolyte of the Great Forge restores a fallen unit. On an empty tile, Engage makes camp for supplies and heals every living unit by half its max HP.</p>
-          <p><b>Fatigue:</b> every step since your last encounter tires the party. After a few free steps, arriving on an encounter tile has a growing chance of forcing you into it. Hover a tile to see the chance. Engaging any encounter resets fatigue.</p>
-          <p><b>Camera:</b> left-drag or arrow keys to pan, right-drag to rotate and tilt, mouse wheel to zoom. Press <b>C</b> to switch between the perspective and top-down cameras.</p>
-          <p><b>Share a map:</b> the seed in the address bar (?seed=1234) recreates the exact same map. Use "Copy link".</p>
-          <p class="muted">Encounters are placeholders: engaging one only writes a log line and clears the marker for now.</p>
-          <div class="row"><button id="btn-help-close">Close</button></div>
-        </div>
-      </div>
     </div>
 
     <script type="module" src="/src/main.js"></script>

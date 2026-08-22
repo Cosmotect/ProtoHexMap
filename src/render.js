@@ -1,4 +1,5 @@
 // Everything that draws pixels lives here (Three.js scene, camera, input picking).
+const HIGHLIGHT_COLOR = 0x8fe0b8;   // same green as the guide card's outline
 // The renderer never changes game rules: it listens to Game events and shows them.
 import * as THREE from 'three';
 import { MapControls } from 'three/addons/controls/MapControls.js';
@@ -106,6 +107,17 @@ export class MapRenderer {
     this.ringBackMat = new THREE.MeshBasicMaterial({
       color: 0x0b0e16, transparent: true, opacity: 0.55, depthWrite: false, side: THREE.DoubleSide,
     });
+
+    // Guide highlight: a flat green duplicate drawn behind a marker (slightly larger, so it
+    // reads as an outline), and a green hex ring for tiles.
+    this.highlightMat = new THREE.MeshBasicMaterial({ color: HIGHLIGHT_COLOR, side: THREE.BackSide, transparent: true, opacity: 0.95 });
+    this.highlightRing = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: HIGHLIGHT_COLOR, transparent: true, opacity: 0.95, depthWrite: false, side: THREE.DoubleSide }));
+    this.highlightRing.visible = false;
+    this.scene.add(this.highlightRing);
+    this.highlightFlashUntil = 0;
+
+    // Danger chevrons (military style ranks) drawn above battle markers.
+    this.chevronTexture = makeChevronTexture();
 
     this.markerGeos = {
       octahedron: new THREE.OctahedronGeometry(0.3),
@@ -244,6 +256,8 @@ export class MapRenderer {
         marker: null,
         height: cfg.colors.fogTileHeight,
         lift: 0,
+        markerLift: 0,
+        markerLiftTarget: 0,
         phase: Math.random() * Math.PI * 2,
         colorTween: null,
       };
@@ -273,10 +287,12 @@ export class MapRenderer {
       rec.mesh.material.dispose();
       rec.ring.material.dispose();
       if (rec.marker) {
+        this.setChevrons(rec, 0);
         this.scene.remove(rec.marker);
         rec.marker.traverse((o) => o.material && o.material.dispose());
       }
     }
+    this.setHighlight(null);
     this.tiles.clear();
     this.tileMeshes = [];
     if (this.player) { this.scene.remove(this.player); this.player = null; }
@@ -303,7 +319,73 @@ export class MapRenderer {
     marker.visible = hex.revealed;
     this.scene.add(marker);
     this.placeMarker(record, marker);
+    marker.userData.chevrons = [];
     return marker;
+  }
+
+  // Shows `count` chevrons stacked above a marker (0 removes them).
+  setChevrons(record, count) {
+    const m = record.marker;
+    if (!m) return;
+    const list = m.userData.chevrons;
+    while (list.length > count) { const sp = list.pop(); this.scene.remove(sp); sp.material.dispose(); }
+    while (list.length < count) {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.chevronTexture, transparent: true, depthWrite: false }));
+      sp.scale.set(0.34, 0.22, 1);
+      this.scene.add(sp);
+      list.push(sp);
+    }
+    m.userData.chevronCount = count;
+  }
+
+  // ----- guide highlights (green outline + green tile ring) --------------------
+  // target: { hexKey } for a marker, { tile: hexKey } for a tile top, or null.
+  setHighlight(target) {
+    // Remove the previous outline duplicate.
+    if (this.highlightMarker) {
+      this.scene.remove(this.highlightMarker.outline);
+      this.highlightMarker.outline.geometry = null;
+      this.highlightMarker = null;
+    }
+    this.highlightRing.visible = false;
+    if (!target) return;
+    if (target.hexKey) {
+      const rec = this.tiles.get(target.hexKey);
+      if (rec?.marker) {
+        const outline = new THREE.Mesh(rec.marker.geometry, this.highlightMat);
+        this.scene.add(outline);
+        this.highlightMarker = { marker: rec.marker, outline };
+      }
+    } else if (target.tile) {
+      const rec = this.tiles.get(target.tile);
+      if (rec) {
+        this.highlightRing.visible = true;
+        this.highlightRing.position.set(rec.hex.x, rec.height + 0.03, -rec.hex.y);
+        this.highlightRing.userData.rec = rec;
+      }
+    }
+  }
+  flashHighlight() { this.highlightFlashUntil = this.elapsed + 450; }
+
+  // Screen position (CSS pixels) of a world point, or null when behind the camera.
+  projectToScreen(x, y, z) {
+    const v = new THREE.Vector3(x, y, z).project(this.camera);
+    if (v.z > 1) return null;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    return { x: rect.left + (v.x + 1) / 2 * rect.width, y: rect.top + (1 - v.y) / 2 * rect.height };
+  }
+  // Screen position of the top of a tile.
+  tileTopScreen(hexKey) {
+    const rec = this.tiles.get(hexKey);
+    if (!rec) return null;
+    return this.projectToScreen(rec.hex.x, rec.height + rec.lift, -rec.hex.y);
+  }
+  // Screen position of an encounter marker.
+  markerScreen(hexKey) {
+    const rec = this.tiles.get(hexKey);
+    if (!rec?.marker) return null;
+    const p = rec.marker.position;
+    return this.projectToScreen(p.x, p.y, p.z);
   }
 
   placeMarker(record, marker) {
@@ -426,6 +508,10 @@ export class MapRenderer {
         rec.mesh.material.color.copy(this.targetColorFor(rec.hex));
       }
       rec.ring.visible = this.reachable.has(rec.hex.key);
+      // The marker on the party's own tile floats up so the token does not cut through it.
+      rec.markerLiftTarget = rec.hex === game.state.position ? 1.1 : 0;
+      // Danger chevrons above revealed battles: how much stronger the enemies are.
+      if (rec.marker) this.setChevrons(rec, rec.hex.revealed ? game.dangerRank(rec.hex) : 0);
     }
   }
 
@@ -447,6 +533,8 @@ export class MapRenderer {
     const rec = this.tiles.get(hex.key);
     if (!rec || !rec.marker) return;
     const m = rec.marker;
+    this.setChevrons(rec, 0);
+    if (this.highlightMarker?.marker === m) this.setHighlight(null);
     rec.marker = null;
     const s = m.userData.baseScale || 1;
     tween({
@@ -585,13 +673,51 @@ export class MapRenderer {
       rec.mesh.position.y = rec.lift;
       rec.ring.position.y = rec.height + 0.02 + rec.lift;
 
-      // Encounter markers slowly spin and bob.
+      // Encounter markers slowly spin and bob; chevrons stack above them.
       if (rec.marker && rec.marker.visible) {
         rec.marker.rotation.y += dt * 0.0009;
-        rec.marker.position.y = rec.marker.userData.baseY + Math.sin(this.elapsed / 650 + rec.phase) * 0.06 + rec.lift;
+        rec.markerLift += (rec.markerLiftTarget - rec.markerLift) * Math.min(1, dt / 140);
+        rec.marker.position.y = rec.marker.userData.baseY + Math.sin(this.elapsed / 650 + rec.phase) * 0.06 + rec.lift + rec.markerLift;
+        const list = rec.marker.userData.chevrons || [];
+        const top = rec.marker.position.y + 0.45 * (rec.marker.userData.baseScale || 1);
+        list.forEach((sp, i) => { sp.position.set(rec.marker.position.x, top + 0.16 + i * 0.2, rec.marker.position.z); sp.visible = true; });
       }
+    }
+
+    // Guide highlight: the outline copies its marker; flashes pulse the size/opacity.
+    const flashing = this.elapsed < this.highlightFlashUntil;
+    const pulse = flashing ? 1 + 0.35 * Math.sin(((this.highlightFlashUntil - this.elapsed) / 450) * Math.PI) : 1;
+    if (this.highlightMarker) {
+      const { marker, outline } = this.highlightMarker;
+      outline.position.copy(marker.position);
+      outline.rotation.copy(marker.rotation);
+      outline.scale.copy(marker.scale).multiplyScalar(1.18 * pulse);
+      outline.visible = marker.visible;
+    }
+    if (this.highlightRing.visible) {
+      const rec = this.highlightRing.userData.rec;
+      if (rec) this.highlightRing.position.y = rec.height + 0.03 + rec.lift;
+      this.highlightRing.scale.setScalar(pulse);
+      this.highlightRing.material.opacity = flashing ? 1 : 0.8 + 0.15 * Math.sin(this.elapsed / 300);
     }
 
     this.renderer.render(this.scene, this.camera);
   }
+}
+
+// A tailless up arrow (military rank chevron) drawn on a small canvas, used as a sprite.
+function makeChevronTexture() {
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 40;
+  const g = c.getContext('2d');
+  g.lineWidth = 9;
+  g.lineJoin = 'miter';
+  g.strokeStyle = '#0b0e16';
+  g.beginPath(); g.moveTo(8, 34); g.lineTo(32, 8); g.lineTo(56, 34); g.stroke();
+  g.lineWidth = 5;
+  g.strokeStyle = '#ff6b6b';
+  g.beginPath(); g.moveTo(8, 34); g.lineTo(32, 8); g.lineTo(56, 34); g.stroke();
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
 }

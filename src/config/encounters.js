@@ -21,14 +21,15 @@ export const ENCOUNTERS = {
     },
     guaranteed: { acolyte: 1 },   // ...but at least this many per map
     // Visual placeholders. "shape" is one of: octahedron, icosahedron, box, cone, dodecahedron
+    // Labels and descriptions live in the locale tables (visual.<type>.label / .info).
     visuals: {
-      battle: { color: 0xe2474b, shape: 'octahedron', label: 'Battle' },
-      event: { color: 0xa56cf5, shape: 'icosahedron', label: 'Event' },
-      rest: { color: 0xff9f43, shape: 'cone', label: 'Rest site' },
-      shop: { color: 0x45c7d1, shape: 'box', label: 'Shop' },
-      treasure: { color: 0xf5c542, shape: 'dodecahedron', label: 'Treasure' },
-      boss: { color: 0x9b1c31, shape: 'cone', label: 'Boss' },
-      acolyte: { color: 0xfff3b0, shape: 'icosahedron', label: 'Acolyte of the Great Forge' },
+      battle: { color: 0xe2474b, shape: 'octahedron' },
+      event: { color: 0xa56cf5, shape: 'icosahedron' },
+      rest: { color: 0xff9f43, shape: 'cone' },
+      shop: { color: 0x45c7d1, shape: 'box' },
+      treasure: { color: 0xf5c542, shape: 'dodecahedron' },
+      boss: { color: 0x9b1c31, shape: 'cone' },
+      acolyte: { color: 0xfff3b0, shape: 'icosahedron' },
     },
   },
 
@@ -93,10 +94,7 @@ export const ENCOUNTERS = {
       event: 'optional',
       treasure: 'never',
     },
-    resetNotes: {
-      shop: 'only if you buy a rest there',
-      event: 'only after specific events',
-    },
+    // Notes for the 'optional' ones are in the locale tables (reset.note.<type>).
     // Which encounters fatigue can force the party into on arrival.
     forceable: ['battle', 'boss', 'event'],
     byStep: {

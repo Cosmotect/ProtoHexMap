@@ -47,7 +47,7 @@ export function simulateBattle(rng, cfg, party, enemies, partyFirst) {
       if (d.hp <= 0) {
         d.alive = false;
         deaths.push(d);
-        line += ` - ${d.name} falls`;
+        line += ` - ${d.name} is down`;
       }
       lines.push({ round, side: sideName, text: line });
     }
@@ -72,10 +72,14 @@ export function simulateBattle(rng, cfg, party, enemies, partyFirst) {
 export function makeEnemies(rng, cfg, ring, isBoss, lerpTable) {
   const out = [];
   if (isBoss) {
-    const b = cfg.boss;
-    for (let i = 0; i < b.count; i++) {
-      out.push({ name: b.names[i % b.names.length], hp: b.hp, maxHp: b.hp, power: b.power, alive: true });
+    const variant = rng.pick(cfg.bosses);
+    const seen = new Map();
+    for (const u of variant.units) {
+      const n = (seen.get(u.name) ?? 0) + 1;
+      seen.set(u.name, n);
+      out.push({ name: n > 1 ? `${u.name} ${n}` : u.name, hp: u.hp, maxHp: u.hp, power: u.power ?? variant.power, alive: true });
     }
+    out.title = variant.title;
     return out;
   }
   const e = cfg.enemies;

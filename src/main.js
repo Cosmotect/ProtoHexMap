@@ -5,6 +5,13 @@ import { Game } from './game.js';
 import { MapRenderer } from './render.js';
 import { createUI } from './ui.js';
 import { resolveSeed } from './rng.js';
+import { createTutorial, NPE_SEED } from './tutorial.js';
+import { createSettings, deepClone } from './settings.js';
+import { t, tn, initLanguage, applyStaticTexts, onLanguageChange } from './i18n.js';
+import { tc } from './text.js';
+
+initLanguage();
+applyStaticTexts();
 
 const container = document.getElementById('scene');
 
@@ -12,28 +19,54 @@ const container = document.getElementById('scene');
 //   ?seed=1234        same map every time
 //   ?orient=flat      flat-top hexes instead of pointy-top
 //   ?camera=ortho     start in the top-down camera
+//   ?npe=1            start the guided new player experience
 const params = new URLSearchParams(window.location.search);
 if (params.get('orient') === 'flat') CONFIG.map.orientation = 'flat';
 
-const renderer = new MapRenderer(container, CONFIG);
+// The config files are the defaults; settings saved in the browser are applied on top
+// (createSettings does that immediately), so they take precedence.
+const DEFAULTS = deepClone(CONFIG);
+let renderer = null;
+let ui = null;
+const settings = createSettings({
+  config: CONFIG,
+  defaults: DEFAULTS,
+  onToggleCamera: () => renderer.toggleCameraMode(),
+  getCameraMode: () => renderer.cameraMode,
+  onChange: () => { ui.buildLegend(); if (game) ui.update(game); },
+  onClose: () => ui.updateBlur(),
+});
+// A language change re-renders everything that shows text.
+onLanguageChange(() => { applyStaticTexts(); ui.buildLegend(); if (game) { ui.update(game); ui.renderLog(game); } });
+
+renderer = new MapRenderer(container, CONFIG);
 window.__renderer = renderer; // for debugging / automated tests
 let game = null;
 let pendingEnd = false;
 let holdDialogsUntil = 0;
 
-const ui = createUI(CONFIG, {
-  onDialogClosed: () => { if (pendingEnd && game.state.status !== 'playing') { pendingEnd = false; ui.showEnd(game); } },
+ui = createUI(CONFIG, {
+  isInputBlocked: () => tutorial.isBlocking(),
+  isSubWindowOpen: () => settings.isOpen(),
+  onOpenSettings: () => { settings.open(); ui.updateBlur(); },
+  onEscape: () => { if (settings.isOpen()) { settings.close(); ui.updateBlur(); } },
+  onDialogClosed: () => { if (pendingEnd && game.state.status !== 'playing' && !tutorial.isBlocking()) { pendingEnd = false; ui.showEnd(game); } },
   onNewMap: () => startRun(resolveSeed()),
   onRestart: () => startRun(game.seed),
-  onToggleCamera: () => ui.setCameraMode(renderer.toggleCameraMode()),
+  onToggleCamera: () => renderer.toggleCameraMode(),
   onRevealAll: () => game.revealAll(),
-  onEngage: () => { if (!renderer.busy && !ui.dialogOpen()) game.engage(false); },
+  onEnter: () => { if (!renderer.busy && !ui.dialogOpen() && !tutorial.isBlocking()) game.enter(false); },
   onLoadSeed: (value) => startRun(resolveSeed(value)),
+  onStartNpe: () => startRun(resolveSeed(NPE_SEED), { npe: true }),
 });
+const tutorial = createTutorial({ config: CONFIG, ui, renderer });
+// The end screen waits for the guide's last card.
+tutorial.setOnIdle(() => { if (pendingEnd && game && game.state.status !== 'playing' && !ui.dialogOpen()) { pendingEnd = false; ui.showEnd(game); } });
 
-function startRun(seed) {
+function startRun(seed, opts = {}) {
   pendingEnd = false;
   ui.closeDialog();
+  tutorial.finish('restart');
   game = new Game(CONFIG, seed);
   window.game = game; // handy for poking at the state in the browser console
 
@@ -52,11 +85,12 @@ function startRun(seed) {
     if (type === 'encounter') renderer.handleEncounterCleared(payload.hex);
     if (type === 'forced') {
       // Banner first; any dialog that follows waits forcedBannerMs.
-      ui.showBanner(`Exhausted! Stumbled into ${payload.label}`, CONFIG.anim.forcedBannerMs + 900);
+      ui.showBanner(t('banner.forced', { label: payload.label }), CONFIG.anim.forcedBannerMs + 900);
       holdDialogsUntil = performance.now() + CONFIG.anim.forcedBannerMs;
     }
     if (type === 'dialog') showDialog(payload);
     if (type === 'change') { renderer.syncState(); ui.update(game); }
+    tutorial.onEvent(type, payload, game);
     if (type === 'log') ui.renderLog(game);
     if (type === 'end') {
       const thisGame = game;
@@ -64,7 +98,7 @@ function startRun(seed) {
       // If a battle report / event is open, the end screen waits until it is closed.
       setTimeout(() => {
         if (thisGame !== game || game.state.status === 'playing') return;
-        if (ui.dialogOpen()) pendingEnd = true; else ui.showEnd(game);
+        if (ui.dialogOpen() || tutorial.isBlocking()) pendingEnd = true; else ui.showEnd(game);
       }, CONFIG.anim.hopMs + 250);
     }
   });
@@ -73,7 +107,7 @@ function startRun(seed) {
   ui.hideEnd();
   ui.update(game);
   ui.renderLog(game);
-  ui.setCameraMode(renderer.cameraMode);
+  if (opts.npe) tutorial.start();
 }
 
 // ----- encounter dialogs (top centre) -----------------------------------
@@ -84,24 +118,33 @@ function showDialog(d) {
     ui.openDialog({
       title: d.title,
       html: `<p>${escapeHtml(d.text)}</p><div class="effect">${escapeHtml(d.effect || '')}</div>`,
-      actions: [{ label: 'Continue', onClick: () => ui.closeDialog() }],
+      actions: [{ label: t('dialog.continue'), onClick: () => ui.closeDialog() }],
     });
   } else if (d.kind === 'supplies') {
     // Supplies found. If they overflow, offer to make camp first (QoL).
     const actions = [];
     if (d.canCamp) {
       actions.push({
-        label: `Make camp first (${d.campCost} supplies), then collect`,
-        sub: `Heals the party, resets fatigue; ${Math.min(d.amount, d.amount - d.overflow + d.campCost)} of ${d.amount} will fit instead of ${d.amount - d.overflow}`,
+        label: t('dialog.campFirst', { cost: d.campCost }),
+        sub: t('dialog.campFirst.sub', { fit: Math.min(d.amount, d.amount - d.overflow + d.campCost), amount: d.amount, partial: d.amount - d.overflow }),
         onClick: () => { game.claimSupplies(true); ui.closeDialog(); },
       });
     }
-    actions.push({ label: `Collect ${d.overflow > 0 ? `${d.amount - d.overflow} of ${d.amount}` : d.amount} supplies`, onClick: () => { game.claimSupplies(false); ui.closeDialog(); } });
+    const partial = d.overflow > 0;
+    const collect = () => { game.claimSupplies(false); ui.closeDialog(); };
+    actions.push({
+      label: partial ? t('dialog.collect.partial', { got: d.amount - d.overflow, amount: d.amount }) : t('dialog.collect', { n: d.amount }),
+      sub: partial ? t('dialog.collect.lost', { n: d.overflow }) : '',
+      onClick: () => {
+        // Leaving supplies behind while a camp could save them: double check.
+        if (partial && d.canCamp) ui.confirm({ title: t('confirm.leaveSupplies.title'), text: t('confirm.leaveSupplies.text', { lost: d.overflow, amount: d.amount }), onYes: collect });
+        else collect();
+      },
+    });
     ui.openDialog({
       title: d.title,
       html: `<p>${escapeHtml(d.text)}</p><div class="effect">${escapeHtml(d.effect)}</div>`,
       actions,
-      onClose: () => { if (game.state.pendingSupplies) game.claimSupplies(false); },
     });
   } else if (d.kind === 'blackmarket') {
     ui.chooseUnit({
@@ -110,74 +153,78 @@ function showDialog(d) {
       filter: (u) => u.alive,
       game,
       onPick: (i) => { game.blackMarketDeal(i); ui.closeDialog(); },
-      extraActions: [{ label: 'Decline', sub: 'Walk away', onClick: () => ui.closeDialog() }],
+      extraActions: [{ label: t('dialog.decline'), sub: t('dialog.decline.sub'), onClick: () => ui.confirm({ title: t('confirm.walkAway.title'), text: t('confirm.walkAway.text'), onYes: () => ui.closeDialog() }) }],
     });
   } else if (d.kind === 'battle') {
     const r = d.result;
     const lines = [];
     let lastRound = 0;
     for (const l of r.lines) {
-      if (l.round !== lastRound) { lines.push(`<div class="round">Round ${l.round}</div>`); lastRound = l.round; }
-      lines.push(`<div class="${l.side}">${escapeHtml(l.text)}</div>`);
+      if (l.round !== lastRound) { lines.push(`<div class="round">${t('battle.round', { n: l.round })}</div>`); lastRound = l.round; }
+      const text = t(l.down ? 'battle.hitDown' : 'battle.hit', { attacker: tn(l.attacker), defender: tn(l.defender), dmg: l.dmg });
+      lines.push(`<div class="${l.side}">${escapeHtml(text)}</div>`);
     }
-    const enemies = r.enemies.map((e) => `${e.name} (${e.maxHp} HP, power ${e.power})`).join(', ');
+    const enemies = r.enemies.map((e) => t('log.battle.enemy', { name: tn(e.name), hp: e.maxHp, power: e.power })).join(', ');
     const intro = d.intro ? `<p>${escapeHtml(d.intro.text)}</p>` : '';
     ui.openDialog({
-      title: d.intro ? d.intro.title : r.boss ? 'Boss battle' : 'Battle',
-      html: `${intro}<div class="battle-sum ${r.won ? 'won' : 'lost'}">${r.won ? 'Victory' : 'Defeat'} after ${r.rounds} round${r.rounds === 1 ? '' : 's'}. ${r.partyFirst ? 'The party struck first.' : 'The enemies struck first (forced by fatigue).'}</div>
-             <p class="muted">Enemies: ${escapeHtml(enemies)}</p><div class="battle-lines">${lines.join('')}</div>`,
+      title: d.intro ? d.intro.title : r.boss ? (r.title ? t('battle.boss.title', { title: tn(r.title) }) : t('battle.boss.untitled')) : t('battle.title'),
+      html: `${intro}<div class="battle-sum ${r.won ? 'won' : 'lost'}">${t(r.won ? 'battle.victory' : 'battle.defeat', { n: r.rounds })} ${t(r.partyFirst ? 'battle.partyFirst' : 'battle.enemiesFirst')}</div>
+             <p class="muted">${escapeHtml(t('battle.enemies', { list: enemies }))}</p><div class="battle-lines">${lines.join('')}</div>`,
       actions: [{
-        label: r.reward ? `Continue: choose who gains +${r.reward} power` : 'Continue',
+        label: r.reward ? t('dialog.continueReward', { n: r.reward }) : t('dialog.continue'),
         onClick: () => {
           if (!r.reward) { ui.closeDialog(); return; }
           ui.chooseUnit({
-            title: 'Lessons of battle',
-            html: `<p>One unit gains +${r.reward} power.</p>`,
+            title: t('battle.lessons.title'),
+            html: `<p>${t('battle.lessons.text', { n: r.reward })}</p>`,
             filter: (u) => u.alive,
             game,
             onPick: (i) => { game.grantVictoryPower(i); ui.closeDialog(); },
+            skip: { text: t('battle.lessons.skip', { n: r.reward }), onSkip: () => ui.closeDialog() },
           });
         },
       }],
     });
   } else if (d.kind === 'shop') {
     const build = (g) => ({
-      title: 'Shop',
-      html: `<p>Supplies: <b>${g.state.supplies}</b>. Fatigue: <b>${g.state.fatigue}%</b>.</p><span class="muted">The shop stays on this tile. Engaging it does not reset fatigue.</span>`,
+      title: t('shop.title'),
+      html: `<p>${t('shop.text', { supplies: g.state.supplies, fatigue: g.state.fatigue })}</p><span class="muted">${t('shop.note')}</span>`,
       actions: [
         {
-          label: `Rest (${CONFIG.shop.restCost} supplies)`, sub: 'Resets fatigue to 0%',
+          label: t('shop.rest', { cost: CONFIG.shop.restCost }), sub: t('shop.rest.sub'),
           disabled: g.state.supplies < CONFIG.shop.restCost || g.state.fatigue === 0,
           onClick: () => game.shopBuy('rest'),
         },
         {
-          label: `Upgrade a unit (${CONFIG.shop.upgradeCost} supplies)`, sub: `+${CONFIG.shop.upgradeAmount} power on the unit you choose`,
+          label: t('shop.upgrade', { cost: CONFIG.shop.upgradeCost }), sub: t('shop.upgrade.sub', { n: CONFIG.shop.upgradeAmount }),
           disabled: g.state.supplies < CONFIG.shop.upgradeCost,
           onClick: () => ui.chooseUnit({
-            title: 'Upgrade which unit?',
-            html: `<p>+${CONFIG.shop.upgradeAmount} power for ${CONFIG.shop.upgradeCost} supplies.</p>`,
+            title: t('shop.upgrade.title'),
+            html: `<p>${t('shop.upgrade.text', { n: CONFIG.shop.upgradeAmount, cost: CONFIG.shop.upgradeCost })}</p>`,
             filter: (u) => u.alive,
             game,
             onPick: (i) => { game.shopBuy('upgrade', i); showDialog({ kind: 'shop' }); },
+            skip: { text: t('shop.upgrade.skip'), onSkip: () => showDialog({ kind: 'shop' }) },
           }),
         },
         {
-          label: `Local map (${CONFIG.shop.mapCost} supplies)`, sub: `Reveals about ${CONFIG.events.blobSize} nearby tiles`,
+          label: t('shop.map', { cost: CONFIG.shop.mapCost }), sub: t('shop.map.sub', { n: CONFIG.events.blobSize }),
           disabled: g.state.supplies < CONFIG.shop.mapCost,
           onClick: () => game.shopBuy('map'),
         },
-        { label: 'Leave', onClick: () => ui.closeDialog() },
+        { label: t('shop.leave'), onClick: () => ui.closeDialog() },
       ],
       onRefresh: (g2) => ui.openDialog(build(g2)),
     });
     ui.openDialog(build(game));
   } else if (d.kind === 'acolyte') {
     ui.chooseUnit({
-      title: 'Acolyte of the Great Forge',
-      html: `<p>The forge can return one fallen companion, at ${Math.round(CONFIG.acolyte.reviveFraction * 100)}% of their health. Choose who.</p>`,
+      title: t('acolyte.title'),
+      html: `<p>${t('acolyte.text', { pct: `${Math.round(CONFIG.acolyte.reviveFraction * 100)}%` })}</p>`,
       filter: (u) => !u.alive,
       game,
       onPick: (i) => { game.restoreUnit(i); ui.closeDialog(); },
+      skip: { text: t('acolyte.skip'), onSkip: () => ui.closeDialog() },
     });
   }
 }
@@ -187,16 +234,20 @@ function escapeHtml(s) {
 }
 
 renderer.onHexClick = (hex) => {
-  if (ui.dialogOpen()) return;
+  if (ui.dialogOpen()) { ui.flashDialog(); return; }
+  if (tutorial.isBlocking()) return;
   if (renderer.busy) return;
   if (!game.moveTo(hex)) {
     if (game.state.status === 'playing' && hex !== game.state.position) {
-      game.addLog(hex.passable ? 'Too far: you can only step to a neighbouring tile.' : 'That tile is impassable.');
+      game.addLog(hex.passable ? 'log.tooFar' : 'log.impassable');
     }
   }
 };
 
 renderer.onHexHover = (hex) => ui.setHover(hex, game);
+// Clicking anywhere on the world (not just a tile) while a window is open flashes the window.
+container.addEventListener('pointerdown', () => { if (ui.dialogOpen()) ui.flashDialog(); });
 
 if (params.get('camera') === 'ortho') renderer.toggleCameraMode();
-startRun(resolveSeed(params.get('seed')));
+if (params.get('npe')) startRun(resolveSeed(NPE_SEED), { npe: true });
+else startRun(resolveSeed(params.get('seed')));

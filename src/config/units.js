@@ -39,11 +39,14 @@ export const UNITS = {
       powerByRing: { 0: 0, 9: 5 },
       names: ['Raider', 'Drifter', 'Husk', 'Warden', 'Stalker'],
     },
-    boss: {
-      count: 2,
-      hp: 48,
-      power: 2,
-      names: ['Forge Tyrant', 'Tyrant\'s Shadow'],
-    },
+    // Boss variants: each boss tile rolls one of these (seeded). Power sits in the
+    // 4-7 range by design, so the party is expected to arrive upgraded.
+    bosses: [
+      { title: 'Forge Tyrant', power: 4, units: [{ name: 'Forge Tyrant', hp: 60 }, { name: 'Tyrant\'s Shadow', hp: 40 }] },
+      { title: 'Warden of the Rim', power: 6, units: [{ name: 'Warden of the Rim', hp: 120 }] },
+      { title: 'Husk Choir', power: 4, units: [{ name: 'Choir Husk', hp: 24 }, { name: 'Choir Husk', hp: 24 }, { name: 'Choir Husk', hp: 24 }, { name: 'Choir Husk', hp: 24 }] },
+      { title: 'Ether Leviathan', power: 7, units: [{ name: 'Ether Leviathan', hp: 150 }] },
+      { title: 'Twin Stalkers', power: 5, units: [{ name: 'Pale Stalker', hp: 55 }, { name: 'Dark Stalker', hp: 55 }] },
+    ],
   },
 };

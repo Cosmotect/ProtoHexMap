@@ -27,11 +27,13 @@ export const WORLD = {
   // "terrainHeight" = how far away this terrain can be seen from: a tile is revealed
   // when its distance <= revealRadius + terrainHeight (so mountains with 2 show up from
   // 2 tiles away even with revealRadius 0). "height" is only the visual thickness.
+  // Legend descriptions are generated from these numbers (text.js) and the locale
+  // tables (terrain.<name>.flavour), so they never go out of date.
   terrain: {
     grass: { weight: 0.46, passable: true, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 0, color: 0x7fb85f, height: 0.35 },
     forest: { weight: 0.22, passable: true, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 0, color: 0x3e7d45, height: 0.42 },
-    hills: { weight: 0.14, passable: true, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 0, color: 0xb79a63, height: 0.55 },
-    water: { weight: 0.10, passable: false, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 1, color: 0x3c7dc4, height: 0.18 },
+    hills: { weight: 0.14, passable: true, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 1, color: 0xb79a63, height: 0.55 },
+    water: { weight: 0.10, passable: false, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 0, color: 0x3c7dc4, height: 0.18 },
     mountain: { weight: 0.08, passable: true, supplyCost: 10, hpCost: 5, revealBonus: 2, terrainHeight: 2, color: 0x8e929c, height: 0.95 },
   },
 };

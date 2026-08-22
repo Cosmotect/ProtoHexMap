@@ -13,13 +13,14 @@ prototyped separately (HEX-BOX, https://hex-box.pages.dev). This prototype only 
 ## Links
 
 * Hosted playable build (Claude artifact, updatable in place by republishing with this URL):
-  https://claude.ai/code/artifact/c335531d-3dd1-4489-b9df-fb4b7fd45bd6
+  https://claude.ai/code/artifact/8ee75dfd-c11a-46fb-80f1-59686726facf
+  (Publishing is paused until the owner asks for it. The older link c335531d-... is frozen.)
 * Battle prototype by a colleague (separate project): https://hex-box.pages.dev
 * Planned hosting for this project: Cloudflare Pages (see README section 5).
 
-## Current rules (v0.1)
+## Current rules
 
-* Hexagon shaped field: a centre tile plus `radius` (7) rings = 169 tiles (`config.map`).
+* Hexagon shaped field: a centre tile plus `radius` rings (`config/world.js`; 11 = 397 tiles).
   Start tile in the exact centre. `map.bossCount` (3) bosses on random tiles with ring >=
   `bossMinRing` ('half' = floor(radius/2)), at least `bossMinSpacing` apart. `run.winCondition`
   'all' (default) = defeat every boss; 'any' = one is enough.
@@ -29,30 +30,37 @@ prototyped separately (HEX-BOX, https://hex-box.pages.dev). This prototype only 
   `terrainHeight`: a tile is revealed when its distance <= revealRadius + terrainHeight,
   so mountains (2) are seen from 2 tiles further than flat ground. You cannot step onto a
   tile you cannot afford. The guaranteed start-to-boss route never uses mountains.
-* Generation retries until the boss is reachable from the start; if it never is, a corridor
-  is carved. The first ring around the start is always walkable.
-* **Fog of war**: tiles start hidden. Moving reveals every tile within `revealRadius` (1)
-  of the player, permanently. The boss tile is hidden under the fog like every other tile
-  (`bossAlwaysVisible: false`); set it to true to show the goal from the start.
-* **Movement**: one step per turn to a neighbouring walkable tile. Steps do NOT spend
-  supplies any more (supplies stay in the state/HUD for a future mechanic).
+* Generation retries until every boss is reachable from the start; if one never is, a
+  corridor is carved. The first ring around the start is always walkable.
+* **Fog of war**: tiles start hidden. Moving reveals every tile within `revealRadius` (0)
+  plus each tile's `terrainHeight`, permanently. Bosses hide under the fog like every other
+  tile (`bossAlwaysVisible: false`).
+* **Movement**: one step per turn to a neighbouring walkable tile. Ordinary steps cost
+  nothing; mountains cost supplies and HP.
 * **Party**: three units (`config.party.units`), each with HP and **power**, shown in the
   left panel (segmented HP bars, one segment per `hpSegment` HP). On the map they move as
-  one token. A unit at 0 HP is *fallen*: greyed out, skipped in battles, until an Acolyte
-  restores it. All three fallen = run lost.
+  one token. A unit at 0 HP is *disabled*: greyed out, skipped in battles, until an Acolyte
+  restores it. All three disabled = run lost.
 * **Supplies are the currency** (`startSupplies` 60, also the maximum: gains are capped).
-  Ordinary movement does not spend them; mountains do.
-* **Encounters are opt-in**: standing on an encounter tile enables the "Engage" button
-  (bottom centre, key E). On an *empty* tile the same button reads "Make camp": spends
+* **Encounters are opt-in**: standing on an encounter tile enables the **Enter** button in
+  the bottom bar (key E). On an *empty* tile the same button reads "Make camp": spends
   `rest.cost` (20) supplies, heals each living unit by `rest.healFraction` (50%) of max HP,
-  resets fatigue. Rest sites are no longer generated on the map.
-* **Encounter logic** (`game.js engage()`):
+  resets fatigue. The marker on the party's tile floats up so the token does not cut it.
+* **Encounter windows** have no close button: the player always picks one of the options.
+  Clicking the world while a window is open flashes it. Unit choosers have a Skip button.
+  A choice that leaves a reward behind (skipping a chooser, collecting a partial find when
+  a camp would save more, declining the black market) asks for confirmation first.
+* **Run over / complete** can be dismissed with "Inspect the map" to look at the final
+  board; restart or a new map are in the menu.
+* **Encounter logic** (`game.js enter()`):
   * *Battle / Boss*: automatic simulation (`battle.js`). Player strikes first unless the
     battle was forced by fatigue. Each unit hits a random living enemy; damage = a bell
     shaped roll in [`damageMin`, `damageMax`] (average of `bellDice` uniform rolls) times
     `powerBase` ^ (attacker power - defender power). Enemy groups: `countMin..countMax`
     units, HP `hpMin..hpMax`, power from `powerByRing` (interpolated by ring). Boss group
-    from `battle.boss`. Player units deal extra damage the lower their HP
+    from one of the `battle.bosses` variants (power 4-7). Enemy groups are rolled when the
+    map is generated (`hex.enemies`), so a revealed battle shows its danger up front:
+    floor((enemy power - living party power) / 2) red chevrons above the marker. Player units deal extra damage the lower their HP
     (`battle.desperation`). A report dialog shows every blow; after a win the player
     picks a unit that gains `battle.victoryPower` (1). Bosses count toward the win condition.
   * *Treasure*: +`treasure.supplies` (40). Does not reset fatigue. Supplies found in the
@@ -60,7 +68,8 @@ prototyped separately (HEX-BOX, https://hex-box.pages.dev). This prototype only 
     the tile is empty, it offers "make camp first, then collect" so more of the find fits.
   * *Event*: one of the entries in `events.js` (text + effect), numbers in `config.events`:
     Signpost (reveals nearest hidden shop), Friendly pilgrim (reveals an irregular patch of
-    `blobSize` tiles), Rumours (reveals up to 3 hidden battles within 3), Vantage point
+    `blobSize` hidden tiles), Rumours (reveals up to 3 hidden battles within 3, or the nearest
+    hidden ones anywhere when none are in range), Vantage point
     (reveals radius 2 plus all mountains within 5), Fortunate find (+10..20 supplies),
     Wandering scholar (+1 power to one random living unit), Forge procession (reveals nearest
     hidden Acolyte), Black market (choose a unit: -1/3 max HP, +1 power, or decline),
@@ -68,7 +77,7 @@ prototyped separately (HEX-BOX, https://hex-box.pages.dev). This prototype only 
     a rest site: heals and resets fatigue), Learned about the world (lore text only, weight 2). Does not reset fatigue (except Nomads, which is a battle).
   * *Shop*: opens a dialog. Rest = `shop.restCost` (35) resets fatigue; Upgrade =
     `shop.upgradeCost` (25), +1 power on a chosen unit; Local map = `shop.mapCost` (15)
-    reveals a patch of `events.blobSize` tiles. The shop stays on the tile and engaging it
+    reveals a patch of `events.blobSize` tiles. The shop stays on the tile and entering it
     does not reset fatigue.
   * *Acolyte of the Great Forge*: restores one chosen fallen unit to `acolyte.reviveFraction`
     (50%) HP. At least `encounters.guaranteed.acolyte` (1) per map, plus a rare random roll.
@@ -86,6 +95,49 @@ prototyped separately (HEX-BOX, https://hex-box.pages.dev). This prototype only 
   Table entries are interpolated linearly, steps outside the table are clamped.
   Default: steps 1-4 free, step 5 = 5%, rising to 100% at step 24. When fatigue > 0,
   hovering a reachable tile shows a popup with the chance after that step.
+* **HUD**: bottom-centre status bar (fatigue and turn, the Enter button, gold and
+  supplies), party panel on the left middle, log bottom left, legend bottom right
+  (collapsed; expands on hover, each entry expands on click with its `info` text from the
+  config), and a top-right **Menu** (seed, load, copy link, new map, restart, reveal map,
+  settings, new player experience; key M). The world blurs while the menu or the settings
+  window is open.
+* **Languages** (`i18n.js`, `locales/en.js`, `locales/ru.js`): every user-facing string is a
+  key in a flat per-language table (same key order in every file, so they can be audited
+  side by side). Placeholders `{x}`, plural forms `{n:one|other}` / `{n:один|два|пять}`.
+  Code calls `t(key, params)`; unit and enemy names go through `tn(name)`; static HTML uses
+  `data-i18n` attributes; the log stores language-neutral entries and is re-rendered on a
+  switch. Event stories and lore live in the tables too (`event.<id>.*`, `lore.<id>.*`).
+  The toggle is on the General tab of Settings and is saved in the browser. English is the
+  reference table: a key missing in another language falls back to English, a key missing
+  everywhere shows as the key itself.
+* **Settings window** (`settings.js`): every value of the config files, on tabs named after
+  them (World, Encounters, Units, General; the language and camera mode live on General).
+  The window spans the screen and lays groups out in up to five columns. The
+  form is generated from the shape of the config, changes are written into CONFIG at once,
+  saved in the browser (localStorage `hexmap-settings-v1`) and re-applied on load, so they
+  take precedence over the files. Every row has a reset button (file value), every tab a
+  "Reset tab". Map, terrain and starting-party values apply on the next map / run. The hover popup appears on every
+  tile: step count since the last fatigue reset, forced chance (when the tile can force),
+  fatigue after the step, and the tile's encounter reset rule.
+* **New player experience** (`tutorial.js`, seed `NPE_SEED` = 6, also `?npe=1`): a guided
+  run on a fixed map. The HUD starts empty; cards explain movement (step 1), the party
+  (step 2, panel appears), fatigue (step 3, status bar appears), the first encounter tile,
+  each encounter type on first entry (log appears), battle reports (legend appears), forced
+  encounters, camps; the first defeated boss ends the guide and reveals everything, and the
+  run continues normally. Cards sit at 25% of the screen width and height with a green
+  dashed line to what they talk about: a HUD element (green outline), the top of a tile
+  (green hex ring), or an encounter's 3D shape (a flat green copy of the shape drawn
+  slightly larger behind it). Targets flash together with the card. A final card appears
+  when the whole party is disabled. While a card is open, or a HUD piece is still gliding
+  from the screen centre to its place (1.5 s: eased movement, linear shrink from 2x), all
+  input is blocked except the menu, which is never hidden; clicking elsewhere flashes the
+  card. Arriving on an encounter tile for the first time holds everything the tile would
+  do (the fatigue roll, a forced fight) until the encounter card is acknowledged
+  (`game.moveTo` emits `arrive`, the guide sets `hold`, then calls `resumeArrival`). Every number in the cards and in the legend is generated from the config at
+  runtime (`text.js`: placeholders in the `info` strings, terrain sentences built from the
+  terrain numbers). "Skip guide" reveals everything at once.
+  NOTE: the fixed map depends on the world/encounter config; changing those may change
+  what the NPE map looks like near the start.
 * **Lose**: only by being boxed in with no walkable neighbour (rare; first ring is always open).
 * **Win**: win the boss battle. **Lose**: whole party fallen, or boxed in.
 * **Encounters**: ~33% of walkable tiles (not adjacent to the start) get a type by weight:

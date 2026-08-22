@@ -1,6 +1,8 @@
 // The HUD: plain HTML elements layered over the 3D canvas.
 // (In Godot terms: a CanvasLayer with Labels and Buttons.)
 import { describeHex } from './game.js';
+import { terrainInfo, terrainName, encounterLabel, encounterInfo, tc } from './text.js';
+import { t, tn } from './i18n.js';
 
 export function createUI(config, handlers) {
   const $ = (id) => document.getElementById(id);
@@ -8,7 +10,10 @@ export function createUI(config, handlers) {
   const els = {
     fatigue: $('stat-fatigue'),
     party: $('party-units'),
-    engage: $('btn-engage'),
+    enter: $('btn-enter'),
+    confirm: $('confirm'),
+    confirmTitle: $('confirm-title'),
+    confirmText: $('confirm-text'),
     tip: $('fatigue-tip'),
     dialog: $('dialog'),
     banner: $('banner'),
@@ -22,25 +27,37 @@ export function createUI(config, handlers) {
     log: $('log'),
     hover: $('hover-info'),
     legend: $('legend'),
+    legendItems: $('legend-items'),
+    menu: $('menu'),
     overlay: $('overlay'),
     overlayTitle: $('overlay-title'),
     overlayText: $('overlay-text'),
-    help: $('help'),
-    btnCamera: $('btn-camera'),
+    scene: $('scene'),
     pathInfo: $('path-info'),
   };
 
   // ----- buttons -----------------------------------------------------
   $('btn-new').addEventListener('click', () => handlers.onNewMap());
   $('btn-restart').addEventListener('click', () => handlers.onRestart());
-  $('btn-camera').addEventListener('click', () => handlers.onToggleCamera());
   $('btn-reveal').addEventListener('click', () => handlers.onRevealAll());
-  $('btn-engage').addEventListener('click', () => handlers.onEngage());
-  $('btn-help').addEventListener('click', () => els.help.classList.toggle('hidden'));
-  $('btn-help-close').addEventListener('click', () => els.help.classList.add('hidden'));
-  $('dialog-close').addEventListener('click', () => closeDialog());
+  $('btn-enter').addEventListener('click', () => handlers.onEnter());
+  $('btn-menu').addEventListener('click', () => toggleMenu());
+  $('btn-settings').addEventListener('click', () => { closeMenu(); handlers.onOpenSettings(); });
+  $('btn-npe').addEventListener('click', () => { closeMenu(); handlers.onStartNpe(); });
+  function toggleMenu() { els.menu.classList.toggle('hidden'); updateBlur(); }
+  function closeMenu() { els.menu.classList.add('hidden'); updateBlur(); }
+  // The world blurs while the menu or any of its windows (settings) is open.
+  function updateBlur() {
+    const open = !els.menu.classList.contains('hidden') || (handlers.isSubWindowOpen && handlers.isSubWindowOpen());
+    els.scene.classList.toggle('blurred', open);
+  }
+  // Close the menu when clicking outside it.
+  window.addEventListener('pointerdown', (e) => {
+    if (!els.menu.classList.contains('hidden') && !document.getElementById('menu-wrap').contains(e.target)) closeMenu();
+  });
   $('btn-overlay-restart').addEventListener('click', () => { hideEnd(); handlers.onRestart(); });
   $('btn-overlay-new').addEventListener('click', () => { hideEnd(); handlers.onNewMap(); });
+  $('btn-overlay-inspect').addEventListener('click', () => hideEnd());
   const loadTypedSeed = () => {
     const value = $('seed-input').value.trim();
     if (value) handlers.onLoadSeed(value);
@@ -53,20 +70,22 @@ export function createUI(config, handlers) {
     url.searchParams.set('seed', String(currentSeed));
     try {
       await navigator.clipboard.writeText(url.toString());
-      flash($('btn-copy'), 'Copied');
+      flash($('btn-copy'), t('menu.copied'));
     } catch {
-      window.prompt('Copy this link:', url.toString());
+      window.prompt(t('menu.copy.prompt'), url.toString());
     }
   });
 
   window.addEventListener('keydown', (e) => {
     if (e.target instanceof HTMLInputElement) return;
+    // The menu is the one thing that always answers; everything else waits while input is blocked.
+    if (e.key === 'm' || e.key === 'M') { toggleMenu(); return; }
+    if (handlers.isInputBlocked && handlers.isInputBlocked()) return;
     if (e.key === 'c' || e.key === 'C') handlers.onToggleCamera();
-    if (e.key === 'h' || e.key === 'H' || e.key === '?') els.help.classList.toggle('hidden');
     if (e.key === 'n' || e.key === 'N') handlers.onNewMap();
     if (e.key === 'r' || e.key === 'R') handlers.onRestart();
-    if (e.key === 'e' || e.key === 'E') handlers.onEngage();
-    if (e.key === 'Escape') { els.help.classList.add('hidden'); closeDialog(); }
+    if (e.key === 'e' || e.key === 'E') handlers.onEnter();
+    if (e.key === 'Escape') { closeMenu(); handlers.onEscape && handlers.onEscape(); }
   });
 
   let currentSeed = 0;
@@ -88,16 +107,26 @@ export function createUI(config, handlers) {
   }
 
   // ----- legend ------------------------------------------------------
+  // Collapsed by default, expands on hover; each entry expands on click to show its info.
+  // Rebuilt whenever a setting changes, since the texts are generated from the config.
+  function buildLegend() {
   const legendItems = [];
-  for (const [name, t] of Object.entries(config.terrain)) {
-    const note = !t.passable ? ' (blocked)' : t.supplyCost > 0 ? ` (${t.supplyCost} supplies, ${t.hpCost} HP)` : '';
-    legendItems.push(`<span class="swatch" style="background:${hex(t.color)}"></span>${cap(name)}${note}`);
+  for (const [name, tr] of Object.entries(config.terrain)) {
+    const note = !tr.passable ? t('legend.blocked') : tr.supplyCost > 0 ? t('legend.cost', { supplies: tr.supplyCost, hp: tr.hpCost }) : '';
+    legendItems.push({ swatch: `<span class="swatch" style="background:${hex(tr.color)}"></span>`, label: `${terrainName(name)}${note}`, info: terrainInfo(name, tr) });
   }
-  for (const [name, v] of Object.entries(config.encounters.visuals)) {
-    legendItems.push(`<span class="swatch marker" style="background:${hex(v.color)}"></span>${v.label}`);
+  for (const [type, v] of Object.entries(config.encounters.visuals)) {
+    legendItems.push({ swatch: `<span class="swatch marker" style="background:${hex(v.color)}"></span>`, label: encounterLabel(type), info: encounterInfo(type, config) });
   }
-  legendItems.push(`<span class="swatch" style="background:${hex(config.colors.fogTile)}"></span>Unexplored`);
-  els.legend.innerHTML = legendItems.map((s) => `<div>${s}</div>`).join('');
+  legendItems.push({ swatch: `<span class="swatch" style="background:${hex(config.colors.fogTile)}"></span>`, label: t('legend.unexplored'), info: t('legend.unexplored.info') });
+  els.legendItems.innerHTML = legendItems.map((it, i) =>
+    `<div class="legend-item" data-i="${i}"><div class="legend-head">${it.label}${it.swatch}</div><div class="legend-info">${escapeHtml(it.info)}</div></div>`).join('');
+  }
+  buildLegend();
+  els.legendItems.addEventListener('click', (e) => {
+    const item = e.target.closest('.legend-item');
+    if (item) item.classList.toggle('open');
+  });
 
   // ----- public API --------------------------------------------------
   function update(game) {
@@ -106,13 +135,11 @@ export function createUI(config, handlers) {
     // Current fatigue = the chance rolled when you arrive on your next tile.
     els.fatigue.textContent = `${s.fatigue}%`;
     els.fatigue.classList.toggle('warn', s.fatigue >= 25);
-    const action = game.engageAction();
-    els.engage.disabled = !action.enabled;
-    els.engage.textContent = action.label;
-    els.engage.title = action.reason || (action.kind === 'camp'
-      ? 'Spend supplies to make camp here: heals every living unit by half its max HP and resets fatigue (E)'
-      : 'Enter the encounter on the tile you stand on (E)');
-    els.engage.classList.toggle('camp', action.kind === 'camp');
+    const action = game.enterAction();
+    els.enter.disabled = !action.enabled;
+    els.enter.textContent = action.label;
+    els.enter.title = action.reason || (action.kind === 'camp' ? tc('status.camp.title', config) : t('status.enter.title'));
+    els.enter.classList.toggle('camp', action.kind === 'camp');
     els.party.innerHTML = s.party.map((u) => unitCard(u, config)).join('');
     // Keep an open dialog in sync (e.g. shop prices after a purchase).
     if (dialogRefresh) dialogRefresh(game);
@@ -121,13 +148,13 @@ export function createUI(config, handlers) {
     els.supplies.classList.toggle('warn', s.supplies <= 3 && s.status === 'playing');
     els.turn.textContent = String(s.turn);
     els.seed.textContent = String(game.seed);
-    els.pathInfo.textContent = `shortest route ${s.shortestPathLength} steps`;
+    els.pathInfo.textContent = t('menu.route', { n: s.shortestPathLength });
   }
 
   function renderLog(game) {
     const last = game.log.slice(-7);
     els.log.innerHTML = last
-      .map((entry, i) => `<div class="${i === last.length - 1 ? 'latest' : ''}">${escapeHtml(entry.text)}</div>`)
+      .map((entry, i) => `<div class="${i === last.length - 1 ? 'latest' : ''}">${escapeHtml(t(entry.key, resolveParams(entry.params)))}</div>`)
       .join('');
   }
 
@@ -141,40 +168,45 @@ export function createUI(config, handlers) {
     els.hover.classList.remove('hidden');
     updateFatigueTip(hex, game);
     if (!hex.revealed) {
-      els.hover.textContent = `Unexplored (${hex.q},${hex.r})`;
+      els.hover.textContent = t('hover.unexplored', { q: hex.q, r: hex.r });
       return;
     }
     const canGo = game.canMoveTo(hex);
     let cost = '';
-    if (!hex.passable) cost = ', impassable';
-    else if (hex.supplyCost > 0) cost = `, costs ${hex.supplyCost} supplies and ${hex.hpCost} HP per unit, reveals +${hex.revealBonus}`;
-    const seen = hex.terrainHeight > 0 ? `, visible from ${hex.terrainHeight} tile${hex.terrainHeight === 1 ? '' : 's'} further` : '';
-    els.hover.textContent = `${describeHex(hex, config)}${cost}${seen}${canGo ? ' - click to move' : ''}`;
+    if (!hex.passable) cost = t('hover.impassable');
+    else if (hex.supplyCost > 0) cost = t('hover.cost', { supplies: hex.supplyCost, hp: hex.hpCost, bonus: hex.revealBonus });
+    const seen = hex.terrainHeight > 0 ? t('hover.seen', { n: hex.terrainHeight }) : '';
+    els.hover.textContent = `${describeHex(hex)}${cost}${seen}${canGo ? t('hover.click') : ''}`;
   }
 
-  // Small popup near the cursor: chance of a forced encounter if the party walks there
-  // (current fatigue, the HUD number), fatigue after that step, and what the tile's
-  // encounter does to fatigue.
+  // Popup near the cursor, on every hovered tile: step count since the last fatigue reset,
+  // chance of a forced encounter if the party walks there (current fatigue, the HUD number),
+  // fatigue after that step, and what the tile's encounter does to fatigue.
   function updateFatigueTip(hex, game) {
     const s = game.state;
+    if (s.status !== 'playing') { els.tip.classList.add('hidden'); return; }
     const next = game.fatigueAfterNextStep();
-    const show = s.status === 'playing' && (s.fatigue > 0 || next > 0) && game.canMoveTo(hex);
-    if (!show) { els.tip.classList.add('hidden'); return; }
-    const forced = game.forcedChanceFor(hex); // null = revealed tile that cannot force anything
+    const canGo = game.canMoveTo(hex);
+    const forced = canGo ? game.forcedChanceFor(hex) : null; // null = nothing to force here
     const parts = [];
-    if (forced && !hex.revealed) {
-      parts.push(`<div class="tip-big"><b>${forced.chance}%</b> forced encounter</div><div class="tip-sub">if a battle or event hides on this unexplored tile</div>`);
-    } else if (forced) {
-      parts.push(`<div class="tip-big"><b>${forced.chance}%</b> forced encounter</div>`);
+    const stepTag = `<span class="tip-step" title="${t('tip.step.title')}">${t('tip.step')} <b>${s.fatigueSteps}</b></span>`;
+    if (forced && forced.chance > 0 && !hex.revealed) {
+      parts.push(`<div class="tip-big">${stepTag} ${t('tip.forced', { chance: forced.chance })}</div><div class="tip-sub">${t('tip.forced.unexplored')}</div>`);
+    } else if (forced && forced.chance > 0) {
+      parts.push(`<div class="tip-big">${stepTag} ${t('tip.forced', { chance: forced.chance })}</div>`);
+    } else {
+      parts.push(`<div class="tip-big">${stepTag}</div>`);
     }
-    parts.push(`<div class="tip-small">Fatigue after this step: <b>${next}%</b> (now ${s.fatigue}%)</div>`);
+    if (canGo) parts.push(`<div class="tip-small">${t('tip.after', { next, now: s.fatigue })}</div>`);
+    else parts.push(`<div class="tip-small">${t('tip.now', { now: s.fatigue })}</div>`);
     if (hex.revealed && hex.encounter) {
       const rule = game.fatigueResetRule(hex.encounter);
       const note = game.fatigueResetNote(hex.encounter);
-      const ruleText = rule === 'always' ? 'resets fatigue'
-        : rule === 'optional' ? `may reset fatigue${note ? ` (${note})` : ''}`
-        : 'does not reset fatigue';
-      parts.push(`<div class="tip-small">${escapeHtml(game.labelFor(hex.encounter))}: ${ruleText}</div>`);
+      const label = game.labelFor(hex.encounter);
+      const ruleText = rule === 'always' ? t('tip.reset.always', { label })
+        : rule === 'optional' ? (note ? t('tip.reset.optional.note', { label, note }) : t('tip.reset.optional', { label }))
+        : t('tip.reset.never', { label });
+      parts.push(`<div class="tip-small">${escapeHtml(ruleText)}</div>`);
     }
     els.tip.innerHTML = parts.join('');
     els.tip.classList.remove('hidden');
@@ -183,17 +215,14 @@ export function createUI(config, handlers) {
 
   function showEnd(game) {
     const s = game.state;
-    els.overlayTitle.textContent = s.status === 'won' ? 'Run complete' : 'Run over';
-    els.overlayText.textContent = s.endReason;
+    els.overlayTitle.textContent = t(s.status === 'won' ? 'end.won.title' : 'end.lost.title');
+    const reason = Array.isArray(s.endReason) ? t(s.endReason[0], s.endReason[1]) : String(s.endReason || '');
+    els.overlayText.textContent = `${reason} ${t('end.inspectNote')}`;
     els.overlay.classList.remove('hidden');
   }
 
   function hideEnd() {
     els.overlay.classList.add('hidden');
-  }
-
-  function setCameraMode(mode) {
-    els.btnCamera.textContent = mode === 'perspective' ? 'Camera: perspective' : 'Camera: top-down';
   }
 
   // ----- generic dialog ------------------------------------------------
@@ -225,22 +254,46 @@ export function createUI(config, handlers) {
     if (wasOpen && handlers.onDialogClosed) handlers.onDialogClosed();
   }
   function dialogOpen() { return !els.dialog.classList.contains('hidden'); }
+  // Draws attention to the open window when the player clicks the world instead.
+  function flashDialog() {
+    if (!dialogOpen()) return;
+    els.dialog.classList.remove('flash');
+    void els.dialog.offsetWidth; // restart the animation
+    els.dialog.classList.add('flash');
+  }
+
+  // "Are you sure?" box. onYes runs if the player confirms.
+  $('btn-confirm-no').addEventListener('click', () => els.confirm.classList.add('hidden'));
+  let confirmYes = null;
+  $('btn-confirm-yes').addEventListener('click', () => { els.confirm.classList.add('hidden'); if (confirmYes) confirmYes(); });
+  function confirm({ title, text, onYes }) {
+    els.confirmTitle.textContent = title || t('confirm.title');
+    els.confirmText.textContent = text;
+    confirmYes = onYes;
+    els.confirm.classList.remove('hidden');
+  }
 
   // Generic "choose a unit" dialog, reused by the shop and the Acolyte.
   // filter(unit) decides which units are selectable; onPick(index) gets the choice.
   // extraActions: additional buttons after the units (e.g. "Decline").
-  function chooseUnit({ title, html, filter, onPick, game, extraActions = [] }) {
+  // skip: { text, onSkip } adds a Skip button that asks for confirmation first (the same
+  // warning as leaving a reward behind). Omit it when a choice is mandatory.
+  function chooseUnit({ title, html, filter, onPick, game, extraActions = [], skip }) {
     const build = (g) => ({
       title,
       html,
       actions: [
         ...g.state.party.map((u, i) => ({
-          label: `${u.icon} ${u.name}`,
-          sub: u.alive ? `${u.hp}/${u.maxHp} HP, power ${u.power}` : 'fallen',
+          label: `${u.icon} ${tn(u.name)}`,
+          sub: u.alive ? t('dialog.unit.sub', { hp: u.hp, max: u.maxHp, power: u.power }) : t('dialog.unit.disabled'),
           disabled: !filter(u),
           onClick: () => onPick(i),
         })),
         ...extraActions,
+        ...(skip ? [{
+          label: t('dialog.skip'), sub: t('dialog.skip.sub'),
+          onClick: () => confirm({ title: t('confirm.skip.title'), text: skip.text, onYes: skip.onSkip }),
+        }] : []),
       ],
     });
     openDialog(build(game));
@@ -255,7 +308,27 @@ export function createUI(config, handlers) {
     bannerTimer = setTimeout(() => els.banner.classList.add('hidden'), ms);
   }
 
-  return { update, renderLog, setHover, showEnd, hideEnd, setCameraMode, openDialog, closeDialog, dialogOpen, chooseUnit, showBanner };
+  return { update, renderLog, setHover, showEnd, hideEnd, openDialog, closeDialog, dialogOpen, flashDialog, confirm, chooseUnit, showBanner, buildLegend, updateBlur };
+}
+
+// Log parameters are stored language-neutral and resolved at render time:
+//   { key, params }  -> a translated string,   { name }  -> a translated unit/enemy name,
+//   { names: [...] } -> names joined,          { list: [...] } -> resolved items joined,
+//   { hex }          -> a tile description.
+function resolveParams(params = {}) {
+  const out = {};
+  for (const [k, v] of Object.entries(params)) out[k] = resolveValue(v);
+  return out;
+}
+function resolveValue(v) {
+  if (v && typeof v === 'object') {
+    if ('key' in v) return t(v.key, resolveParams(v.params));
+    if ('name' in v) return tn(v.name);
+    if ('names' in v) return v.names.map(tn).join(', ');
+    if ('list' in v) return v.list.map(resolveValue).join(', ');
+    if ('hex' in v) return describeHex(v.hex);
+  }
+  return v;
 }
 
 // One row of the party panel.
@@ -266,8 +339,8 @@ function unitCard(u, config) {
   return `<div class="unit ${cls}">
     <div class="icon">${u.icon}</div>
     <div class="info">
-      <div class="name-row"><span class="name">${escapeHtml(u.name)}</span><span class="power">power ${u.power}</span></div>
-      <span class="hp">${u.alive ? `${u.hp} / ${u.maxHp} HP` : 'FALLEN'}</span>
+      <div class="name-row"><span class="name">${escapeHtml(tn(u.name))}</span><span class="power">${t('party.power', { n: u.power })}</span></div>
+      <span class="hp">${u.alive ? t('party.hp', { hp: u.hp, max: u.maxHp }) : t('party.disabled')}</span>
       <div class="bar"><div class="fill" style="width:${pct}%"></div><div class="segs" style="--seg:${segPct}%"></div></div>
     </div>
   </div>`;
@@ -276,9 +349,6 @@ function unitCard(u, config) {
 // ----- small helpers -------------------------------------------------
 function hex(n) {
   return '#' + n.toString(16).padStart(6, '0');
-}
-function cap(s) {
-  return s[0].toUpperCase() + s.slice(1);
 }
 function escapeHtml(s) {
   return s.replace(/[&<>]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[ch]));

@@ -4,7 +4,6 @@
 //   q  = column-ish axis, r = row-ish axis. Neighbours are always the same
 //   six offsets no matter where you are, which makes distance and
 //   neighbour maths trivial (unlike "offset" row/column coordinates).
-// Offset coordinates (col, row) are kept as a helper in case we ever want a rectangular map again.
 
 const SQRT3 = Math.sqrt(3);
 
@@ -40,15 +39,6 @@ export function hexesInRange(q, r, radius) {
     }
   }
   return result;
-}
-
-// Rectangular map helper: converts (col, row) of a rectangle into axial (q, r).
-// pointy: "odd-r" layout (odd rows shoved right), flat: "odd-q" (odd columns shoved down).
-export function offsetToAxial(col, row, orientation) {
-  if (orientation === 'flat') {
-    return [col, row - (col - (col & 1)) / 2];
-  }
-  return [col - (row - (row & 1)) / 2, row];
 }
 
 // Axial -> 2D plane position (x to the right, y "up the map").

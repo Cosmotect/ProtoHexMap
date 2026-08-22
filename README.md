@@ -1,8 +1,9 @@
 # Hex World Map - prototype
 
 A browser prototype of the world map (level select) for a roguelike in the spirit of
-Slay the Spire and Into the Breach: a hex grid under fog of war, one step at a time,
-supplies ticking down, a boss waiting at the far end. Encounters are placeholders for now.
+Slay the Spire and Into the Breach: a hex grid under fog of war, a party of three moving
+one step at a time, fatigue that can force encounters on you, supplies as the currency,
+simulated battles, and three bosses hidden in the outer rings. The rules are in DESIGN.md.
 
 Built with **Three.js** (3D in the browser) and **Vite** (the tool that runs and packages it).
 Plain JavaScript, no framework.
@@ -63,8 +64,10 @@ Handy URL switches (add them to the address):
 | `?seed=1234` | Same map every time. The seed is also shown in the HUD and saved in the address bar. |
 | `?orient=flat` | Flat-top hexes instead of pointy-top. |
 | `?camera=ortho` | Start in the top-down (orthographic) camera. |
+| `?npe=1` | Start the guided new player experience (fixed map, interface revealed piece by piece). |
 
-Keyboard: **C** camera toggle, **N** new map, **R** restart, **H** help, arrow keys pan.
+Keyboard: **E** enter the encounter / make camp, **M** menu, **C** camera toggle, **N** new map,
+**R** restart, arrow keys pan.
 Mouse: left-drag pan, right-drag rotate/tilt, wheel zoom, left-click a glowing tile to move.
 
 ---
@@ -86,11 +89,16 @@ hex-world-map/
     game.js      rules and state: movement, fog, fatigue, party, encounters, win / lose (no graphics)
     battle.js    the battle simulation (damage rolls, power multiplier, enemy groups)
     events.js    flavour texts for Event encounters
-    map.js       map generation from a seed, guaranteed path from start to boss
+    tutorial.js  the new player experience (guided first run)
+    text.js      texts generated from config numbers (legend entries, guide cards)
+    i18n.js      language switching and the t() / tn() translation helpers
+    locales/en.js, locales/ru.js   every user-facing string, one flat table per language
+    settings.js  the in-app settings window (config values editable at runtime, saved in the browser)
+    map.js       map generation from a seed, guaranteed path from start to every boss
     hex.js       hex grid maths (axial coordinates, neighbours, distance)
     rng.js       seeded random numbers (same seed = same map)
     render.js    the Three.js scene: tiles, fog, markers, player token, camera, mouse picking
-    ui.js        the HUD: stats, party panel, log, legend, dialogs (shop, battle report, unit chooser)
+    ui.js        the HUD: status bar, party panel, log, legend, menu, encounter windows, confirm box
     tween.js     tiny animation helper (like Godot's Tween)
     style.css    HUD styling
   public/                    static files copied into the build untouched (images, sounds); empty for now
@@ -100,9 +108,11 @@ hex-world-map/
   DESIGN.md    rules, decisions, open questions, roadmap. Read this first in every new session.
 ```
 
-Rule of thumb: if you want to change a **number**, it is in `config.js`. If you want to change a
-**rule**, it is in `game.js` or `map.js`. If you want to change how something **looks**, it is in
-`render.js` (3D) or `style.css` (HUD).
+Rule of thumb: if you want to change a **number**, open Menu > Settings in the running game
+(saved in your browser, overrides the files) or edit `config.js` / `config/*.js` for everyone. If you
+want to change a **rule**, it is in `game.js`, `battle.js` or `map.js`. If you want to change how
+something **looks**, it is in `render.js` (3D) or `style.css` (HUD). Texts: `events.js` (stories),
+`locales/*.js` (every sentence the player reads, per language).
 
 ---
 
@@ -204,7 +214,7 @@ After that, the everyday loop is `git add . `, `git commit -m "what changed"`, `
   the wrong file. The `index.html` in the project root (about 4 kB) is only a skeleton
   that points at `src/`; it comes alive solely under `npm run dev`. The file you can
   double-click is `dist-single/index.html` (about 580 kB), where everything is baked in.
-  It is a frozen export: editing `src/config.js` does not change it until you rebuild
+  It is a frozen export: editing anything in `src/` does not change it until you rebuild
   with `npm run build:single`.
 * **Blank dark page, no hexes** - open the browser console (F12 > Console) and copy the red
   text into the chat with Claude. Usually a typo in a `.js` file.
