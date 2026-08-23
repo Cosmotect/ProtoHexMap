@@ -28,8 +28,38 @@ export const ENCOUNTERS = {
       rest: { color: 0xff9f43, shape: 'cone' },
       shop: { color: 0x45c7d1, shape: 'box' },
       treasure: { color: 0xf5c542, shape: 'dodecahedron' },
-      boss: { color: 0x9b1c31, shape: 'cone' },
+      stasisSeed: { color: 0x9b1c31, shape: 'cone' },
+      stasisColony: { color: 0x6e2c8f, shape: 'cone' },
       acolyte: { color: 0xfff3b0, shape: 'icosahedron' },
+    },
+  },
+
+  // ----- The Stasis ----------------------------------------------------
+  // A single Stasis Seed spawns with the map; destroying it wins the run.
+  // Four future Colony sites are picked at generation. After every player turn a line
+  // grows from the Seed towards each site by "lineSpeed" tiles; when it arrives, the
+  // Stasis Colony encounter spawns there (never in the same instant the player steps
+  // onto the tile - spawning happens after the arrival is fully resolved).
+  // Both the Seed and every active Colony wither the land around them: each gains
+  // 1 / witherEvery "charge" per turn and spends 1 charge to turn one random
+  // non-wither tile within witherRadius into wither terrain.
+  // Each Colony carries one random debuff from "debuffs"; while the Colony is active
+  // its debuff also applies to the Seed fight (duplicates stack). Clearing a Colony
+  // removes its debuff and lets the player raise a chosen unit's power "rewardPicks" times.
+  stasis: {
+    seedMinRing: 'half',      // the Seed sits on the outer rings: 'half' = floor(radius / 2)
+    colonyCount: 4,
+    minSpacing: 5,            // min distance between Colony sites and from the Seed
+    minDistanceFromStart: 3,  // Colony sites never sit closer than this to the start
+    lineSpeed: 0.5,           // tiles per player turn each line grows
+    witherEvery: 1.5,         // turns per withered tile, per active source
+    witherRadius: 2,          // how far a source reaches when withering
+    rewardPicks: 2,           // power raises granted for clearing a Colony
+    // The debuff pool. Each Colony rolls one id; values are read by the battle code.
+    debuffs: {
+      maxHp: { fraction: 0.25 },     // party max HP reduced by this fraction (per stack)
+      power: { amount: 2 },          // party power reduced by this much (per stack)
+      extraEnemies: { count: 2 },    // extra regular enemies join the fight (per stack)
     },
   },
 
@@ -87,7 +117,8 @@ export const ENCOUNTERS = {
     // "camp" = making camp on an empty tile. Unlisted types count as 'never'.
     resetOn: {
       battle: 'always',
-      boss: 'always',
+      stasisSeed: 'always',
+      stasisColony: 'always',
       acolyte: 'always',
       camp: 'always',
       shop: 'optional',
@@ -96,7 +127,7 @@ export const ENCOUNTERS = {
     },
     // Notes for the 'optional' ones are in the locale tables (reset.note.<type>).
     // Which encounters fatigue can force the party into on arrival.
-    forceable: ['battle', 'boss', 'event'],
+    forceable: ['battle', 'stasisSeed', 'stasisColony', 'event'],
     byStep: {
       4: 0,
       5: 5,

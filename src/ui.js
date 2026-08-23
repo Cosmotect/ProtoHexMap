@@ -112,7 +112,9 @@ export function createUI(config, handlers) {
   function buildLegend() {
   const legendItems = [];
   for (const [name, tr] of Object.entries(config.terrain)) {
-    const note = !tr.passable ? t('legend.blocked') : tr.supplyCost > 0 ? t('legend.cost', { supplies: tr.supplyCost, hp: tr.hpCost }) : '';
+    const note = !tr.passable ? t('legend.blocked')
+      : tr.supplyCost > 0 ? t('legend.cost', { supplies: tr.supplyCost, hp: tr.hpCost })
+      : tr.hpCost > 0 ? t('legend.costHp', { hp: tr.hpCost }) : '';
     legendItems.push({ swatch: `<span class="swatch" style="background:${hex(tr.color)}"></span>`, label: `${terrainName(name)}${note}`, info: terrainInfo(name, tr) });
   }
   for (const [type, v] of Object.entries(config.encounters.visuals)) {
@@ -175,6 +177,7 @@ export function createUI(config, handlers) {
     let cost = '';
     if (!hex.passable) cost = t('hover.impassable');
     else if (hex.supplyCost > 0) cost = t('hover.cost', { supplies: hex.supplyCost, hp: hex.hpCost, bonus: hex.revealBonus });
+    else if (hex.hpCost > 0) cost = t('hover.costHp', { hp: hex.hpCost });
     const seen = hex.terrainHeight > 0 ? t('hover.seen', { n: hex.terrainHeight }) : '';
     els.hover.textContent = `${describeHex(hex)}${cost}${seen}${canGo ? t('hover.click') : ''}`;
   }

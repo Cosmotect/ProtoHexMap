@@ -2,7 +2,7 @@
 // The HUD starts empty and pieces appear as they become relevant; short cards
 // explain each mechanic the first time it matters. While a card is open (or a piece is
 // still gliding into place) all input is blocked except the menu. Ends when the first
-// boss falls, after which the run continues as a normal one.
+// Stasis Colony falls (or the run ends), after which the run continues as a normal one.
 //
 // Every word comes from the locale tables (npe.*) and every number from the config (text.js).
 
@@ -261,7 +261,7 @@ export function createTutorial({ config, ui, renderer }) {
     if (type === 'dialog') {
       const k = payload.kind;
       const kind =
-        k === 'battle' ? (payload.intro ? 'event' : payload.result?.boss ? 'boss' : 'battle') :
+        k === 'battle' ? (payload.intro ? 'event' : payload.result?.seedFight ? 'stasisSeed' : payload.result?.colonyFight ? 'stasisColony' : 'battle') :
         k === 'shop' ? 'shop' :
         k === 'acolyte' ? 'acolyte' :
         k === 'supplies' ? (payload.titleKey === 'treasure.title' ? 'treasure' : 'event') :
@@ -274,8 +274,8 @@ export function createTutorial({ config, ui, renderer }) {
       say('camped', 'npe.rested', {}, { target: { el: '#stat-fatigue' } });
     }
 
-    if (type === 'encounter' && payload.type === 'boss' && s.lastBattle?.won) {
-      say('bossdown', 'npe.boss', {}, { target: 'legend', onShow: () => { revealAll(); state.finishAfter = true; } });
+    if (type === 'encounter' && payload.type === 'stasisColony' && s.lastBattle?.won) {
+      say('colonydown', 'npe.stasis', {}, { target: 'legend', onShow: () => { revealAll(); state.finishAfter = true; } });
     }
 
     if (type === 'end') {

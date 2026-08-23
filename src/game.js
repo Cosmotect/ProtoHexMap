@@ -1,9 +1,9 @@
 // Game rules and state. Pure data + logic, no rendering.
 // The renderer and the HUD subscribe to "events" and redraw themselves.
 import { createRng } from './rng.js';
-import { generateMap } from './map.js';
+import { generateMap, setTerrain } from './map.js';
 import { hexKey, neighbors, hexesInRange, hexDistance } from './hex.js';
-import { simulateBattle, makeEnemies } from './battle.js';
+import { simulateBattle, makeEnemies, makeRegulars, renameDuplicates } from './battle.js';
 import { EVENTS, LORE_IDS } from './events.js';
 import { t, tn } from './i18n.js';
 
@@ -17,10 +17,27 @@ export class Game {
     // Enemy groups are rolled up front for every battle tile, so the danger of a revealed
     // battle can be shown before the party enters it.
     for (const h of this.map.hexes.values()) {
-      if (h.encounter === 'battle' || h.encounter === 'boss') {
-        h.enemies = makeEnemies(this.rng, config.battle, h.ring, h.isBoss, lerpTable);
+      if (h.encounter === 'battle' || h.encounter === 'stasisSeed') {
+        h.enemies = makeEnemies(this.rng, config.battle, h.ring, h.isSeed, lerpTable);
       }
     }
+
+    // The Stasis: one line per future Colony grows from the Seed every turn; the
+    // Colony spawns when its line arrives. Each Colony rolls its debuff up front
+    // (seeded), duplicates allowed - they stack on the Seed fight.
+    const debuffIds = Object.keys(config.stasis.debuffs);
+    this.stasis = {
+      seed: this.map.seed,
+      colonies: this.map.colonies.map((hex) => ({
+        hex,
+        distance: hexDistance(this.map.seed.q, this.map.seed.r, hex.q, hex.r),
+        progress: 0,
+        active: false,
+        cleared: false,
+        debuff: this.rng.pick(debuffIds),
+      })),
+      witherCharge: new Map(),   // source hex key -> accumulated wither charge
+    };
 
     const run = config.run;
     const pathLength = this.map.shortestPath.length - 1; // steps, not tiles
@@ -41,7 +58,7 @@ export class Game {
       fatigue: 0,
       encountersCleared: 0,
       lastBattle: null,
-      bossesDefeated: 0,
+      coloniesCleared: 0,
       pendingSupplies: null,   // { amount, source } waiting to be collected (overflow dialog)
       endReason: '',
     };
@@ -52,9 +69,9 @@ export class Game {
 
     this.map.start.visited = true;
     this.reveal(this.map.start.q, this.map.start.r, run.revealStartRadius, true);
-    if (run.bossAlwaysVisible) for (const b of this.map.bosses) b.revealed = true;
+    if (run.seedAlwaysVisible) this.map.seed.revealed = true;
 
-    this.addLog('log.newRun', { seed, n: this.map.bosses.length, steps: pathLength });
+    this.addLog('log.newRun', { seed, n: this.map.colonies.length, steps: pathLength });
   }
 
   // ----- events -------------------------------------------------------
@@ -224,6 +241,9 @@ export class Game {
       return true;
     }
     this.onEnter(hex, rollChance);
+    // The Stasis acts only AFTER the arrival is fully resolved, so a Colony can
+    // never spawn under the player's feet in the same instant they step on it.
+    this.advanceStasis();
     this.checkEndOfRun();
     this.emit('change');
     return true;
@@ -235,8 +255,82 @@ export class Game {
     if (!a) return;
     this.pendingArrival = null;
     this.onEnter(a.hex, a.rollChance);
+    this.advanceStasis();
     this.checkEndOfRun();
     this.emit('change');
+  }
+
+  // ----- the Stasis -----------------------------------------------------
+  // Runs once per player turn, after the arrival: lines grow, Colonies spawn,
+  // the land withers around the Seed and every active Colony.
+  advanceStasis() {
+    if (this.state.status !== 'playing') return;
+    const st = this.config.stasis;
+
+    // 1. Lines grow towards the future Colonies.
+    for (const c of this.stasis.colonies) {
+      if (c.active || c.cleared) continue;
+      c.progress = Math.min(c.distance, c.progress + st.lineSpeed);
+      if (c.progress >= c.distance) this.spawnColony(c);
+    }
+
+    // 2. Withering: every source gains 1/witherEvery charge per turn and spends
+    //    whole charges on turning nearby tiles into wither.
+    const sources = [];
+    if (this.stasis.seed.encounter === 'stasisSeed') sources.push(this.stasis.seed);
+    for (const c of this.stasis.colonies) if (c.active && !c.cleared) sources.push(c.hex);
+    const withered = [];
+    for (const src of sources) {
+      let charge = (this.stasis.witherCharge.get(src.key) ?? 0) + 1 / st.witherEvery;
+      while (charge >= 1) {
+        charge -= 1;
+        const h = this.witherNear(src, st.witherRadius);
+        if (h) withered.push(h);
+      }
+      this.stasis.witherCharge.set(src.key, charge);
+    }
+    if (withered.length) this.emit('wither', { hexes: withered });
+    this.emit('stasis', {});
+  }
+
+  spawnColony(c) {
+    c.active = true;
+    c.hex.encounter = 'stasisColony';
+    c.hex.enemies = makeEnemies(this.rng, this.config.battle, c.hex.ring, true, lerpTable);
+    this.addLog('log.colonySpawn', {
+      where: { hex: { terrain: c.hex.terrain, q: c.hex.q, r: c.hex.r } },
+      debuff: { key: `debuff.${c.debuff}.name` },
+    });
+    this.emit('colony', { hex: c.hex });
+  }
+
+  // Turns one random non-wither tile near `src` into wither terrain.
+  // The start, the Seed and Colony sites are spared. Returns the tile or null.
+  witherNear(src, radius) {
+    const candidates = [];
+    for (const [q, r] of hexesInRange(src.q, src.r, radius)) {
+      const h = this.hexAt(q, r);
+      if (!h || h.terrain === 'wither' || h.isStart || h.isSeed || h.isColony) continue;
+      candidates.push(h);
+    }
+    if (!candidates.length) return null;
+    const h = this.rng.pick(candidates);
+    setTerrain(h, 'wither', this.config);
+    return h;
+  }
+
+  // Debuffs that would apply to a fight on `hex` right now.
+  // The Seed carries the debuff of every active Colony (stacking); a Colony
+  // carries only its own.
+  activeDebuffsFor(hex) {
+    if (hex.isSeed) {
+      return this.stasis.colonies.filter((c) => c.active && !c.cleared).map((c) => c.debuff);
+    }
+    if (hex.isColony) {
+      const c = this.stasis.colonies.find((c2) => c2.hex === hex);
+      return c && c.active && !c.cleared ? [c.debuff] : [];
+    }
+    return [];
   }
 
   // What happens when stepping on a hex: the party is NOT pulled into the encounter
@@ -266,7 +360,8 @@ export class Game {
 
     switch (type) {
       case 'battle':
-      case 'boss':
+      case 'stasisSeed':
+      case 'stasisColony':
         return this.resolveBattle(hex, forced);
       case 'treasure': {
         this.consume(hex, type, forced);
@@ -387,17 +482,53 @@ export class Game {
   // ----- battle ---------------------------------------------------------
   resolveBattle(hex, forced, opts = {}) {
     const s = this.state;
-    const enemies = hex.enemies ?? makeEnemies(this.rng, this.config.battle, hex.ring, hex.isBoss, lerpTable);
+    const isStasis = hex.isSeed || hex.isColony;
+    const enemies = hex.enemies ?? makeEnemies(this.rng, this.config.battle, hex.ring, isStasis, lerpTable);
     hex.enemies = null;
+
+    // Stasis debuffs: temporarily weaken the party and/or reinforce the enemy for
+    // this one fight. Damage taken stays after the fight; max HP and power come back.
+    const debuffs = this.activeDebuffsFor(hex);
+    const cfgDebuffs = this.config.stasis.debuffs;
+    const saved = s.party.map((u) => ({ maxHp: u.maxHp, power: u.power }));
+    for (const id of debuffs) {
+      if (id === 'maxHp') {
+        for (const u of s.party) {
+          u.maxHp = Math.max(1, Math.round(u.maxHp * (1 - cfgDebuffs.maxHp.fraction)));
+          u.hp = Math.min(u.hp, u.maxHp);
+        }
+      } else if (id === 'power') {
+        for (const u of s.party) u.power -= cfgDebuffs.power.amount;
+      } else if (id === 'extraEnemies') {
+        enemies.push(...makeRegulars(this.rng, this.config.battle, hex.ring, cfgDebuffs.extraEnemies.count, lerpTable));
+        renameDuplicates(enemies);
+      }
+    }
+    if (debuffs.length) {
+      this.addLog('log.debuffs', { list: { list: debuffs.map((id) => ({ key: `debuff.${id}.name` })) } });
+    }
+
     const result = simulateBattle(this.rng, this.config.battle, s.party, enemies, !forced);
+
+    // Undo the temporary debuffs (wounds and deaths remain).
+    for (let i = 0; i < s.party.length; i++) {
+      const u = s.party[i];
+      u.maxHp = saved[i].maxHp;
+      u.power = saved[i].power;
+      u.hp = Math.min(u.hp, u.maxHp);
+    }
+
     result.enemies = enemies;
-    result.boss = hex.isBoss;
+    result.stasis = isStasis;
+    result.seedFight = hex.isSeed;
+    result.colonyFight = hex.isColony;
+    result.debuffs = debuffs;
     result.title = enemies.title || null;
     s.lastBattle = result;
 
     const who = { list: enemies.map((e) => ({ key: 'log.battle.enemy', params: { name: { name: e.name }, hp: e.maxHp, power: e.power } })) };
     const first = { key: forced ? 'log.battle.enemiesFirst' : 'log.battle.partyFirst' };
-    if (enemies.title) this.addLog('log.battle.boss', { title: { name: enemies.title }, who, first });
+    if (enemies.title) this.addLog('log.battle.stasis', { title: { name: enemies.title }, who, first });
     else this.addLog('log.battle', { who, first });
     for (const d of result.deaths) {
       if (s.party.includes(d)) this.addLog('log.unitDisabled', { name: { name: d.name } });
@@ -413,22 +544,28 @@ export class Game {
       s.endReason = ['end.fell', { turn: s.turn }];
       this.emit('end', { status: s.status });
     } else {
-      if (hex.isBoss) {
-        s.bossesDefeated += 1;
-        const total = this.map.bosses.length;
-        const done = this.config.run.winCondition === 'any' || s.bossesDefeated >= total;
-        if (done) {
-          s.status = 'won';
-          s.endReason = ['end.bosses', { done: s.bossesDefeated, total, turn: s.turn, enc: s.encountersCleared }];
-          this.addLog('log.allBosses');
-          this.emit('end', { status: s.status });
-        } else {
-          this.addLog('log.bossDown', { done: s.bossesDefeated, total });
-        }
+      if (hex.isSeed) {
+        // Win condition: the Stasis Seed is destroyed.
+        s.status = 'won';
+        s.endReason = ['end.seed', { turn: s.turn, enc: s.encountersCleared, colonies: s.coloniesCleared }];
+        this.addLog('log.seedDown');
+        this.emit('end', { status: s.status });
+      } else if (hex.isColony) {
+        const c = this.stasis.colonies.find((c2) => c2.hex === hex);
+        if (c) { c.cleared = true; c.active = false; }
+        s.coloniesCleared += 1;
+        this.addLog('log.colonyDown', {
+          done: s.coloniesCleared,
+          total: this.stasis.colonies.length,
+          debuff: { key: `debuff.${c?.debuff}.name` },
+        });
+        this.emit('stasis', {});
       }
       // Victory reward: +power to a unit of the player's choice (handled by the dialog).
+      // Clearing a Colony grants several picks (config.stasis.rewardPicks).
       if (this.config.battle.victoryPower > 0 && this.livingUnits().length) {
         result.reward = this.config.battle.victoryPower;
+        result.rewardPicks = hex.isColony ? this.config.stasis.rewardPicks : 1;
       }
     }
     this.emit('change');

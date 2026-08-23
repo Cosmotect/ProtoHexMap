@@ -11,6 +11,13 @@ export function placeholders(config) {
   const enemyPowerMax = Math.max(...Object.values(c.battle.enemies.powerByRing));
   const bossPowers = c.battle.bosses.map((b) => b.power);
   return {
+    colonyCount: c.stasis.colonyCount,
+    rewardPicks: c.stasis.rewardPicks,
+    witherHp: c.terrain.wither?.hpCost ?? 0,
+    witherEvery: c.stasis.witherEvery,
+    debuffMaxHpPct: pct(c.stasis.debuffs.maxHp.fraction),
+    debuffPower: c.stasis.debuffs.power.amount,
+    debuffExtraEnemies: c.stasis.debuffs.extraEnemies.count,
     victoryPower: c.battle.victoryPower,
     campCost: c.rest.cost,
     healPct: pct(c.rest.healFraction),
@@ -23,7 +30,6 @@ export function placeholders(config) {
     maxSupplies: c.run.startSupplies,
     revivePct: pct(c.acolyte.reviveFraction),
     acolyteMin: c.encounters.guaranteed?.acolyte ?? 0,
-    bossCount: c.map.bossCount,
     bossPowerMin: Math.min(...bossPowers),
     bossPowerMax: Math.max(...bossPowers),
     enemyPowerMax,

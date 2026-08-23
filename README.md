@@ -3,7 +3,9 @@
 A browser prototype of the world map (level select) for a roguelike in the spirit of
 Slay the Spire and Into the Breach: a hex grid under fog of war, a party of three moving
 one step at a time, fatigue that can force encounters on you, supplies as the currency,
-simulated battles, and three bosses hidden in the outer rings. The rules are in DESIGN.md.
+simulated battles, and the Stasis: a Seed hidden in the outer rings (destroy it to win)
+whose lines grow towards four future Colonies, withering the land as they spread.
+The rules are in DESIGN.md.
 
 Built with **Three.js** (3D in the browser) and **Vite** (the tool that runs and packages it).
 Plain JavaScript, no framework.
@@ -82,7 +84,7 @@ hex-world-map/
   vite.singlefile.config.js  alternative build that packs everything into one .html
   src/
     config.js    design knobs: run rules, camera, colours + glue for the three files below
-    config/world.js       map size, bosses, terrain
+    config/world.js       map size, terrain
     config/encounters.js  encounter odds, rest / shop / treasure / events, fatigue
     config/units.js       the party and the battle simulation
     main.js      entry point, wires the three parts below together
@@ -94,7 +96,7 @@ hex-world-map/
     i18n.js      language switching and the t() / tn() translation helpers
     locales/en.js, locales/ru.js   every user-facing string, one flat table per language
     settings.js  the in-app settings window (config values editable at runtime, saved in the browser)
-    map.js       map generation from a seed, guaranteed path from start to every boss
+    map.js       map generation from a seed, guaranteed path to the Seed and Colony sites
     hex.js       hex grid maths (axial coordinates, neighbours, distance)
     rng.js       seeded random numbers (same seed = same map)
     render.js    the Three.js scene: tiles, fog, markers, player token, camera, mouse picking

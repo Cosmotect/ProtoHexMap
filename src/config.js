@@ -5,8 +5,8 @@
 //  or the "Details" panel defaults of a Blueprint.
 //
 //  The config is split into four files:
-//    config/world.js       map shape, bosses, terrain
-//    config/encounters.js  encounter placement, rest / shop / treasure / events, fatigue
+//    config/world.js       map shape, terrain
+//    config/encounters.js  encounter placement, the Stasis, rest / shop / treasure / events, fatigue
 //    config/units.js       the party and the battle simulation
 //    config.js (this one)  run rules, camera, animation, colours, and the glue
 //  The rest of the code always reads CONFIG.<section>, so moving a section between
@@ -28,9 +28,9 @@ export const CONFIG = {
     // This is also the maximum: gains never exceed it.
     startSupplies: 60,
     revealRadius: 0,          // how many rings around the player get uncovered (0 = only the tile you stand on)
-    bossAlwaysVisible: false, // false = the bosses hide under the fog like everything else
+    seedAlwaysVisible: false, // false = the Stasis Seed hides under the fog like everything else
     revealStartRadius: 1,     // rings uncovered around the start tile at the beginning
-    winCondition: 'all',      // 'all' = defeat every boss, 'any' = defeating one boss wins
+    // Win condition: destroy the Stasis Seed (see config/encounters.js, "stasis").
   },
 
   // ----- Camera ------------------------------------------------------
@@ -63,7 +63,9 @@ export const CONFIG = {
     fogTile: 0x1f2536,        // colour of tiles still hidden under the fog of war
     fogTileHeight: 0.22,
     startTile: 0x9fd9ff,
-    bossTile: 0x4a1a2a,
+    seedTile: 0x4a1a2a,       // tile under the Stasis Seed
+    colonyTile: 0x33204a,     // tile under an active Stasis Colony
+    stasisLine: 0x9a5cff,     // the lines growing from the Seed to its Colonies
     visitedTint: 0.82,        // multiplier applied to the colour of tiles you already stepped on
     reachableRing: 0xffd166,
     hoverRing: 0xffffff,

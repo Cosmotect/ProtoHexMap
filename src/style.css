@@ -278,6 +278,8 @@ button.small { padding: 2px 8px; font-size: 12px; }
 .battle-sum { margin-bottom: 8px; }
 .battle-sum.won { color: #b8e39a; }
 .battle-sum.lost { color: var(--danger); }
+/* Stasis debuffs listed in a battle report */
+.debuffs { margin: 0 0 8px; padding: 6px 9px; border-left: 3px solid #9a5cff; background: rgba(154, 92, 255, 0.1); font-size: 13px; color: #cdb4ff; }
 
 .enter {
   font-family: var(--display);

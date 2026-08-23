@@ -126,6 +126,14 @@ export class MapRenderer {
       cone: new THREE.ConeGeometry(0.3, 0.62, 14),
       dodecahedron: new THREE.DodecahedronGeometry(0.3),
     };
+
+    // Stasis lines: short shared-geometry segments laid over the tiles (rebuilt per
+    // turn in rebuildStasisLines). One shared pulsing material for all of them.
+    this.lineSegGeo = new THREE.BoxGeometry(1, 1, 1);
+    this.stasisLineMat = new THREE.MeshBasicMaterial({
+      color: this.config.colors.stasisLine, transparent: true, opacity: 0.8, depthWrite: false,
+    });
+    this.stasisGroup = null;
   }
 
   setupCamera(mode, target) {
@@ -264,13 +272,14 @@ export class MapRenderer {
       this.tiles.set(hex.key, record);
 
       if (hex.encounter) record.marker = this.buildMarker(hex, record);
-      // Tiles that start revealed (start area, boss) appear without animation.
+      // Tiles that start revealed (start area, the Seed) appear without animation.
       if (hex.revealed) this.applyRevealed(record, false);
     }
 
     this.buildPlayer(game.state.position);
     this.fitLightToMap(game.map.bounds);
     this.syncState();
+    this.rebuildStasisLines(game);
 
     const p = this.playerWorld(game.state.position);
     this.setupCamera(this.cameraMode, new THREE.Vector3(p.x, 0, p.z));
@@ -293,6 +302,7 @@ export class MapRenderer {
       }
     }
     this.setHighlight(null);
+    if (this.stasisGroup) { this.scene.remove(this.stasisGroup); this.stasisGroup = null; }
     this.tiles.clear();
     this.tileMeshes = [];
     if (this.player) { this.scene.remove(this.player); this.player = null; }
@@ -312,7 +322,8 @@ export class MapRenderer {
     });
     const marker = new THREE.Mesh(geo, mat);
     marker.castShadow = true;
-    const scale = hex.isBoss ? 1.7 : 1;
+    // The Seed's cone is the landmark; a Colony's cone is half its diameter.
+    const scale = hex.isSeed ? 1.7 : hex.encounter === 'stasisColony' ? 0.85 : 1;
     marker.scale.setScalar(scale);
     marker.userData.baseScale = scale;
     marker.position.set(hex.x, 0, -hex.y);
@@ -453,7 +464,8 @@ export class MapRenderer {
     if (!hex.revealed) return new THREE.Color(c.fogTile);
     let color;
     if (hex.isStart) color = new THREE.Color(c.startTile);
-    else if (hex.isBoss) color = new THREE.Color(c.bossTile);
+    else if (hex.isSeed) color = new THREE.Color(c.seedTile);
+    else if (hex.encounter === 'stasisColony') color = new THREE.Color(c.colonyTile);
     else color = new THREE.Color(this.config.terrain[hex.terrain].color);
     if (hex.visited && !hex.isStart && this.game.state.position !== hex) color.multiplyScalar(c.visitedTint);
     return color;
@@ -526,6 +538,76 @@ export class MapRenderer {
       const d = origin ? hexDistance(origin.q, origin.r, hex.q, hex.r) : 0;
       this.applyRevealed(rec, true, this.config.anim.hopMs * 0.6 + d * 60);
     }
+  }
+
+  // ----- the Stasis --------------------------------------------------------
+  // A Colony just spawned: give its tile a marker (with a pop if it is visible).
+  handleColonySpawn(hex) {
+    const rec = this.tiles.get(hex.key);
+    if (!rec || rec.marker) return;
+    rec.marker = this.buildMarker(hex, rec);
+    if (hex.revealed) {
+      rec.mesh.material.color.copy(this.targetColorFor(hex));
+      const m = rec.marker;
+      m.visible = true;
+      const s = m.userData.baseScale || 1;
+      tween({ duration: 450, ease: Ease.outBack, onUpdate: (t) => m.scale.setScalar(s * t) });
+    }
+  }
+
+  // Tiles the Stasis turned into wither: re-colour the visible ones.
+  handleWither(hexes) {
+    for (const hex of hexes) {
+      const rec = this.tiles.get(hex.key);
+      if (rec && hex.revealed) this.applyRevealed(rec, true);
+    }
+  }
+
+  // Rebuilds the growing Seed -> Colony lines. Called once per turn and after
+  // reveals, so it can afford to be simple: throw the old segments away and lay
+  // new ones. Segments are only laid over tiles the player has already revealed.
+  rebuildStasisLines(game) {
+    if (this.stasisGroup) { this.scene.remove(this.stasisGroup); this.stasisGroup = null; }
+    if (!game || !game.stasis) return;
+    this.stasisGroup = new THREE.Group();
+    this.stasisLineMat.color.set(this.config.colors.stasisLine);
+    const seed = game.stasis.seed;
+    const ax = seed.x, az = -seed.y;
+    const step = 0.3;
+    for (const c of game.stasis.colonies) {
+      if (c.cleared) continue;
+      const frac = c.distance > 0 ? Math.min(1, c.progress / c.distance) : 1;
+      if (frac <= 0) continue;
+      const bx = c.hex.x, bz = -c.hex.y;
+      const dx = bx - ax, dz = bz - az;
+      const total = Math.hypot(dx, dz) || 1;
+      const grown = total * frac;
+      const angle = Math.atan2(dx, dz);
+      for (let d = step / 2; d < grown; d += step) {
+        const x = ax + (dx / total) * d;
+        const z = az + (dz / total) * d;
+        const rec = this.tileAt(x, z);
+        if (!rec || !rec.hex.revealed) continue;
+        const seg = new THREE.Mesh(this.lineSegGeo, this.stasisLineMat);
+        seg.scale.set(0.09, 0.045, Math.min(step, grown - (d - step / 2)) * 1.1);
+        seg.rotation.y = angle;
+        seg.position.set(x, rec.height + 0.07, z);
+        this.stasisGroup.add(seg);
+      }
+    }
+    this.scene.add(this.stasisGroup);
+  }
+
+  // The tile record whose centre is closest to the world point (x, z). Hex grids are
+  // the Voronoi cells of their centres, so "nearest centre" = "containing tile".
+  tileAt(x, z) {
+    let best = null, bestD = Infinity;
+    for (const rec of this.tiles.values()) {
+      const dx = rec.hex.x - x, dz = -rec.hex.y - z;
+      const d = dx * dx + dz * dz;
+      if (d < bestD) { bestD = d; best = rec; }
+    }
+    return best;
   }
 
   // The encounter on this tile was consumed: pop the marker and remove it.
@@ -683,6 +765,9 @@ export class MapRenderer {
         list.forEach((sp, i) => { sp.position.set(rec.marker.position.x, top + 0.16 + i * 0.2, rec.marker.position.z); sp.visible = true; });
       }
     }
+
+    // Stasis lines pulse gently.
+    this.stasisLineMat.opacity = 0.55 + 0.3 * (0.5 + 0.5 * Math.sin(this.elapsed / 320));
 
     // Guide highlight: the outline copies its marker; flashes pulse the size/opacity.
     const flashing = this.elapsed < this.highlightFlashUntil;

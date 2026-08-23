@@ -39,8 +39,9 @@ export const UNITS = {
       powerByRing: { 0: 0, 9: 5 },
       names: ['Raider', 'Drifter', 'Husk', 'Warden', 'Stalker'],
     },
-    // Boss variants: each boss tile rolls one of these (seeded). Power sits in the
-    // 4-7 range by design, so the party is expected to arrive upgraded.
+    // The Stasis pool: the Stasis Seed and every Stasis Colony roll one of these
+    // variants (seeded). Power sits in the 4-7 range by design, so the party is
+    // expected to arrive upgraded.
     bosses: [
       { title: 'Forge Tyrant', power: 4, units: [{ name: 'Forge Tyrant', hp: 60 }, { name: 'Tyrant\'s Shadow', hp: 40 }] },
       { title: 'Warden of the Rim', power: 6, units: [{ name: 'Warden of the Rim', hp: 120 }] },

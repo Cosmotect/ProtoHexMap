@@ -1,5 +1,5 @@
 // Automated smoke test: opens the built game in a headless Chromium, checks the console
-// for errors, walks the shortest route to the boss by clicking tiles, toggles the camera
+// for errors, exercises the dialogs, the Stasis rules, a short walk and the NPE,
 // and saves screenshots into tools/shots/.
 //
 // One-time setup (optional, only if you want to run this yourself):
@@ -34,7 +34,12 @@ fs.mkdirSync(OUT, { recursive: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const problems = [];
   page.on('pageerror', (e) => problems.push('PAGE ERROR: ' + e.message));
-  page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') problems.push(m.type() + ': ' + m.text()); });
+  page.on('console', (m) => {
+    if (m.type() !== 'error' && m.type() !== 'warning') return;
+    // Sandboxed test machines cannot reach Google Fonts; that failure is expected noise.
+    if (m.text().includes('ERR_TUNNEL_CONNECTION_FAILED')) return;
+    problems.push(m.type() + ': ' + m.text());
+  });
 
   await page.goto(URL, { waitUntil: 'load', timeout: 60000 });
   await page.waitForTimeout(1500);
@@ -107,6 +112,42 @@ fs.mkdirSync(OUT, { recursive: true });
   const capOk = await page.evaluate(() => { const g = window.game; g.addSupplies(999); return g.state.supplies === g.state.maxSupplies; });
   if (!capOk) problems.push('supplies exceeded the maximum');
 
+  // The Stasis, straight through the rules layer: placement, line growth, colony
+  // spawn, withering and debuffs.
+  const stasisProblems = await page.evaluate(() => {
+    const g = window.game; const st = g.stasis; const cfg = g.config.stasis;
+    const out = [];
+    const dist = (a, b) => (Math.abs(a.q - b.q) + Math.abs(a.r - b.r) + Math.abs(a.q + a.r - b.q - b.r)) / 2;
+    if (!g.map.seed || g.map.seed.encounter !== 'stasisSeed') out.push('no Stasis Seed on the map');
+    if (st.colonies.length !== cfg.colonyCount) out.push(`expected ${cfg.colonyCount} colonies, got ${st.colonies.length}`);
+    for (const c of st.colonies) {
+      if (dist(c.hex, g.map.seed) < cfg.minSpacing) out.push('colony too close to the seed');
+      for (const o of st.colonies) if (o !== c && dist(c.hex, o.hex) < cfg.minSpacing) out.push('colonies too close to each other');
+      if (c.hex.encounter) out.push('colony encounter present before its line arrived');
+    }
+    // March time forward: the nearest colony must spawn after distance / lineSpeed turns.
+    const first = [...st.colonies].sort((a, b) => a.distance - b.distance)[0];
+    const need = Math.ceil(first.distance / cfg.lineSpeed);
+    for (let i = 0; i < need; i++) g.advanceStasis();
+    if (!first.active || first.hex.encounter !== 'stasisColony') out.push(`colony did not spawn after ${need} turns`);
+    if (!first.hex.enemies || !first.hex.enemies.length) out.push('spawned colony has no enemies');
+    const withered = [...g.map.hexes.values()].filter((h) => h.terrain === 'wither');
+    if (!withered.length) out.push(`no wither tiles after ${need} turns`);
+    if (withered.some((h) => h.hpCost !== g.config.terrain.wither.hpCost)) out.push('wither tiles did not take the config hpCost');
+    // Active colonies push their debuff onto the seed fight.
+    const debuffs = g.activeDebuffsFor(g.map.seed);
+    const active = st.colonies.filter((c) => c.active && !c.cleared).length;
+    if (debuffs.length !== active) out.push(`seed debuffs (${debuffs.length}) != active colonies (${active})`);
+    if (first.debuff && g.activeDebuffsFor(first.hex)[0] !== first.debuff) out.push('colony does not report its own debuff');
+    return out;
+  });
+  problems.push(...stasisProblems);
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: path.join(OUT, '01d-stasis-sim.png') });
+  // Fresh page so the timeline tests below start from turn 0 again.
+  await page.goto(URL, { waitUntil: 'load', timeout: 60000 });
+  await page.waitForTimeout(1200);
+
   // Walk a couple of steps so fatigue rises, then check the hover popup.
   for (let i = 0; i < 6; i++) {
     await waitIdle();
@@ -141,8 +182,9 @@ fs.mkdirSync(OUT, { recursive: true });
   if (!dialogLate) problems.push('dialog did not open after the forced banner');
   await page.screenshot({ path: path.join(OUT, '02d-forced-banner.png') });
   await dismissDialog();
-  // Supplies overflow dialog with the camp-first option.
-  await page.evaluate(() => { const g = window.game; g.state.supplies = g.state.maxSupplies - 5; g.offerSupplies(20, 'Test find', 'Test text.'); });
+  // Supplies overflow dialog with the camp-first option. The walk above may have
+  // ended on an encounter tile (camping there is impossible), so clear it first.
+  await page.evaluate(() => { const g = window.game; g.state.position.encounter = null; g.state.supplies = g.state.maxSupplies - 5; g.offerSupplies(20, 'Test find', 'Test text.'); });
   await page.waitForTimeout(200);
   const supButtons = await page.evaluate(() => [...document.querySelectorAll('#dialog-actions button')].map((b) => b.textContent));
   if (!supButtons.some((t) => t.includes('Make camp first'))) problems.push('overflow dialog lacks the make-camp-first button: ' + JSON.stringify(supButtons));
@@ -294,7 +336,7 @@ fs.mkdirSync(OUT, { recursive: true });
     const chev = await page.evaluate(() => { const g = window.game; const rec = window.__renderer.tiles.get(g.state.position.key); return rec?.marker?.userData.chevrons.length; });
     console.log('chevrons on this battle:', chev);
     await page.screenshot({ path: path.join(OUT, '09-npe-encounter-card.png') });
-    await page.click('#btn-tutorial-ok'); await page.waitForTimeout(1200);
+    await page.click('#btn-tutorial-ok'); await page.waitForTimeout(2200);
     const after = await page.evaluate(() => ({ dialog: !document.getElementById('dialog').classList.contains('hidden'), title: document.getElementById('tutorial-title').textContent }));
     if (!after.dialog) problems.push('forced encounter did not run after the encounter card: ' + JSON.stringify(after));
   }

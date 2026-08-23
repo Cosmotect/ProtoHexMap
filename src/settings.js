@@ -15,7 +15,7 @@ const STORAGE_KEY = 'hexmap-settings-v1';
 // notes come from the locale tables (settings.tab.<id>, settings.note.<id>).
 const TABS = [
   { id: 'world', sections: ['map', 'terrain'] },
-  { id: 'encounters', sections: ['encounters', 'rest', 'acolyte', 'shop', 'treasure', 'events', 'fatigue'] },
+  { id: 'encounters', sections: ['encounters', 'stasis', 'rest', 'acolyte', 'shop', 'treasure', 'events', 'fatigue'] },
   { id: 'units', sections: ['party', 'battle'] },
   { id: 'general', sections: ['run', 'camera', 'anim', 'colors'] },
 ];

@@ -4,9 +4,11 @@ import { hexKey, neighbors, hexesInRange, axialToPlane, hexDistance } from './he
 
 /**
  * Builds a hexagon shaped hex map (a centre tile plus `radius` rings) from the config
- * using the seeded rng. The player starts on the centre tile; bosses sit on random
- * tiles of the outer rings (see config.map.bossCount / bossMinRing).
- * Returns { hexes: Map<key, hex>, start, bosses, boss (nearest), shortestPath, bounds }.
+ * using the seeded rng. The player starts on the centre tile. One outer-ring tile
+ * holds the Stasis Seed; four more tiles (config.stasis) are marked as future
+ * Stasis Colony sites - the Colonies themselves spawn during play, when the
+ * stasis lines reach them (see game.js).
+ * Returns { hexes: Map<key, hex>, start, seed, colonies, shortestPath, bounds }.
  * Each hex: { q, r, ring, key, terrain, passable, supplyCost, encounter,
  *             revealed, visited, x, y }   (x, y = 2D plane position)
  */
@@ -15,23 +17,22 @@ export function generateMap(config, rng) {
 
   let attempt = 0;
   let result = null;
-  // Try a few layouts until every boss is reachable from the start.
+  // Try a few layouts until the Seed and every Colony site are reachable from the start.
   while (attempt < 60) {
     attempt += 1;
     result = buildLayout(config, rng, radius, orientation, hexSize);
-    result.paths = result.bosses.map((b) => shortestPath(result.hexes, result.start, b));
+    result.paths = [result.seed, ...result.colonies].map((b) => shortestPath(result.hexes, result.start, b));
     if (result.paths.every(Boolean)) break;
   }
-  result.bosses.forEach((b, i) => {
+  [result.seed, ...result.colonies].forEach((b, i) => {
     if (!result.paths[i]) {
-      // Extremely unlucky: bulldoze a corridor so every boss is always reachable.
+      // Extremely unlucky: bulldoze a corridor so every goal is always reachable.
       carveCorridor(result, config, b);
       result.paths[i] = shortestPath(result.hexes, result.start, b);
     }
   });
-  // "shortestPath" = route to the nearest boss (used for the HUD hint).
-  result.shortestPath = result.paths.filter(Boolean).sort((a, b) => a.length - b.length)[0];
-  result.boss = result.shortestPath[result.shortestPath.length - 1];
+  // "shortestPath" = the route to the Stasis Seed (used for the HUD hint).
+  result.shortestPath = result.paths[0];
 
   placeEncounters(result, config, rng);
   result.attempts = attempt;
@@ -40,43 +41,56 @@ export function generateMap(config, rng) {
 
 function buildLayout(config, rng, radius, orientation, hexSize) {
   const hexes = new Map();
-  // Start = the centre of the hexagon. Bosses = random tiles on the outer rings
-  // (ring >= bossMinRing), kept at least bossMinSpacing apart from each other.
+  // Start = the centre of the hexagon. The Seed = a random tile on the outer rings
+  // (ring >= seedMinRing). Colony sites = random tiles kept at least minSpacing
+  // apart from each other and from the Seed, and away from the start.
   const startQ = 0, startR = 0;
-  const m = config.map;
-  const minRing = m.bossMinRing === 'half' ? Math.floor(radius / 2) : (m.bossMinRing ?? radius);
-  const candidates = hexesInRange(0, 0, radius).filter(([q, r]) => hexDistance(q, r, 0, 0) >= minRing);
-  const bossKeys = new Set();
-  const bossSpots = [];
+  const st = config.stasis;
+  const minRing = st.seedMinRing === 'half' ? Math.floor(radius / 2) : (st.seedMinRing ?? radius);
+  const seedCandidates = hexesInRange(0, 0, radius).filter(([q, r]) => hexDistance(q, r, 0, 0) >= minRing);
+  const seedSpot = rng.pick(seedCandidates);
+
+  const specialKeys = new Set([hexKey(seedSpot[0], seedSpot[1])]);
+  const colonySpots = [];
+  const colonyCandidates = hexesInRange(0, 0, radius).filter(([q, r]) =>
+    hexDistance(q, r, 0, 0) >= (st.minDistanceFromStart ?? 0));
   let guard = 0;
-  while (bossSpots.length < (m.bossCount ?? 1) && guard++ < 500) {
-    const [q, r] = rng.pick(candidates);
-    const farEnough = bossSpots.every(([bq, br]) => hexDistance(q, r, bq, br) >= (m.bossMinSpacing ?? 0));
-    if (farEnough && !bossKeys.has(hexKey(q, r))) { bossSpots.push([q, r]); bossKeys.add(hexKey(q, r)); }
+  while (colonySpots.length < (st.colonyCount ?? 0) && guard++ < 800) {
+    const [q, r] = rng.pick(colonyCandidates);
+    if (specialKeys.has(hexKey(q, r))) continue;
+    const farFromSeed = hexDistance(q, r, seedSpot[0], seedSpot[1]) >= (st.minSpacing ?? 0);
+    const farFromOthers = colonySpots.every(([cq, cr]) => hexDistance(q, r, cq, cr) >= (st.minSpacing ?? 0));
+    if (farFromSeed && farFromOthers) { colonySpots.push([q, r]); specialKeys.add(hexKey(q, r)); }
   }
+
+  const seedKey = hexKey(seedSpot[0], seedSpot[1]);
+  const colonyKeys = new Set(colonySpots.map(([q, r]) => hexKey(q, r)));
 
   for (const [q, r] of hexesInRange(0, 0, radius)) {
     const isStart = q === startQ && r === startR;
-    const isBoss = bossKeys.has(hexKey(q, r));
+    const key = hexKey(q, r);
+    const isSeed = key === seedKey;
+    const isColony = colonyKeys.has(key);
 
     let terrain = rng.weighted(terrainWeights(config));
-    if (isStart || isBoss) terrain = 'grass';
+    if (isStart || isSeed || isColony) terrain = 'grass';
 
     const t = config.terrain[terrain];
     const plane = axialToPlane(q, r, hexSize, orientation);
     const hex = {
       q, r,
       ring: hexDistance(q, r, 0, 0),   // 0 = centre, radius = outer edge
-      key: hexKey(q, r),
+      key,
       terrain,
       passable: t.passable,
       supplyCost: t.supplyCost,
       hpCost: t.hpCost ?? 0,
       revealBonus: t.revealBonus ?? 0,
       terrainHeight: t.terrainHeight ?? 0,
-      encounter: isBoss ? 'boss' : null,
+      encounter: isSeed ? 'stasisSeed' : null,   // Colonies spawn later, during play
       isStart,
-      isBoss,
+      isSeed,
+      isColony,
       revealed: false,
       visited: false,
       x: plane.x,
@@ -86,7 +100,8 @@ function buildLayout(config, rng, radius, orientation, hexSize) {
   }
 
   const start = hexes.get(hexKey(startQ, startR));
-  const bosses = bossSpots.map(([q, r]) => hexes.get(hexKey(q, r)));
+  const seed = hexes.get(seedKey);
+  const colonies = colonySpots.map(([q, r]) => hexes.get(hexKey(q, r)));
 
   // Keep the first ring around the start walkable so the run never starts boxed in.
   for (const [nq, nr] of neighbors(start.q, start.r)) {
@@ -110,7 +125,8 @@ function buildLayout(config, rng, radius, orientation, hexSize) {
   return {
     hexes,
     start,
-    bosses,
+    seed,
+    colonies,
     bounds: { minX: minX - cx, maxX: maxX - cx, minY: minY - cy, maxY: maxY - cy },
     radius,
     orientation,
@@ -123,7 +139,9 @@ function terrainWeights(config) {
   return weights;
 }
 
-function setTerrain(hex, terrain, config) {
+// Rewrites a hex's terrain fields from the config (also used by game.js when the
+// Stasis withers a tile).
+export function setTerrain(hex, terrain, config) {
   const t = config.terrain[terrain];
   hex.terrain = terrain;
   hex.passable = t.passable;
@@ -159,18 +177,18 @@ export function shortestPath(hexes, start, goal) {
   return path.reverse();
 }
 
-function carveCorridor(result, config, boss) {
-  // Walk from the start towards the boss, always stepping to the neighbour that
+function carveCorridor(result, config, goal) {
+  // Walk from the start towards the goal, always stepping to the neighbour that
   // reduces the distance, turning everything on the way into grass.
   let cur = result.start;
   let guard = 0;
-  while (cur !== boss && guard++ < 500) {
+  while (cur !== goal && guard++ < 500) {
     let best = null;
     let bestDist = Infinity;
     for (const [nq, nr] of neighbors(cur.q, cur.r)) {
       const n = result.hexes.get(hexKey(nq, nr));
       if (!n) continue;
-      const d = hexDistance(n.q, n.r, boss.q, boss.r);
+      const d = hexDistance(n.q, n.r, goal.q, goal.r);
       if (d < bestDist) { bestDist = d; best = n; }
     }
     if (!best) break;
@@ -182,7 +200,7 @@ function carveCorridor(result, config, boss) {
 function placeEncounters(result, config, rng) {
   const enc = config.encounters;
   for (const h of result.hexes.values()) {
-    if (!h.passable || h.supplyCost > 0 || h.isStart || h.isBoss) continue;
+    if (!h.passable || h.supplyCost > 0 || h.isStart || h.isSeed || h.isColony) continue;
     const distFromStart = hexDistance(h.q, h.r, result.start.q, result.start.r);
     if (distFromStart <= enc.minDistanceFromStart) continue;
     if (rng.chance(enc.density)) {
@@ -194,7 +212,7 @@ function placeEncounters(result, config, rng) {
   for (const [type, min] of Object.entries(enc.guaranteed ?? {})) {
     const have = [...result.hexes.values()].filter((h) => h.encounter === type).length;
     const candidates = [...result.hexes.values()].filter((h) =>
-      h.passable && h.supplyCost === 0 && !h.isStart && !h.isBoss && !h.encounter &&
+      h.passable && h.supplyCost === 0 && !h.isStart && !h.isSeed && !h.isColony && !h.encounter &&
       hexDistance(h.q, h.r, result.start.q, result.start.r) > enc.minDistanceFromStart);
     for (let i = have; i < min && candidates.length; i++) {
       const idx = Math.floor(rng.random() * candidates.length);

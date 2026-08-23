@@ -11,12 +11,7 @@ export const WORLD = {
     hexSize: 1.0,           // distance from hex centre to a corner, in world units
     gap: 0.08,              // empty space between neighbouring tiles (world units)
     tileHeight: 0.35,       // thickness of a revealed tile
-    // Bosses: how many, and the rings they may sit on. "bossMinRing: 'half'" means
-    // floor(radius / 2); a number is used as-is. Bosses are kept at least
-    // bossMinSpacing tiles apart from each other.
-    bossCount: 3,
-    bossMinRing: 'half',
-    bossMinSpacing: 4,
+    // (Stasis Seed / Colony placement lives in config/encounters.js under "stasis".)
   },
 
   // ----- Terrain -----------------------------------------------------
@@ -35,5 +30,8 @@ export const WORLD = {
     hills: { weight: 0.14, passable: true, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 1, color: 0xb79a63, height: 0.55 },
     water: { weight: 0.10, passable: false, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 0, color: 0x3c7dc4, height: 0.18 },
     mountain: { weight: 0.08, passable: true, supplyCost: 10, hpCost: 5, revealBonus: 2, terrainHeight: 2, color: 0x8e929c, height: 0.95 },
+    // Wither is never generated (weight 0): the Stasis turns other tiles into it during
+    // the run. Stepping onto it costs every living unit 1 HP.
+    wither: { weight: 0, passable: true, supplyCost: 0, hpCost: 1, revealBonus: 0, terrainHeight: 0, color: 0x3b2a6e, height: 0.3 },
   },
 };

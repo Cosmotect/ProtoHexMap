@@ -68,30 +68,45 @@ export function simulateBattle(rng, cfg, party, enemies, partyFirst) {
   return { won, rounds: round, lines, deaths, partyFirst };
 }
 
-// Builds an enemy group for a tile. "ring" = distance from the map centre.
-export function makeEnemies(rng, cfg, ring, isBoss, lerpTable) {
+// Appends " 2", " 3"... to repeated names so every unit in a group reads uniquely.
+// Mutates and returns the list; safe to call again after adding more units.
+export function renameDuplicates(units) {
+  const seen = new Map();
+  for (const u of units) {
+    const base = u.baseName ?? u.name;
+    u.baseName = base;
+    const n = (seen.get(base) ?? 0) + 1;
+    seen.set(base, n);
+    u.name = n > 1 ? `${base} ${n}` : base;
+  }
+  return units;
+}
+
+// `count` regular enemies for a tile on `ring` (used for normal groups and for the
+// Stasis "extra enemies" debuff).
+export function makeRegulars(rng, cfg, ring, count, lerpTable) {
+  const e = cfg.enemies;
+  const power = Math.round(lerpTable(e.powerByRing, ring));
   const out = [];
-  if (isBoss) {
+  for (let i = 0; i < count; i++) {
+    const hp = rng.int(e.hpMin, e.hpMax);
+    out.push({ name: rng.pick(e.names), hp, maxHp: hp, power, alive: true });
+  }
+  return out;
+}
+
+// Builds an enemy group for a tile. "ring" = distance from the map centre.
+// "useBossPool" = roll a variant from cfg.bosses (Stasis Seed and Colonies).
+export function makeEnemies(rng, cfg, ring, useBossPool, lerpTable) {
+  if (useBossPool) {
     const variant = rng.pick(cfg.bosses);
-    const seen = new Map();
-    for (const u of variant.units) {
-      const n = (seen.get(u.name) ?? 0) + 1;
-      seen.set(u.name, n);
-      out.push({ name: n > 1 ? `${u.name} ${n}` : u.name, hp: u.hp, maxHp: u.hp, power: u.power ?? variant.power, alive: true });
-    }
+    const out = renameDuplicates(variant.units.map((u) => ({
+      name: u.name, hp: u.hp, maxHp: u.hp, power: u.power ?? variant.power, alive: true,
+    })));
     out.title = variant.title;
     return out;
   }
   const e = cfg.enemies;
   const count = rng.int(e.countMin, e.countMax);
-  const power = Math.round(lerpTable(e.powerByRing, ring));
-  const used = new Map();
-  for (let i = 0; i < count; i++) {
-    const base = rng.pick(e.names);
-    const n = (used.get(base) ?? 0) + 1;
-    used.set(base, n);
-    const hp = rng.int(e.hpMin, e.hpMax);
-    out.push({ name: n > 1 ? `${base} ${n}` : base, hp, maxHp: hp, power, alive: true });
-  }
-  return out;
+  return renameDuplicates(makeRegulars(rng, cfg, ring, count, lerpTable));
 }

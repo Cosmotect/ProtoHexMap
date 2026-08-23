@@ -80,9 +80,12 @@ function startRun(seed, opts = {}) {
   }
 
   game.on((type, payload) => {
-    if (type === 'reveal') renderer.handleReveal(payload.hexes, game.state.position);
+    if (type === 'reveal') { renderer.handleReveal(payload.hexes, game.state.position); renderer.rebuildStasisLines(game); }
     if (type === 'move') renderer.handleMove(payload.from, payload.to);
     if (type === 'encounter') renderer.handleEncounterCleared(payload.hex);
+    if (type === 'colony') renderer.handleColonySpawn(payload.hex);
+    if (type === 'wither') renderer.handleWither(payload.hexes);
+    if (type === 'stasis') renderer.rebuildStasisLines(game);
     if (type === 'forced') {
       // Banner first; any dialog that follows waits forcedBannerMs.
       ui.showBanner(t('banner.forced', { label: payload.label }), CONFIG.anim.forcedBannerMs + 900);
@@ -166,22 +169,32 @@ function showDialog(d) {
     }
     const enemies = r.enemies.map((e) => t('log.battle.enemy', { name: tn(e.name), hp: e.maxHp, power: e.power })).join(', ');
     const intro = d.intro ? `<p>${escapeHtml(d.intro.text)}</p>` : '';
+    // Stasis debuffs that shaped this fight, listed under the summary.
+    const debuffs = (r.debuffs ?? []).length
+      ? `<div class="debuffs">${t('battle.debuffs')} ${r.debuffs.map((id) =>
+          escapeHtml(`${tc(`debuff.${id}.name`, CONFIG)} (${tc(`debuff.${id}.desc`, CONFIG)})`)).join(', ')}</div>`
+      : '';
+    // Victory reward: one power pick after a normal battle, several after a Colony.
+    const picks = r.reward ? (r.rewardPicks ?? 1) : 0;
+    const askPick = (left) => {
+      ui.chooseUnit({
+        title: t('battle.lessons.title'),
+        html: `<p>${t('battle.lessons.text', { n: r.reward })}${left > 1 ? ` ${t('battle.lessons.left', { n: left })}` : ''}</p>`,
+        filter: (u) => u.alive,
+        game,
+        onPick: (i) => { game.grantVictoryPower(i); if (left > 1) askPick(left - 1); else ui.closeDialog(); },
+        skip: { text: t('battle.lessons.skip', { n: r.reward * left }), onSkip: () => ui.closeDialog() },
+      });
+    };
     ui.openDialog({
-      title: d.intro ? d.intro.title : r.boss ? (r.title ? t('battle.boss.title', { title: tn(r.title) }) : t('battle.boss.untitled')) : t('battle.title'),
+      title: d.intro ? d.intro.title : r.stasis ? (r.title ? t('battle.stasis.title', { title: tn(r.title) }) : t('battle.stasis.untitled')) : t('battle.title'),
       html: `${intro}<div class="battle-sum ${r.won ? 'won' : 'lost'}">${t(r.won ? 'battle.victory' : 'battle.defeat', { n: r.rounds })} ${t(r.partyFirst ? 'battle.partyFirst' : 'battle.enemiesFirst')}</div>
-             <p class="muted">${escapeHtml(t('battle.enemies', { list: enemies }))}</p><div class="battle-lines">${lines.join('')}</div>`,
+             ${debuffs}<p class="muted">${escapeHtml(t('battle.enemies', { list: enemies }))}</p><div class="battle-lines">${lines.join('')}</div>`,
       actions: [{
-        label: r.reward ? t('dialog.continueReward', { n: r.reward }) : t('dialog.continue'),
+        label: picks ? t('dialog.continueReward', { n: r.reward * picks }) : t('dialog.continue'),
         onClick: () => {
-          if (!r.reward) { ui.closeDialog(); return; }
-          ui.chooseUnit({
-            title: t('battle.lessons.title'),
-            html: `<p>${t('battle.lessons.text', { n: r.reward })}</p>`,
-            filter: (u) => u.alive,
-            game,
-            onPick: (i) => { game.grantVictoryPower(i); ui.closeDialog(); },
-            skip: { text: t('battle.lessons.skip', { n: r.reward }), onSkip: () => ui.closeDialog() },
-          });
+          if (!picks) { ui.closeDialog(); return; }
+          askPick(picks);
         },
       }],
     });
