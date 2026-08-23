@@ -37,6 +37,14 @@ export function createTutorial({ config, ui, renderer }) {
   let onIdle = null;          // main.js hook: called whenever no card is waiting any more
 
   $('#btn-tutorial-ok').addEventListener('click', next);
+  // "Go" is only shown on choice cards (e.g. climbing a mountain): it runs the card's
+  // onGo instead of its onDone, then moves on.
+  $('#btn-tutorial-go').addEventListener('click', () => {
+    const go = state.current?.onGo;
+    if (state.current) state.current.onDone = null;
+    next();
+    if (go) go();
+  });
   $('#btn-tutorial-skip').addEventListener('click', () => finish('skipped'));
   // Clicking the world while a card waits flashes the card (same as encounter windows).
   blocker.addEventListener('pointerdown', () => { if (state.showing) flash(); });
@@ -144,10 +152,11 @@ export function createTutorial({ config, ui, renderer }) {
   function say(key, localeKey, params, opts) {
     sayRaw(key, tc(`${localeKey}.title`, config, params), tc(`${localeKey}.text`, config, params), opts);
   }
-  function sayRaw(key, title, html, { target = null, onShow = null, onDone = null } = {}) {
+  // choice: { go: label, stay: label, onGo } turns the card into a two-way question.
+  function sayRaw(key, title, html, { target = null, onShow = null, onDone = null, choice = null } = {}) {
     if (!state.active || state.seen.has(key)) return;
     state.seen.add(key);
-    state.queue.push({ title, html, target, onShow, onDone });
+    state.queue.push({ title, html, target, onShow, onDone, onGo: choice?.onGo ?? null, choice });
     if (!state.showing) next();
   }
   function next() {
@@ -170,6 +179,10 @@ export function createTutorial({ config, ui, renderer }) {
     setTarget(typeof item.target === 'function' ? item.target() : item.target);
     titleEl.textContent = item.title;
     bodyEl.innerHTML = item.html;
+    const goBtn = $('#btn-tutorial-go'), okBtn = $('#btn-tutorial-ok');
+    goBtn.classList.toggle('hidden', !item.choice);
+    goBtn.textContent = item.choice?.go ?? '';
+    okBtn.textContent = item.choice?.stay ?? t('npe.ok');
     card.classList.remove('hidden');
     updateBlocker();
   }
@@ -277,9 +290,27 @@ export function createTutorial({ config, ui, renderer }) {
 
   function setOnIdle(fn) { onIdle = fn; }
 
+  // Called by main.js before a move. Returns true when the guide takes over the click:
+  // the first step onto costly terrain (a mountain) gets a card with "climb" / "stay".
+  function interceptMove(hex, game) {
+    if (!state.active || state.showing) return false;
+    const tr = config.terrain[hex.terrain];
+    if (!tr || (!(tr.supplyCost > 0) && !(tr.hpCost > 0))) return false;
+    const key = `climb:${hex.terrain}`;
+    if (state.seen.has(key)) return false;
+    say(key, 'npe.climb', {
+      terrain: t(`terrain.${hex.terrain}`).toLowerCase(),
+      supplies: tr.supplyCost, hp: tr.hpCost, bonus: tr.revealBonus, height: tr.terrainHeight,
+    }, {
+      target: { tile: hex.key },
+      choice: { go: t('npe.climb.go'), stay: t('npe.climb.stay'), onGo: () => game.moveTo(hex) },
+    });
+    return true;
+  }
+
   // True while a card waits for "Got it" or a HUD piece is still gliding into place:
   // the world, the Enter button and the keyboard ignore input, the menu does not.
   function isBlocking() { return state.active && (state.showing || state.moving > 0); }
 
-  return { start, finish, onEvent, isActive: () => state.active, isBlocking, setOnIdle };
+  return { start, finish, onEvent, interceptMove, isActive: () => state.active, isBlocking, setOnIdle };
 }

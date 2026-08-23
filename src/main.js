@@ -237,6 +237,7 @@ renderer.onHexClick = (hex) => {
   if (ui.dialogOpen()) { ui.flashDialog(); return; }
   if (tutorial.isBlocking()) return;
   if (renderer.busy) return;
+  if (game.canMoveTo(hex) && tutorial.interceptMove(hex, game)) return;
   if (!game.moveTo(hex)) {
     if (game.state.status === 'playing' && hex !== game.state.position) {
       game.addLog(hex.passable ? 'log.tooFar' : 'log.impassable');

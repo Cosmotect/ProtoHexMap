@@ -123,8 +123,9 @@ prototyped separately (HEX-BOX, https://hex-box.pages.dev). This prototype only 
   run on a fixed map. The HUD starts empty; cards explain movement (step 1), the party
   (step 2, panel appears), fatigue (step 3, status bar appears), the first encounter tile,
   each encounter type on first entry (log appears), battle reports (legend appears), forced
-  encounters, camps; the first defeated boss ends the guide and reveals everything, and the
-  run continues normally. Cards sit at 25% of the screen width and height with a green
+  encounters, camps, and the first step onto costly terrain (a mountain): that card asks
+  "Climb / Stay here" before the move happens, pointing at the tile's top; the first defeated
+  boss ends the guide and reveals everything, and the run continues normally. Cards sit at 25% of the screen width and height with a green
   dashed line to what they talk about: a HUD element (green outline), the top of a tile
   (green hex ring), or an encounter's 3D shape (a flat green copy of the shape drawn
   slightly larger behind it). Targets flash together with the card. A final card appears

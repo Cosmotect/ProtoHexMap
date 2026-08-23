@@ -326,6 +326,10 @@ export const en = {
   'npe.rested.text': '<p>The party is healed and fatigue is back to zero. Camps are your main way to recover between fights, so budget supplies for them.</p>',
   'npe.boss.title': 'A boss has fallen',
   'npe.boss.text': '<p>That is the end of the guide. The whole interface is yours now: the menu in the top right has the seed, camera and map controls, and the legend in the bottom right explains every symbol.</p><p>There are {bossCount} bosses on this map. Defeat all of them to complete the run.</p>',
+  'npe.climb.title': 'Crossing {terrain}',
+  'npe.climb.text': '<p>This tile is {terrain}. Stepping onto it costs <b>{supplies} supplies</b> and <b>{hp} HP from every living unit</b>.</p><p>In return you see <b>{bonus} {bonus:tile|tiles}</b> further from the top, and the terrain itself is visible from <b>{height} {height:tile|tiles}</b> away. Supplies are also what pays for camps and shops, so weigh the climb against the view.</p>',
+  'npe.climb.go': 'Climb',
+  'npe.climb.stay': 'Stay here',
   'npe.dead.title': 'An inglorious end',
   'npe.dead.text': '<p>Every unit in the party is disabled. Nobody is left to carry anyone, and the journey ends here, in some unnamed corner of the worldflake.</p><p>Next time, rest before the fights get desperate, and keep an eye on the chevrons above a battle: more of them means stronger enemies.</p>',
 

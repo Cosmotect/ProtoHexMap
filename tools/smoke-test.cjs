@@ -244,6 +244,29 @@ fs.mkdirSync(OUT, { recursive: true });
   await page.click('#btn-settings-close'); await page.waitForTimeout(100);
   const unblurred = await page.evaluate(() => !document.getElementById('scene').classList.contains('blurred'));
   if (!unblurred) problems.push('blur stayed after closing settings');
+  // Climb card: first step onto a mountain asks first; "Stay" cancels, "Climb" moves.
+  await page.goto(URL.replace(/\?.*$/, '') + '?npe=1', { waitUntil: 'load', timeout: 60000 });
+  await page.waitForTimeout(1200);
+  await page.click('#btn-tutorial-ok'); await page.waitForTimeout(100);
+  {
+    const n = await page.evaluate(() => { const g = window.game; const h = g.reachable()[0]; const tr = g.config.terrain.mountain; Object.assign(h, { terrain: 'mountain', supplyCost: tr.supplyCost, hpCost: tr.hpCost, revealBonus: tr.revealBonus, terrainHeight: tr.terrainHeight }); window.__renderer.loadGame(g); return [h.q, h.r]; });
+    await page.waitForTimeout(400);
+    const p = await screenPos(n[0], n[1]);
+    await page.mouse.move(p.x, p.y); await page.waitForTimeout(60); await page.mouse.down(); await page.mouse.up();
+    await page.waitForTimeout(300);
+    const climb = await page.evaluate(() => ({ title: document.getElementById('tutorial-title').textContent, turn: window.game.state.turn, go: !document.getElementById('btn-tutorial-go').classList.contains('hidden'), ok: document.getElementById('btn-tutorial-ok').textContent, ring: window.__renderer.highlightRing.visible }));
+    if (!/Crossing/.test(climb.title) || climb.turn !== 0 || !climb.go || climb.ok !== 'Stay here' || !climb.ring) problems.push('climb card wrong: ' + JSON.stringify(climb));
+    await page.screenshot({ path: path.join(OUT, '11-climb-card.png') });
+    await page.click('#btn-tutorial-ok'); await page.waitForTimeout(200);
+    const stayed = await page.evaluate(() => window.game.state.turn);
+    if (stayed !== 0) problems.push('"Stay here" still moved the party');
+    // The card shows once: the next click moves without asking.
+    await page.mouse.move(p.x, p.y); await page.waitForTimeout(60); await page.mouse.down(); await page.mouse.up();
+    await page.waitForTimeout(600);
+    const moved = await page.evaluate(() => ({ turn: window.game.state.turn, supplies: window.game.state.supplies }));
+    if (moved.turn !== 1 || moved.supplies !== 50) problems.push('second click did not climb: ' + JSON.stringify(moved));
+    await dismissDialog();
+  }
   // Encounter card precedes a forced encounter: arriving on an encounter tile with the guide active holds the arrival.
   await page.goto(URL.replace(/\?.*$/, '') + '?npe=1', { waitUntil: 'load', timeout: 60000 });
   await page.waitForTimeout(1200);
