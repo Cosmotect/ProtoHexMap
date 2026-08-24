@@ -225,32 +225,46 @@ function showDialog(d) {
       }],
     });
   } else if (d.kind === 'shop') {
+    // The window is built from the shop's own stock (2 guaranteed + random picks).
+    // Sold-out options stay in the list, greyed out, so the player sees what was here.
+    const hex = game.state.position;
+    const stock = hex.shop ?? { options: [], bought: {} };
+    const unitOption = (id, filter) => () => ui.chooseUnit({
+      title: t(`shop.${id}.title`),
+      html: `<p>${t(`shop.${id}.text`, { n: CONFIG.shop.upgradeAmount, cost: game.shopCost(id), pct: `${Math.round(CONFIG.acolyte.reviveFraction * 100)}%` })}</p>`,
+      filter,
+      game,
+      onPick: (i) => { game.shopBuy(id, i); showDialog({ kind: 'shop' }); },
+      skip: { text: t('shop.pick.skip'), onSkip: () => showDialog({ kind: 'shop' }) },
+    });
+    const clickFor = {
+      upgrade: unitOption('upgrade', (u) => u.alive),
+      relic: unitOption('relic', (u) => u.alive),
+      spareParts: unitOption('spareParts', (u) => !u.alive),
+      rest: () => game.shopBuy('rest'),
+      map: () => game.shopBuy('map'),
+      rumors: () => game.shopBuy('rumors'),
+    };
+    const subParams = {
+      n: CONFIG.shop.upgradeAmount, tiles: CONFIG.events.blobSize,
+      pct: `${Math.round(CONFIG.rest.healFraction * 100)}%`, revivePct: `${Math.round(CONFIG.acolyte.reviveFraction * 100)}%`,
+      count: CONFIG.events.rumorsCount, r: CONFIG.events.rumorsRadius,
+    };
     const build = (g) => ({
       title: t('shop.title'),
       html: `${d.lore ? `<p class="flavour">${escapeHtml(t(d.lore))}</p>` : ''}<p>${t('shop.text', { supplies: g.state.supplies, fatigue: g.state.fatigue })}</p><span class="muted">${t('shop.note')}</span>`,
       actions: [
-        {
-          label: t('shop.rest', { cost: CONFIG.shop.restCost }), sub: t('shop.rest.sub'),
-          disabled: g.state.supplies < CONFIG.shop.restCost || g.state.fatigue === 0,
-          onClick: () => game.shopBuy('rest'),
-        },
-        {
-          label: t('shop.upgrade', { cost: CONFIG.shop.upgradeCost }), sub: t('shop.upgrade.sub', { n: CONFIG.shop.upgradeAmount }),
-          disabled: g.state.supplies < CONFIG.shop.upgradeCost,
-          onClick: () => ui.chooseUnit({
-            title: t('shop.upgrade.title'),
-            html: `<p>${t('shop.upgrade.text', { n: CONFIG.shop.upgradeAmount, cost: CONFIG.shop.upgradeCost })}</p>`,
-            filter: (u) => u.alive,
-            game,
-            onPick: (i) => { game.shopBuy('upgrade', i); showDialog({ kind: 'shop' }); },
-            skip: { text: t('shop.upgrade.skip'), onSkip: () => showDialog({ kind: 'shop' }) },
-          }),
-        },
-        {
-          label: t('shop.map', { cost: CONFIG.shop.mapCost }), sub: t('shop.map.sub', { n: CONFIG.events.blobSize }),
-          disabled: g.state.supplies < CONFIG.shop.mapCost,
-          onClick: () => game.shopBuy('map'),
-        },
+        ...stock.options.map((id) => {
+          const blocker = g.shopBlocker(hex, id);
+          const sold = blocker === 'sold';
+          return {
+            label: sold ? t('shop.option.sold', { label: t(`shop.${id}.name`) }) : t('shop.option', { label: t(`shop.${id}.name`), cost: g.shopCost(id) }),
+            sub: sold ? t('shop.sold.sub') : blocker === 'useless' ? t(`shop.${id}.useless`) : t(`shop.${id}.sub`, subParams),
+            disabled: !!blocker,
+            cls: sold ? 'sold' : '',
+            onClick: clickFor[id] ?? (() => {}),
+          };
+        }),
         { label: t('shop.leave'), onClick: () => ui.closeDialog() },
       ],
       onRefresh: (g2) => ui.openDialog(build(g2)),

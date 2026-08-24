@@ -10,12 +10,12 @@ export const ENCOUNTERS = {
   // "weights" decide which type it is.
   encounters: {
     density: 0.5,
-    minDistanceFromStart: 1,  // tiles this close to the start (centre) stay empty
+    minDistanceFromStart: 0,  // tiles this close to the start (centre) stay empty (0 = only the start tile itself)
     // (rest sites are no longer generated: the player builds them, see "rest" below)
     weights: {
       battle: 5,
       event: 2,
-      shop: 1,
+      shop: 0.75,
       treasure: 0.8,
       acolyte: 0.15,   // very rare as a random roll...
     },
@@ -74,11 +74,28 @@ export const ENCOUNTERS = {
   },
 
   // ----- Shop ---------------------------------------------------------
+  // Every shop stocks the "guaranteed" options plus "randomCount" options drawn (seeded,
+  // at map creation) from "pool". Each option can be bought ONCE per shop; sold-out
+  // options stay in the window greyed out. Once a shop has been entered, hovering its
+  // tile (from anywhere on the map) lists what it still sells.
+  // Option ids and what they do:
+  //   upgrade    +upgradeAmount power on a chosen unit ("Power")
+  //   map        reveals events.blobSize tiles nearby ("Information")
+  //   rest       exactly a player-built camp: heals rest.healFraction and resets fatigue
+  //   relic      for now identical to "upgrade": +upgradeAmount power on a chosen unit
+  //   rumors     reveals events.rumorsCount hidden battles within events.rumorsRadius
+  //   spareParts the Acolyte's service: one disabled unit returns at acolyte.reviveFraction HP
   shop: {
-    restCost: 15,             // resets fatigue
-    upgradeCost: 25,          // +1 power on a chosen unit
-    upgradeAmount: 1,
-    mapCost: 15,              // reveals a small section of the map (events.blobSize tiles)
+    guaranteed: ['upgrade', 'map'],
+    pool: ['rest', 'relic', 'rumors', 'spareParts'],
+    randomCount: 2,
+    upgradeCost: 25,
+    upgradeAmount: 1,         // shared by "upgrade" and "relic"
+    mapCost: 15,
+    restCost: 20,             // a camp costs rest.cost (20); same price by default
+    relicCost: 25,
+    rumorsCost: 15,
+    sparePartsCost: 30,
   },
 
   // ----- Treasure -----------------------------------------------------

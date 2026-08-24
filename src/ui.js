@@ -191,6 +191,18 @@ export function createUI(config, handlers) {
     else if (hex.hpCost > 0) cost = t('hover.costHp', { hp: hex.hpCost });
     const seen = hex.terrainHeight > 0 ? t('hover.seen', { n: hex.terrainHeight }) : '';
     els.hover.textContent = `${describeHex(hex)}${cost}${seen}${canGo ? t('hover.click') : ''}`;
+    // A shop the party has already entered lists what it still sells, from any distance.
+    if (hex.encounter === 'shop' && hex.shop?.seen) {
+      const items = hex.shop.options.map((id) => {
+        const sold = !!hex.shop.bought[id];
+        const text = sold ? t('hover.shop.sold', { label: t(`shop.${id}.name`) }) : t('hover.shop.item', { label: t(`shop.${id}.name`), cost: game.shopCost(id) });
+        return `<span class="${sold ? 'shop-sold' : ''}">${escapeHtml(text)}</span>`;
+      });
+      const line = document.createElement('div');
+      line.className = 'hover-shop';
+      line.innerHTML = `${escapeHtml(t('hover.shop.title'))} ${items.join(escapeHtml(t('hover.shop.sep')))}`;
+      els.hover.appendChild(line);
+    }
   }
 
   // Popup near the cursor, on every hovered tile: step count since the last fatigue reset,
@@ -251,6 +263,7 @@ export function createUI(config, handlers) {
       const b = document.createElement('button');
       b.innerHTML = `<b>${escapeHtml(a.label)}</b>${a.sub ? `<small>${escapeHtml(a.sub)}</small>` : ''}`;
       b.disabled = !!a.disabled;
+      if (a.cls) b.className = a.cls;
       b.addEventListener('click', () => a.onClick());
       els.dialogActions.appendChild(b);
     }

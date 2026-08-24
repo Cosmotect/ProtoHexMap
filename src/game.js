@@ -9,7 +9,7 @@ import { t, tn } from './i18n.js';
 
 // How many flavour (lore) lines each window can draw from. The lines themselves live
 // in the locale tables as flavour.<kind>.<n>; one is picked per window, seeded.
-const FLAVOUR_POOL = { battle: 4, treasure: 4, shop: 3, acolyte: 3, camp: 3 };
+const FLAVOUR_POOL = { battle: 4, treasure: 4, shop: 13, acolyte: 3, camp: 3 };
 
 
 export class Game {
@@ -70,6 +70,13 @@ export class Game {
     this.log = [];
     this.listeners = [];
     this.pendingArrival = null;   // set while the guide holds what happens on the tile just reached
+
+    // Shops: each one rolls its stock now (seeded), so a revealed and visited shop can
+    // show what it sells before the party walks back to it. Done last, so the rolls do
+    // not shift any of the map / enemy / Colony rolls above.
+    for (const h of this.map.hexes.values()) {
+      if (h.encounter === 'shop') h.shop = this.rollShopStock();
+    }
 
     this.map.start.visited = true;
     this.reveal(this.map.start.q, this.map.start.r, run.revealStartRadius, true);
@@ -410,6 +417,9 @@ export class Game {
       }
       case 'shop':
         // The shop stays on the tile and can be revisited. Buying happens via shopBuy().
+        // From the first visit on, the tile's hover text lists what the shop still sells.
+        if (!hex.shop) hex.shop = this.rollShopStock();
+        hex.shop.seen = true;
         this.emit('dialog', { kind: 'shop', lore: this.pickFlavour('shop') });
         this.emit('change');
         return true;
@@ -483,30 +493,88 @@ export class Game {
   }
 
   // ----- shop ---------------------------------------------------------
+  // A shop's stock: the guaranteed options first, then "randomCount" distinct picks
+  // from the pool (seeded). "bought" remembers what was sold, "seen" whether the party
+  // has entered this shop yet (the hover text lists the options only after that).
+  rollShopStock() {
+    const shop = this.config.shop;
+    const guaranteed = [...(shop.guaranteed ?? [])];
+    const pool = this.shuffle((shop.pool ?? []).filter((id) => !guaranteed.includes(id)));
+    const options = [...guaranteed, ...pool.slice(0, Math.max(0, shop.randomCount ?? 0))];
+    return { options, bought: {}, seen: false };
+  }
+
+  // Price of a shop option, read from config (shop.<id>Cost).
+  shopCost(id) {
+    return this.config.shop[`${id}Cost`] ?? 0;
+  }
+
+  // Can this option be bought right now? Returns null when yes, otherwise a reason id:
+  // 'sold' (already bought here), 'supplies' (too poor), 'useless' (nothing it can do,
+  // e.g. rest at 0 fatigue with a full party, or spare parts with nobody disabled).
+  shopBlocker(hex, id) {
+    const stock = hex?.shop;
+    if (!stock || !stock.options.includes(id)) return 'missing';
+    if (stock.bought[id]) return 'sold';
+    if (this.state.supplies < this.shopCost(id)) return 'supplies';
+    if (id === 'spareParts' && !this.deadUnits().length) return 'useless';
+    if (id === 'rest' && this.state.fatigue === 0 && this.livingUnits().every((u) => u.hp >= u.maxHp)) return 'useless';
+    if ((id === 'upgrade' || id === 'relic') && !this.livingUnits().length) return 'useless';
+    return null;
+  }
+
+  // Buys one option of the shop the party stands in. "unitIndex" is needed by the
+  // options that target a unit (upgrade, relic, spareParts). Each option sells once.
   shopBuy(item, unitIndex) {
     const s = this.state;
     const shop = this.config.shop;
-    if (s.position.encounter !== 'shop' || s.status !== 'playing') return false;
+    const hex = s.position;
+    if (hex.encounter !== 'shop' || s.status !== 'playing') return false;
+    const blocker = this.shopBlocker(hex, item);
+    if (blocker) {
+      if (blocker === 'sold') this.addLog('log.shop.sold', { label: { key: `shop.${item}.name` } });
+      else if (blocker === 'supplies') this.addLog('log.shop.noSupplies', { label: { key: `shop.${item}.name` } });
+      return false;
+    }
+    const cost = this.shopCost(item);
+    const cfg = this.config.events;
+
     if (item === 'rest') {
-      if (s.supplies < shop.restCost) { this.addLog('log.shop.noRest'); return false; }
-      s.supplies -= shop.restCost;
+      s.supplies -= cost;
+      this.addLog('log.shop.rested', { cost });
+      this.applyRest();
       this.resetFatigue();
-      this.addLog('log.shop.rested', { cost: shop.restCost });
     } else if (item === 'map') {
-      if (s.supplies < shop.mapCost) { this.addLog('log.shop.noMap'); return false; }
-      s.supplies -= shop.mapCost;
-      const n = this.revealBlob(this.config.events.blobSize, this.config.events.blobMaxDistance);
-      this.addLog('log.shop.map', { cost: shop.mapCost, n });
-    } else if (item === 'upgrade') {
+      s.supplies -= cost;
+      const n = this.revealBlob(cfg.blobSize, cfg.blobMaxDistance);
+      this.addLog('log.shop.map', { cost, n });
+    } else if (item === 'upgrade' || item === 'relic') {
       const u = s.party[unitIndex];
-      if (!u) return false;
-      if (s.supplies < shop.upgradeCost) { this.addLog('log.shop.noUpgrade'); return false; }
-      s.supplies -= shop.upgradeCost;
+      if (!u || !u.alive) return false;
+      s.supplies -= cost;
       u.power += shop.upgradeAmount;
-      this.addLog('log.shop.upgraded', { name: { name: u.name }, power: u.power, cost: shop.upgradeCost });
+      this.addLog(item === 'relic' ? 'log.shop.relic' : 'log.shop.upgraded', { name: { name: u.name }, power: u.power, cost });
+    } else if (item === 'rumors') {
+      s.supplies -= cost;
+      const hidden = [...this.map.hexes.values()].filter((h) => !h.revealed && h.encounter === 'battle');
+      const near = hidden.filter((h) => this.distanceFrom(h) <= cfg.rumorsRadius);
+      // Same rule as the "Rumors" event: nearby hidden battles first, the nearest anywhere otherwise.
+      const picked = near.length
+        ? this.shuffle(near).slice(0, cfg.rumorsCount)
+        : hidden.sort((a, b) => this.distanceFrom(a) - this.distanceFrom(b)).slice(0, cfg.rumorsCount);
+      this.revealHexes(picked);
+      this.addLog('log.shop.rumors', { cost, n: picked.length });
+    } else if (item === 'spareParts') {
+      const u = s.party[unitIndex];
+      if (!u || u.alive) return false;
+      s.supplies -= cost;
+      u.alive = true;
+      u.hp = Math.max(1, Math.round(u.maxHp * this.config.acolyte.reviveFraction));
+      this.addLog('log.shop.spareParts', { name: { name: u.name }, hp: u.hp, cost });
     } else {
       return false;
     }
+    hex.shop.bought[item] = true;
     this.emit('change');
     return true;
   }

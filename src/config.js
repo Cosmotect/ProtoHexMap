@@ -24,7 +24,7 @@ export const CONFIG = {
   // ----- Run rules ---------------------------------------------------
   run: {
     startGold: 50,
-    // Supplies are the currency: camps (20), shop rest (35), shop upgrades (25); treasure gives 40.
+    // Supplies are the currency: camps (rest.cost), shop options (shop.*Cost); treasure gives treasure.supplies.
     // This is also the maximum: gains never exceed it.
     startSupplies: 60,
     revealRadius: 0,          // how many rings around the player get uncovered (0 = only the tile you stand on)
