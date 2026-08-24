@@ -41,6 +41,9 @@ html, body {
   position: fixed;
   inset: 0;
   pointer-events: none; /* clicks go through to the map unless a panel catches them */
+  /* UI scale (Settings > General). --ui-scale is set on <html> by main.js; the
+     settings window undoes it (it is already near-fullscreen). */
+  zoom: var(--ui-scale, 1);
   font-size: 14px;
 }
 
@@ -354,7 +357,7 @@ button.small { padding: 2px 8px; font-size: 12px; }
 .modal-box h2 { margin: 0 0 10px; color: var(--accent); }
 
 /* Settings window */
-.settings { z-index: 55; }
+.settings { z-index: 55; zoom: var(--ui-scale-inv, 1); }
 .settings-box { width: min(4500px, 96vw); max-width: 96vw; max-height: 90vh; display: flex; flex-direction: column; }
 .settings-box .dialog-head h2 { margin: 0; }
 .settings-box .dialog-head .row { margin-top: 0; }

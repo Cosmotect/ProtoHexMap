@@ -97,6 +97,7 @@ hex-world-map/
     locales/en.js   every user-facing string, one flat table per language (English only for now)
     settings.js  the in-app settings window (config values editable at runtime, saved in the browser)
     map.js       map generation from a seed, guaranteed path to the Seed and Colony sites
+    noise.js     seeded multi-octave Perlin noise (elevation, ether holes, biomes)
     hex.js       hex grid maths (axial coordinates, neighbours, distance)
     rng.js       seeded random numbers (same seed = same map)
     render.js    the Three.js scene: tiles, fog, markers, player token, camera, mouse picking

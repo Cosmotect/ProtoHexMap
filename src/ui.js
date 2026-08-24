@@ -97,11 +97,16 @@ export function createUI(config, handlers) {
     if (!els.tip.classList.contains('hidden')) placeTip();
   });
   function placeTip() {
+    // The HUD is zoomed by --ui-scale, so viewport (mouse) coordinates are divided
+    // by the scale to land in the HUD's own units.
+    const z = uiScale();
     const pad = 16;
-    let x = mouse.x + pad, y = mouse.y + pad;
+    const mx = mouse.x / z, my = mouse.y / z;
+    const vw = window.innerWidth / z, vh = window.innerHeight / z;
+    let x = mx + pad, y = my + pad;
     const w = els.tip.offsetWidth, h = els.tip.offsetHeight;
-    if (x + w > window.innerWidth - 8) x = mouse.x - w - pad;
-    if (y + h > window.innerHeight - 8) y = mouse.y - h - pad;
+    if (x + w > vw - 8) x = mx - w - pad;
+    if (y + h > vh - 8) y = my - h - pad;
     els.tip.style.left = `${x}px`;
     els.tip.style.top = `${y}px`;
   }
@@ -111,11 +116,16 @@ export function createUI(config, handlers) {
   // Rebuilt whenever a setting changes, since the texts are generated from the config.
   function buildLegend() {
   const legendItems = [];
-  for (const [name, tr] of Object.entries(config.terrain)) {
+  for (const [name, tr] of Object.entries(config.tileTypes)) {
     const note = !tr.passable ? t('legend.blocked')
       : tr.supplyCost > 0 ? t('legend.cost', { supplies: tr.supplyCost, hp: tr.hpCost })
       : tr.hpCost > 0 ? t('legend.costHp', { hp: tr.hpCost }) : '';
     legendItems.push({ swatch: `<span class="swatch" style="background:${hex(tr.color)}"></span>`, label: `${terrainName(name)}${note}`, info: terrainInfo(name, tr) });
+  }
+  // Biomes: colour only - the swatch shows the pure biome colour that land tiles
+  // are shifted towards.
+  for (const [name, b] of Object.entries(config.biomes)) {
+    legendItems.push({ swatch: `<span class="swatch" style="background:${hex(b.color)}"></span>`, label: t(`biome.${name}`), info: t(`biome.${name}.info`) });
   }
   for (const [type, v] of Object.entries(config.encounters.visuals)) {
     legendItems.push({ swatch: `<span class="swatch marker" style="background:${hex(v.color)}"></span>`, label: encounterLabel(type), info: encounterInfo(type, config) });
@@ -350,6 +360,11 @@ function unitCard(u, config) {
 }
 
 // ----- small helpers -------------------------------------------------
+// Current UI scale (the --ui-scale variable applied to #hud). Shared with the guide.
+export function uiScale() {
+  const v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--ui-scale'));
+  return Number.isFinite(v) && v > 0 ? v : 1;
+}
 function hex(n) {
   return '#' + n.toString(16).padStart(6, '0');
 }

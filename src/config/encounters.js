@@ -9,7 +9,7 @@ export const ENCOUNTERS = {
   // "density" = chance that a normal passable tile holds an encounter.
   // "weights" decide which type it is.
   encounters: {
-    density: 0.33,
+    density: 0.5,
     minDistanceFromStart: 1,  // tiles this close to the start (centre) stay empty
     // (rest sites are no longer generated: the player builds them, see "rest" below)
     weights: {
@@ -52,7 +52,7 @@ export const ENCOUNTERS = {
     colonyCount: 4,
     minSpacing: 5,            // min distance between Colony sites and from the Seed (their only placement rule)
     lineSpeed: 0.5,           // tiles per player turn each line grows
-    witherEvery: 1.5,         // turns per withered tile, per active source
+    witherEvery: 2,           // turns per withered tile, per active source
     rewardPicks: 2,           // power raises granted for clearing a Colony
     // The debuff pool. Each Colony rolls one id; values are read by the battle code.
     debuffs: {
@@ -75,7 +75,7 @@ export const ENCOUNTERS = {
 
   // ----- Shop ---------------------------------------------------------
   shop: {
-    restCost: 35,             // resets fatigue
+    restCost: 15,             // resets fatigue
     upgradeCost: 25,          // +1 power on a chosen unit
     upgradeAmount: 1,
     mapCost: 15,              // reveals a small section of the map (events.blobSize tiles)

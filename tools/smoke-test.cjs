@@ -147,9 +147,9 @@ fs.mkdirSync(OUT, { recursive: true });
     for (let i = 0; i < need; i++) g.advanceStasis();
     if (!first.active || first.hex.encounter !== 'stasisColony') out.push(`colony did not spawn after ${need} turns`);
     if (!first.hex.enemies || !first.hex.enemies.length) out.push('spawned colony has no enemies');
-    const withered = [...g.map.hexes.values()].filter((h) => h.terrain === 'wither');
+    const withered = [...g.map.hexes.values()].filter((h) => h.type === 'wither');
     if (!withered.length) out.push(`no wither tiles after ${need} turns`);
-    if (withered.some((h) => h.hpCost !== g.config.terrain.wither.hpCost)) out.push('wither tiles did not take the config hpCost');
+    if (withered.some((h) => h.hpCost !== g.config.tileTypes.wither.hpCost)) out.push('wither tiles did not take the config hpCost');
     // Active colonies push their debuff onto the seed fight.
     const debuffs = g.activeDebuffsFor(g.map.seed);
     const active = st.colonies.filter((c) => c.active && !c.cleared).length;
@@ -295,7 +295,7 @@ fs.mkdirSync(OUT, { recursive: true });
   await page.waitForTimeout(1200);
   await page.click('#btn-tutorial-ok'); await page.waitForTimeout(100);
   {
-    const n = await page.evaluate(() => { const g = window.game; const h = g.reachable()[0]; const tr = g.config.terrain.mountain; Object.assign(h, { terrain: 'mountain', supplyCost: tr.supplyCost, hpCost: tr.hpCost, revealBonus: tr.revealBonus, terrainHeight: tr.terrainHeight }); window.__renderer.loadGame(g); return [h.q, h.r]; });
+    const n = await page.evaluate(() => { const g = window.game; const h = g.reachable()[0]; const tr = g.config.tileTypes.mountain; Object.assign(h, { type: 'mountain', supplyCost: tr.supplyCost, hpCost: tr.hpCost, revealBonus: tr.revealBonus, terrainHeight: tr.terrainHeight }); window.__renderer.loadGame(g); return [h.q, h.r]; });
     await page.waitForTimeout(400);
     const p = await screenPos(n[0], n[1]);
     await page.mouse.move(p.x, p.y); await page.waitForTimeout(60); await page.mouse.down(); await page.mouse.up();

@@ -1,7 +1,7 @@
 // Game rules and state. Pure data + logic, no rendering.
 // The renderer and the HUD subscribe to "events" and redraw themselves.
 import { createRng } from './rng.js';
-import { generateMap, setTerrain } from './map.js';
+import { generateMap, setType } from './map.js';
 import { hexKey, neighbors, hexesInRange, hexDistance } from './hex.js';
 import { simulateBattle, makeEnemies, makeRegulars, renameDuplicates } from './battle.js';
 import { EVENTS, LORE_IDS } from './events.js';
@@ -190,11 +190,22 @@ export class Game {
   livingUnits() { return this.state.party.filter((u) => u.alive); }
 
   // Danger rank of a battle tile: floor((enemy power - living party power) / 2), never
-  // below 0. Shown as chevrons above the marker.
+  // below 0. Shown as chevrons above the marker. On Stasis tiles the active debuffs
+  // are counted in when they change either side's total power (party power loss,
+  // extra enemies); the max-HP debuff does not move power, so it is not shown here.
   dangerRank(hex) {
     if (!hex.enemies) return 0;
-    const enemy = hex.enemies.reduce((a, e) => a + e.power, 0);
-    const party = this.livingUnits().reduce((a, u) => a + u.power, 0);
+    const living = this.livingUnits();
+    let enemy = hex.enemies.reduce((a, e) => a + e.power, 0);
+    let party = living.reduce((a, u) => a + u.power, 0);
+    const cfgDebuffs = this.config.stasis.debuffs;
+    for (const id of this.activeDebuffsFor(hex)) {
+      if (id === 'power') party -= cfgDebuffs.power.amount * living.length;
+      else if (id === 'extraEnemies') {
+        const extraPower = Math.round(lerpTable(this.config.battle.enemies.powerByRing, hex.ring));
+        enemy += cfgDebuffs.extraEnemies.count * extraPower;
+      }
+    }
     return Math.max(0, Math.floor((enemy - party) / 2));
   }
   deadUnits() { return this.state.party.filter((u) => !u.alive); }
@@ -225,7 +236,7 @@ export class Game {
     const costs = [];
     if (hex.supplyCost > 0) costs.push(t('log.cost.supplies', { n: hex.supplyCost }));
     if (hex.hpCost > 0) costs.push(t('log.cost.hp', { n: hex.hpCost }));
-    this.addLog('log.moved', { turn: s.turn, where: { hex: { terrain: hex.terrain, q: hex.q, r: hex.r, encounter: hex.encounter } }, fatigue: s.fatigue });
+    this.addLog('log.moved', { turn: s.turn, where: { hex: { type: hex.type, biome: hex.biome, q: hex.q, r: hex.r, encounter: hex.encounter } }, fatigue: s.fatigue });
     if (costs.length) this.addLog('log.moved.costs', { costs: costs.join(', ') });
     if (hex.hpCost > 0) this.damageParty(hex.hpCost, 'log.climb');
     if (!this.livingUnits().length) {
@@ -302,7 +313,7 @@ export class Game {
     c.hex.encounter = 'stasisColony';
     c.hex.enemies = makeEnemies(this.rng, this.config.battle, c.hex.ring, true, lerpTable);
     this.addLog('log.colonySpawn', {
-      where: { hex: { terrain: c.hex.terrain, q: c.hex.q, r: c.hex.r } },
+      where: { hex: { type: c.hex.type, biome: c.hex.biome, q: c.hex.q, r: c.hex.r } },
       debuff: { key: `debuff.${c.debuff}.name` },
     });
     this.emit('colony', { hex: c.hex });
@@ -317,7 +328,7 @@ export class Game {
     let bestD = Infinity;
     const all = [];
     for (const h of this.map.hexes.values()) {
-      if (h.terrain === 'wither' || h.isSeed || h.isColony) continue;
+      if (h.type === 'wither' || h.isSeed || h.isColony) continue;
       const d = hexDistance(src.q, src.r, h.q, h.r);
       all.push([h, d]);
       if (d < bestD) bestD = d;
@@ -325,7 +336,7 @@ export class Game {
     if (!all.length) return null;
     const front = all.filter(([, d]) => d <= bestD + 1).map(([h]) => h);
     const h = this.rng.pick(front);
-    setTerrain(h, 'wither', this.config);
+    setType(h, 'wither', this.config);
     if (h.encounter) {
       const type = h.encounter;
       h.encounter = null;
@@ -562,6 +573,13 @@ export class Game {
       result.rewardPicks = hex.isColony ? this.config.stasis.rewardPicks : 1;
     }
     if (result.won) result.lore = this.pickFlavour('battle');
+    // Winners salvage supplies from the field (battle and Stasis fights alike).
+    if (result.won && (this.config.battle.victorySupplies ?? 0) > 0) {
+      const n = this.config.battle.victorySupplies;
+      result.supplies = this.addSupplies(n);
+      result.suppliesFull = n;
+      this.addLog('log.victorySupplies', { got: result.supplies, n });
+    }
 
     if (!opts.alreadyConsumed) this.consume(hex, hex.encounter, forced);
     else this.resetFatigue();
@@ -641,7 +659,7 @@ export class Game {
       case 'vantage': {
         const list = hidden((h) =>
           this.distanceFrom(h) <= cfg.vantageRadius ||
-          (h.terrain === 'mountain' && this.distanceFrom(h) <= cfg.vantageMountainRadius));
+          (h.type === 'mountain' && this.distanceFrom(h) <= cfg.vantageMountainRadius));
         this.revealHexes(list);
         effect = t('effect.vantage', { r: cfg.vantageRadius, m: cfg.vantageMountainRadius, n: list.length });
         break;
@@ -843,7 +861,7 @@ export class Game {
   // visible from further away).
   reveal(q, r, radius, silent) {
     const newly = [];
-    const maxH = Math.max(0, ...Object.values(this.config.terrain).map((t) => t.terrainHeight ?? 0));
+    const maxH = Math.max(0, ...Object.values(this.config.tileTypes).map((t) => t.terrainHeight ?? 0));
     for (const [hq, hr] of hexesInRange(q, r, radius + maxH)) {
       const h = this.hexAt(hq, hr);
       if (!h || h.revealed) continue;
@@ -894,5 +912,8 @@ function round1(n) {
 
 export function describeHex(hex) {
   const enc = hex.encounter ? t('hover.encounterSuffix', { label: t(`visual.${hex.encounter}.label`) }) : '';
-  return `${t(`terrain.${hex.terrain}`)} (${hex.q},${hex.r})${enc}`;
+  // Land types read as "Grasslands Ground"; water / ether / wither ignore the biome.
+  const tinted = hex.type === 'ground' || hex.type === 'hill' || hex.type === 'mountain';
+  const name = tinted ? t('hover.tile', { biome: t(`biome.${hex.biome}`), type: t(`terrain.${hex.type}`) }) : t(`terrain.${hex.type}`);
+  return `${name} (${hex.q},${hex.r})${enc}`;
 }

@@ -31,6 +31,7 @@ export const UNITS = {
     // raised to this exponent (0 = pick uniformly at random).
     healthyTargetBias: 2,
     victoryPower: 1,          // power awarded to a chosen unit after winning a battle
+    victorySupplies: 5,       // supplies salvaged after winning any battle (incl. Stasis)
     maxRounds: 100,           // safety cap for the simulation loop
     // Regular enemy groups. Power scales with the ring (distance from the centre),
     // using the same "table with interpolation" rule as fatigue.

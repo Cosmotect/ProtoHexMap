@@ -1,15 +1,21 @@
 // Map generation. Produces plain data (no Three.js here) so the rules can be
 // tested and reasoned about without a screen.
+//
+// Terrain model: every tile has a TYPE (ether / water / ground / hill / mountain,
+// all the gameplay numbers, from config.tileTypes) and a BIOME (colour only, from
+// config.biomes). Types come from a multi-octave Perlin elevation field, then a
+// second noise field pokes ether holes, then a third distributes the biomes.
 import { hexKey, neighbors, hexesInRange, axialToPlane, hexDistance } from './hex.js';
+import { createNoise } from './noise.js';
 
 /**
  * Builds a hexagon shaped hex map (a centre tile plus `radius` rings) from the config
  * using the seeded rng. The player starts on the centre tile. One outer-ring tile
- * holds the Stasis Seed; four more tiles (config.stasis) are marked as future
+ * holds the Stasis Seed; more tiles (config.stasis) are marked as future
  * Stasis Colony sites - the Colonies themselves spawn during play, when the
  * stasis lines reach them (see game.js).
  * Returns { hexes: Map<key, hex>, start, seed, colonies, shortestPath, bounds }.
- * Each hex: { q, r, ring, key, terrain, passable, supplyCost, encounter,
+ * Each hex: { q, r, ring, key, type, biome, passable, supplyCost, encounter,
  *             revealed, visited, x, y }   (x, y = 2D plane position)
  */
 export function generateMap(config, rng) {
@@ -41,18 +47,17 @@ export function generateMap(config, rng) {
 
 function buildLayout(config, rng, radius, orientation, hexSize) {
   const hexes = new Map();
-  // Start = the centre of the hexagon. The Seed = a random tile on the outer rings
-  // (ring >= seedMinRing). Colony sites = random tiles kept at least minSpacing
-  // apart from each other and from the Seed, and away from the start.
   const startQ = 0, startR = 0;
+
+  // ----- Stasis placement (see config.stasis) -------------------------------
+  // The Seed sits on the outer rings; Colony sites may sit anywhere - their only
+  // placement rule is minSpacing from each other and from the Seed. The start tile
+  // itself is excluded because the player stands there.
   const st = config.stasis;
   const minRing = st.seedMinRing === 'half' ? Math.floor(radius / 2) : (st.seedMinRing ?? radius);
   const seedCandidates = hexesInRange(0, 0, radius).filter(([q, r]) => hexDistance(q, r, 0, 0) >= minRing);
   const seedSpot = rng.pick(seedCandidates);
 
-  // Colony sites may sit anywhere (even next to the start) - their only placement
-  // rule is minSpacing from each other and from the Seed. The start tile itself is
-  // excluded because the player stands there.
   const specialKeys = new Set([hexKey(seedSpot[0], seedSpot[1]), hexKey(startQ, startR)]);
   const colonySpots = [];
   const colonyCandidates = hexesInRange(0, 0, radius);
@@ -68,27 +73,56 @@ function buildLayout(config, rng, radius, orientation, hexSize) {
   const seedKey = hexKey(seedSpot[0], seedSpot[1]);
   const colonyKeys = new Set(colonySpots.map(([q, r]) => hexKey(q, r)));
 
-  for (const [q, r] of hexesInRange(0, 0, radius)) {
+  // ----- Noise fields ---------------------------------------------------------
+  // One sampler, three independent fields (each gets a random offset so they do
+  // not correlate). Sampled in plane coordinates so frequency is per world unit.
+  // Raw multi-octave noise bunches up around the middle, so each field is
+  // rank-normalised across the map: the config levels then read as shares of the
+  // map instead of raw noise values that the field may never reach.
+  const noise = createNoise(rng);
+  const n = config.noise;
+  const off = () => rng.random() * 4096;
+  const fields = {
+    elevation: { ...n.elevation, offsetX: off(), offsetY: off() },
+    ether: { ...n.ether, offsetX: off(), offsetY: off() },
+    biome: { ...n.biome, offsetX: off(), offsetY: off() },
+  };
+  const biomeNames = Object.keys(config.biomes);
+
+  const coords = hexesInRange(0, 0, radius).map(([q, r]) => ({ q, r, plane: axialToPlane(q, r, hexSize, orientation) }));
+  const ranked = (field) => {
+    const raw = coords.map((c) => noise.fbm(c.plane.x, c.plane.y, field));
+    const order = raw.map((v, i) => [v, i]).sort((a, b) => a[0] - b[0]);
+    const out = new Array(raw.length);
+    order.forEach(([, i], rank) => { out[i] = order.length > 1 ? rank / (order.length - 1) : 0.5; });
+    return out;
+  };
+  const elevation = ranked(fields.elevation);
+  const etherField = ranked(fields.ether);
+  const biomeField = ranked(fields.biome);
+
+  coords.forEach((c, i) => {
+    const { q, r, plane } = c;
     const isStart = q === startQ && r === startR;
     const key = hexKey(q, r);
     const isSeed = key === seedKey;
     const isColony = colonyKeys.has(key);
 
-    let terrain = rng.weighted(terrainWeights(config));
-    if (isStart || isSeed || isColony) terrain = 'grass';
+    // Holes first: the top slice of the ether field wins over elevation.
+    let type;
+    if (etherField[i] > n.etherLevel) type = 'ether';
+    else if (elevation[i] < n.waterLevel) type = 'water';
+    else if (elevation[i] >= n.mountainLevel) type = 'mountain';
+    else if (elevation[i] >= n.hillLevel) type = 'hill';
+    else type = 'ground';
+    if (isStart || isSeed || isColony) type = 'ground';
 
-    const t = config.terrain[terrain];
-    const plane = axialToPlane(q, r, hexSize, orientation);
+    const biomeIdx = Math.min(biomeNames.length - 1, Math.floor(biomeField[i] * biomeNames.length));
     const hex = {
       q, r,
       ring: hexDistance(q, r, 0, 0),   // 0 = centre, radius = outer edge
       key,
-      terrain,
-      passable: t.passable,
-      supplyCost: t.supplyCost,
-      hpCost: t.hpCost ?? 0,
-      revealBonus: t.revealBonus ?? 0,
-      terrainHeight: t.terrainHeight ?? 0,
+      biome: biomeNames[biomeIdx],
       encounter: isSeed ? 'stasisSeed' : null,   // Colonies spawn later, during play
       isStart,
       isSeed,
@@ -98,8 +132,9 @@ function buildLayout(config, rng, radius, orientation, hexSize) {
       x: plane.x,
       y: plane.y,
     };
+    applyType(hex, type, config);
     hexes.set(hex.key, hex);
-  }
+  });
 
   const start = hexes.get(hexKey(startQ, startR));
   const seed = hexes.get(seedKey);
@@ -107,8 +142,8 @@ function buildLayout(config, rng, radius, orientation, hexSize) {
 
   // Keep the first ring around the start walkable so the run never starts boxed in.
   for (const [nq, nr] of neighbors(start.q, start.r)) {
-    const n = hexes.get(hexKey(nq, nr));
-    if (n && (!n.passable || n.supplyCost > 0)) setTerrain(n, 'grass', config);
+    const nb = hexes.get(hexKey(nq, nr));
+    if (nb && (!nb.passable || nb.supplyCost > 0)) setType(nb, 'ground', config);
   }
 
   // Centre the map on the origin.
@@ -135,22 +170,20 @@ function buildLayout(config, rng, radius, orientation, hexSize) {
   };
 }
 
-function terrainWeights(config) {
-  const weights = {};
-  for (const [name, t] of Object.entries(config.terrain)) weights[name] = t.weight;
-  return weights;
-}
-
-// Rewrites a hex's terrain fields from the config (also used by game.js when the
-// Stasis withers a tile).
-export function setTerrain(hex, terrain, config) {
-  const t = config.terrain[terrain];
-  hex.terrain = terrain;
+function applyType(hex, type, config) {
+  const t = config.tileTypes[type];
+  hex.type = type;
   hex.passable = t.passable;
   hex.supplyCost = t.supplyCost;
   hex.hpCost = t.hpCost ?? 0;
   hex.revealBonus = t.revealBonus ?? 0;
   hex.terrainHeight = t.terrainHeight ?? 0;
+}
+
+// Rewrites a hex's tile type (the biome stays). Also used by game.js when the
+// Stasis withers a tile.
+export function setType(hex, type, config) {
+  applyType(hex, type, config);
 }
 
 // Breadth-first search over passable tiles that cost no supplies (mountains are
@@ -181,7 +214,7 @@ export function shortestPath(hexes, start, goal) {
 
 function carveCorridor(result, config, goal) {
   // Walk from the start towards the goal, always stepping to the neighbour that
-  // reduces the distance, turning everything on the way into grass.
+  // reduces the distance, turning everything on the way into plain ground.
   let cur = result.start;
   let guard = 0;
   while (cur !== goal && guard++ < 500) {
@@ -194,7 +227,7 @@ function carveCorridor(result, config, goal) {
       if (d < bestDist) { bestDist = d; best = n; }
     }
     if (!best) break;
-    if (!best.passable || best.supplyCost > 0) setTerrain(best, 'grass', config);
+    if (!best.passable || best.supplyCost > 0) setType(best, 'ground', config);
     cur = best;
   }
 }

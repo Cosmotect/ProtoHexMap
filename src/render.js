@@ -466,14 +466,21 @@ export class MapRenderer {
     if (hex.isStart) color = new THREE.Color(c.startTile);
     else if (hex.isSeed) color = new THREE.Color(c.seedTile);
     else if (hex.encounter === 'stasisColony') color = new THREE.Color(c.colonyTile);
-    else color = new THREE.Color(this.config.terrain[hex.terrain].color);
+    else {
+      // Tile colour = type colour shifted towards the biome colour (a lerp, never a
+      // multiplication, so biomes brighten as easily as they darken).
+      const type = this.config.tileTypes[hex.type];
+      color = new THREE.Color(type.color);
+      const biome = this.config.biomes[hex.biome];
+      if (type.biomeTint && biome) color.lerp(new THREE.Color(biome.color), c.biomeTintAmount ?? 0.45);
+    }
     if (hex.visited && !hex.isStart && this.game.state.position !== hex) color.multiplyScalar(c.visitedTint);
     return color;
   }
 
   applyRevealed(record, animate, delayMs = 0) {
     const hex = record.hex;
-    const targetH = this.config.terrain[hex.terrain].height;
+    const targetH = this.config.tileTypes[hex.type].height;
     const targetColor = this.targetColorFor(hex);
     const mesh = record.mesh;
     const fromH = record.height;
@@ -638,7 +645,7 @@ export class MapRenderer {
   handleMove(from, to) {
     const start = this.playerWorld(from);
     const endRec = this.tiles.get(to.key);
-    const endH = endRec ? this.config.terrain[to.terrain].height : 0.35;
+    const endH = endRec ? this.config.tileTypes[to.type].height : 0.35;
     const end = new THREE.Vector3(to.x, endH, -to.y);
     this.busy = true;
     this.setHoverTile(null);

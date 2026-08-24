@@ -13,6 +13,23 @@ import { tc } from './text.js';
 initLanguage();
 applyStaticTexts();
 
+// ----- UI scale (Settings > General) --------------------------------------
+// A browser preference like the language: stored in localStorage, applied as a
+// CSS variable that zooms the HUD (#hud in style.css). The inverse variable lets
+// the near-fullscreen settings window opt out.
+const UI_SCALE_KEY = 'hexmap-ui-scale';
+function applyUiScale(v) {
+  const scale = Math.min(2, Math.max(0.5, Number(v) || 1));
+  document.documentElement.style.setProperty('--ui-scale', String(scale));
+  document.documentElement.style.setProperty('--ui-scale-inv', String(1 / scale));
+  try { localStorage.setItem(UI_SCALE_KEY, String(scale)); } catch { /* private mode etc. */ }
+  return scale;
+}
+function loadUiScale() {
+  try { return Number(localStorage.getItem(UI_SCALE_KEY)) || 1; } catch { return 1; }
+}
+applyUiScale(loadUiScale());
+
 const container = document.getElementById('scene');
 
 // URL switches, handy for comparing variants without editing config.js:
@@ -33,6 +50,8 @@ const settings = createSettings({
   defaults: DEFAULTS,
   onToggleCamera: () => renderer.toggleCameraMode(),
   getCameraMode: () => renderer.cameraMode,
+  getUiScale: loadUiScale,
+  onSetUiScale: (v) => applyUiScale(v),
   onChange: () => { ui.buildLegend(); if (game) ui.update(game); },
   onClose: () => ui.updateBlur(),
 });
@@ -189,10 +208,13 @@ function showDialog(d) {
       });
     };
     const flavour = r.won && r.lore ? `<p class="flavour">${escapeHtml(t(r.lore))}</p>` : '';
+    const salvage = r.won && r.supplies
+      ? `<div class="effect">${escapeHtml(r.supplies < r.suppliesFull ? t('battle.supplies.partial', { got: r.supplies, n: r.suppliesFull }) : t('battle.supplies', { n: r.supplies }))}</div>`
+      : '';
     ui.openDialog({
       title: d.intro ? d.intro.title : r.stasis ? (r.title ? t('battle.stasis.title', { title: tn(r.title) }) : t('battle.stasis.untitled')) : t('battle.title'),
       html: `${intro}<div class="battle-sum ${r.won ? 'won' : 'lost'}">${t(r.won ? 'battle.victory' : 'battle.defeat', { n: r.rounds })} ${t(r.partyFirst ? 'battle.partyFirst' : 'battle.enemiesFirst')}</div>
-             ${debuffs}${flavour}<p class="muted">${escapeHtml(t('battle.enemies', { list: enemies }))}</p><div class="battle-lines">${lines.join('')}</div>`,
+             ${debuffs}${flavour}${salvage}<p class="muted">${escapeHtml(t('battle.enemies', { list: enemies }))}</p><div class="battle-lines">${lines.join('')}</div>`,
       actions: [{
         label: picks ? t('dialog.continueReward', { n: r.reward * picks }) : t('dialog.continue'),
         onClick: () => {

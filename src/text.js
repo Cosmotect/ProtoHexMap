@@ -13,7 +13,7 @@ export function placeholders(config) {
   return {
     colonyCount: c.stasis.colonyCount,
     rewardPicks: c.stasis.rewardPicks,
-    witherHp: c.terrain.wither?.hpCost ?? 0,
+    witherHp: c.tileTypes.wither?.hpCost ?? 0,
     witherEvery: c.stasis.witherEvery,
     debuffMaxHpPct: pct(c.stasis.debuffs.maxHp.fraction),
     debuffPower: c.stasis.debuffs.power.amount,
@@ -64,15 +64,15 @@ export function terrainInfo(name, tr) {
   return parts.join(' ');
 }
 
-// "mountains from 2 tiles, hills from 1 tile": the terrains that can be seen from afar,
-// in a fixed reading order (mountain, hills, water, then anything else).
+// "mountains from 2 tiles, hills from 1 tile": the tile types that can be seen from
+// afar, in a fixed reading order (mountain, hill, water, then anything else).
 export function tallTerrainSentence(config) {
-  const order = ['mountain', 'hills', 'water'];
-  const names = Object.keys(config.terrain);
+  const order = ['mountain', 'hill', 'water'];
+  const names = Object.keys(config.tileTypes);
   const sorted = [...order.filter((n) => names.includes(n)), ...names.filter((n) => !order.includes(n))];
-  const tall = sorted.filter((n) => (config.terrain[n].terrainHeight ?? 0) > 0);
+  const tall = sorted.filter((n) => (config.tileTypes[n].terrainHeight ?? 0) > 0);
   if (!tall.length) return '';
-  const bits = tall.map((n) => t('terrain.tall.item', { name: t(`terrain.plural.${n}`), n: config.terrain[n].terrainHeight }));
+  const bits = tall.map((n) => t('terrain.tall.item', { name: t(`terrain.plural.${n}`), n: config.tileTypes[n].terrainHeight }));
   return t('terrain.tall', { list: bits.join(', ') });
 }
 

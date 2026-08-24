@@ -8,6 +8,7 @@
 
 import { tc, tallTerrainSentence, firstRiskyStep, encounterLabel, encounterInfo } from './text.js';
 import { t, joinList } from './i18n.js';
+import { uiScale } from './ui.js';
 
 export const NPE_SEED = 6;   // fixed seed: every new player sees the same map (chosen for a battle, event, treasure and shop close to the start)
 
@@ -87,8 +88,9 @@ export function createTutorial({ config, ui, renderer }) {
     if (!el || !el.classList.contains('npe-hidden')) return;
     el.classList.remove('npe-hidden');
     const r = el.getBoundingClientRect();
-    const dx = window.innerWidth / 2 - (r.left + r.width / 2);
-    const dy = window.innerHeight / 2 - (r.top + r.height / 2);
+    const z = uiScale();   // translate lengths are in the zoomed HUD's units
+    const dx = (window.innerWidth / 2 - (r.left + r.width / 2)) / z;
+    const dy = (window.innerHeight / 2 - (r.top + r.height / 2)) / z;
     el.style.translate = `${dx}px ${dy}px`;
     el.style.scale = '2';
     void el.offsetWidth; // commit the start position before the transition begins
@@ -124,7 +126,10 @@ export function createTutorial({ config, ui, renderer }) {
     }
     if (!end) { lines.innerHTML = ''; return; }
     const start = edgePoint(a, end.x, end.y);
-    lines.innerHTML = `<line x1="${start.x}" y1="${start.y}" x2="${end.x}" y2="${end.y}"></line><circle cx="${end.x}" cy="${end.y}" r="4"></circle>`;
+    // getBoundingClientRect and the 3D projections give viewport coordinates; the
+    // svg lives inside the zoomed HUD, so divide by the UI scale.
+    const z = uiScale();
+    lines.innerHTML = `<line x1="${start.x / z}" y1="${start.y / z}" x2="${end.x / z}" y2="${end.y / z}"></line><circle cx="${end.x / z}" cy="${end.y / z}" r="4"></circle>`;
   }
   // Where a line from the rectangle's centre towards (tx, ty) leaves the rectangle.
   function edgePoint(r, tx, ty) {
@@ -294,12 +299,12 @@ export function createTutorial({ config, ui, renderer }) {
   // the first step onto costly terrain (a mountain) gets a card with "climb" / "stay".
   function interceptMove(hex, game) {
     if (!state.active || state.showing) return false;
-    const tr = config.terrain[hex.terrain];
+    const tr = config.tileTypes[hex.type];
     if (!tr || (!(tr.supplyCost > 0) && !(tr.hpCost > 0))) return false;
-    const key = `climb:${hex.terrain}`;
+    const key = `climb:${hex.type}`;
     if (state.seen.has(key)) return false;
     say(key, 'npe.climb', {
-      terrain: t(`terrain.${hex.terrain}`).toLowerCase(),
+      terrain: t(`terrain.${hex.type}`).toLowerCase(),
       supplies: tr.supplyCost, hp: tr.hpCost, bonus: tr.revealBonus, height: tr.terrainHeight,
     }, {
       target: { tile: hex.key },

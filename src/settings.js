@@ -14,7 +14,7 @@ const STORAGE_KEY = 'hexmap-settings-v1';
 // Which config sections live on which tab (mirrors the config files). Labels and
 // notes come from the locale tables (settings.tab.<id>, settings.note.<id>).
 const TABS = [
-  { id: 'world', sections: ['map', 'terrain'] },
+  { id: 'world', sections: ['map', 'noise', 'tileTypes', 'biomes'] },
   { id: 'encounters', sections: ['encounters', 'stasis', 'rest', 'acolyte', 'shop', 'treasure', 'events', 'fatigue'] },
   { id: 'units', sections: ['party', 'battle'] },
   { id: 'general', sections: ['run', 'camera', 'anim', 'colors'] },
@@ -23,7 +23,7 @@ const TABS = [
 // Keys that are not meant to be edited by hand (visual placeholders, long texts).
 const SKIP_KEYS = new Set(['shape', 'info', 'flavour', 'names', 'icon']);
 
-export function createSettings({ config, defaults, onChange, onToggleCamera, getCameraMode, onClose }) {
+export function createSettings({ config, defaults, onChange, onToggleCamera, getCameraMode, getUiScale, onSetUiScale, onClose }) {
   const $ = (id) => document.getElementById(id);
   const win = $('settings');
   const tabsEl = $('settings-tabs');
@@ -64,6 +64,13 @@ export function createSettings({ config, defaults, onChange, onToggleCamera, get
         <div class="settings-row"><span class="settings-label">${t('settings.camera.current')}</span>
         <button id="btn-settings-camera">${t(getCameraMode() === 'perspective' ? 'settings.camera.perspective' : 'settings.camera.topdown')}</button>
         <span class="settings-reset"></span></div></div>`);
+      // UI scale: a browser preference (like the language), not part of CONFIG.
+      const scales = [0.75, 0.9, 1, 1.1, 1.25, 1.5];
+      const current = getUiScale ? getUiScale() : 1;
+      const scaleOptions = scales.map((s) => `<option value="${s}" ${Math.abs(s - current) < 0.01 ? 'selected' : ''}>${Math.round(s * 100)}%</option>`).join('');
+      parts.push(`<div class="settings-group"><div class="settings-group-title">${t('settings.uiscale.group')}</div>
+        <div class="settings-row"><span class="settings-label">${t('settings.uiscale')}</span>
+        <select id="settings-uiscale">${scaleOptions}</select><span class="settings-reset"></span></div></div>`);
     }
     for (const section of tab.sections) {
       parts.push(renderGroup(section, config[section], defaults[section], section));
@@ -71,6 +78,7 @@ export function createSettings({ config, defaults, onChange, onToggleCamera, get
     bodyEl.innerHTML = parts.join('');
     bodyEl.querySelector('#btn-settings-camera')?.addEventListener('click', () => { onToggleCamera(); render(); });
     bodyEl.querySelector('#settings-language')?.addEventListener('change', (e) => { setLanguage(e.target.value); render(); });
+    bodyEl.querySelector('#settings-uiscale')?.addEventListener('change', (e) => { if (onSetUiScale) onSetUiScale(Number(e.target.value)); });
     bodyEl.querySelectorAll('[data-path]').forEach((input) => {
       input.addEventListener('change', () => {
         const path = input.dataset.path;
