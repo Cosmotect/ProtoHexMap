@@ -7,6 +7,10 @@ import { simulateBattle, makeEnemies, makeRegulars, renameDuplicates } from './b
 import { EVENTS, LORE_IDS } from './events.js';
 import { t, tn } from './i18n.js';
 
+// How many flavour (lore) lines each window can draw from. The lines themselves live
+// in the locale tables as flavour.<kind>.<n>; one is picked per window, seeded.
+const FLAVOUR_POOL = { battle: 4, treasure: 4, shop: 3, acolyte: 3, camp: 3 };
+
 
 export class Game {
   constructor(config, seed) {
@@ -284,7 +288,7 @@ export class Game {
       let charge = (this.stasis.witherCharge.get(src.key) ?? 0) + 1 / st.witherEvery;
       while (charge >= 1) {
         charge -= 1;
-        const h = this.witherNear(src, st.witherRadius);
+        const h = this.witherNear(src);
         if (h) withered.push(h);
       }
       this.stasis.witherCharge.set(src.key, charge);
@@ -304,18 +308,31 @@ export class Game {
     this.emit('colony', { hex: c.hex });
   }
 
-  // Turns one random non-wither tile near `src` into wither terrain.
-  // The start, the Seed and Colony sites are spared. Returns the tile or null.
-  witherNear(src, radius) {
-    const candidates = [];
-    for (const [q, r] of hexesInRange(src.q, src.r, radius)) {
-      const h = this.hexAt(q, r);
-      if (!h || h.terrain === 'wither' || h.isStart || h.isSeed || h.isColony) continue;
-      candidates.push(h);
+  // Turns one nearby non-wither tile into wither terrain. There is no range limit:
+  // the rot always takes a tile on its current front (the closest untouched land,
+  // with one ring of slack for a ragged edge), so left alone it eventually swallows
+  // the whole map. Only the Seed and Colony sites are spared - they are the sources.
+  // A tile that withers loses whatever encounter stood on it.
+  witherNear(src) {
+    let bestD = Infinity;
+    const all = [];
+    for (const h of this.map.hexes.values()) {
+      if (h.terrain === 'wither' || h.isSeed || h.isColony) continue;
+      const d = hexDistance(src.q, src.r, h.q, h.r);
+      all.push([h, d]);
+      if (d < bestD) bestD = d;
     }
-    if (!candidates.length) return null;
-    const h = this.rng.pick(candidates);
+    if (!all.length) return null;
+    const front = all.filter(([, d]) => d <= bestD + 1).map(([h]) => h);
+    const h = this.rng.pick(front);
     setTerrain(h, 'wither', this.config);
+    if (h.encounter) {
+      const type = h.encounter;
+      h.encounter = null;
+      h.enemies = null;
+      if (h.revealed) this.addLog('log.witherConsumed', { label: { key: `visual.${type}.label` } });
+      this.emit('encounter', { hex: h, type, forced: false, withered: true });
+    }
     return h;
   }
 
@@ -365,7 +382,7 @@ export class Game {
         return this.resolveBattle(hex, forced);
       case 'treasure': {
         this.consume(hex, type, forced);
-        this.offerSupplies(this.config.treasure.supplies, 'treasure.title', 'treasure.text');
+        this.offerSupplies(this.config.treasure.supplies, 'treasure.title', 'treasure.text', 'treasure');
         return true;
       }
       case 'event': {
@@ -379,7 +396,7 @@ export class Game {
       }
       case 'shop':
         // The shop stays on the tile and can be revisited. Buying happens via shopBuy().
-        this.emit('dialog', { kind: 'shop' });
+        this.emit('dialog', { kind: 'shop', lore: this.pickFlavour('shop') });
         this.emit('change');
         return true;
       case 'acolyte': {
@@ -388,7 +405,7 @@ export class Game {
           this.emit('change');
           return false;
         }
-        this.emit('dialog', { kind: 'acolyte' });
+        this.emit('dialog', { kind: 'acolyte', lore: this.pickFlavour('acolyte') });
         return true;
       }
       default:
@@ -419,6 +436,7 @@ export class Game {
     if (s.position.encounter || s.supplies < cost) return false;
     s.supplies -= cost;
     this.addLog('log.camp', { cost });
+    this.addLog(this.pickFlavour('camp'));
     this.applyRest();
     this.resetFatigue();
     this.emit('camp', {});
@@ -535,6 +553,16 @@ export class Game {
     }
     this.addLog(result.won ? 'log.victory' : 'log.defeat', { n: result.rounds });
 
+    // The victory reward is decided BEFORE the dialog goes out: the window reads it
+    // while it is being built (a regression once hid the power-up chooser because the
+    // reward was only set after the dialog event fired).
+    if (result.won && this.config.battle.victoryPower > 0 && this.livingUnits().length) {
+      result.reward = this.config.battle.victoryPower;
+      // Clearing a Colony grants several picks (config.stasis.rewardPicks).
+      result.rewardPicks = hex.isColony ? this.config.stasis.rewardPicks : 1;
+    }
+    if (result.won) result.lore = this.pickFlavour('battle');
+
     if (!opts.alreadyConsumed) this.consume(hex, hex.encounter, forced);
     else this.resetFatigue();
     this.emit('dialog', { kind: 'battle', result, intro: opts.intro });
@@ -560,12 +588,6 @@ export class Game {
           debuff: { key: `debuff.${c?.debuff}.name` },
         });
         this.emit('stasis', {});
-      }
-      // Victory reward: +power to a unit of the player's choice (handled by the dialog).
-      // Clearing a Colony grants several picks (config.stasis.rewardPicks).
-      if (this.config.battle.victoryPower > 0 && this.livingUnits().length) {
-        result.reward = this.config.battle.victoryPower;
-        result.rewardPicks = hex.isColony ? this.config.stasis.rewardPicks : 1;
       }
     }
     this.emit('change');
@@ -684,8 +706,8 @@ export class Game {
 
   // Supplies found in the field. If they would overflow the maximum, the dialog offers
   // to make camp first (spending supplies) so more of the find fits.
-  // titleKey / textKey are locale keys.
-  offerSupplies(amount, titleKey, textKey) {
+  // titleKey / textKey are locale keys; flavourKind adds a lore line (see FLAVOUR_POOL).
+  offerSupplies(amount, titleKey, textKey, flavourKind) {
     const s = this.state;
     const room = s.maxSupplies - s.supplies;
     const overflow = Math.max(0, amount - room);
@@ -697,7 +719,11 @@ export class Game {
       : t('effect.supplies', { n: amount });
     this.addLog('log.find', { title: { key: titleKey }, effect });
     this.emit('change');
-    this.emit('dialog', { kind: 'supplies', title: t(titleKey), titleKey, text: t(textKey), effect, amount, overflow, canCamp, campCost });
+    this.emit('dialog', {
+      kind: 'supplies', title: t(titleKey), titleKey, text: t(textKey), effect,
+      amount, overflow, canCamp, campCost,
+      lore: flavourKind ? this.pickFlavour(flavourKind) : null,
+    });
   }
 
   // Called by the dialog: optionally make camp, then take the find.
@@ -794,6 +820,11 @@ export class Game {
 
   labelFor(type) {
     return t(`visual.${type}.label`);
+  }
+
+  // A locale key for one flavour line of the given kind (see FLAVOUR_POOL).
+  pickFlavour(kind) {
+    return `flavour.${kind}.${this.rng.int(1, FLAVOUR_POOL[kind] ?? 1)}`;
   }
 
   checkEndOfRun() {

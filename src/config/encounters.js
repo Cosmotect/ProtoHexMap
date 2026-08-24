@@ -41,19 +41,18 @@ export const ENCOUNTERS = {
   // Stasis Colony encounter spawns there (never in the same instant the player steps
   // onto the tile - spawning happens after the arrival is fully resolved).
   // Both the Seed and every active Colony wither the land around them: each gains
-  // 1 / witherEvery "charge" per turn and spends 1 charge to turn one random
-  // non-wither tile within witherRadius into wither terrain.
+  // 1 / witherEvery "charge" per turn and spends 1 charge to turn one nearby
+  // non-wither tile into wither terrain. There is no range limit: the rot creeps
+  // outward until the whole map is withered - confront the Stasis or lose the land.
   // Each Colony carries one random debuff from "debuffs"; while the Colony is active
   // its debuff also applies to the Seed fight (duplicates stack). Clearing a Colony
   // removes its debuff and lets the player raise a chosen unit's power "rewardPicks" times.
   stasis: {
     seedMinRing: 'half',      // the Seed sits on the outer rings: 'half' = floor(radius / 2)
     colonyCount: 4,
-    minSpacing: 5,            // min distance between Colony sites and from the Seed
-    minDistanceFromStart: 3,  // Colony sites never sit closer than this to the start
+    minSpacing: 5,            // min distance between Colony sites and from the Seed (their only placement rule)
     lineSpeed: 0.5,           // tiles per player turn each line grows
     witherEvery: 1.5,         // turns per withered tile, per active source
-    witherRadius: 2,          // how far a source reaches when withering
     rewardPicks: 2,           // power raises granted for clearing a Colony
     // The debuff pool. Each Colony rolls one id; values are read by the battle code.
     debuffs: {
@@ -97,7 +96,7 @@ export const ENCOUNTERS = {
     suppliesMax: 20,
     scholarPower: 1,          // +power for ONE random living unit
     blackMarketHpFraction: 1 / 3,  // max HP sacrificed...
-    blackMarketPower: 1,           // ...for this much power
+    blackMarketPower: 2,           // ...for this much power
     // "Merchant caravan" acts as a rest site: same healing as a camp (rest.healFraction).
   },
 

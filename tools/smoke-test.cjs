@@ -112,6 +112,22 @@ fs.mkdirSync(OUT, { recursive: true });
   const capOk = await page.evaluate(() => { const g = window.game; g.addSupplies(999); return g.state.supplies === g.state.maxSupplies; });
   if (!capOk) problems.push('supplies exceeded the maximum');
 
+  // A won battle offers the +power chooser and a placeholder-free transcript
+  // (regression checks: the reward is decided before the dialog is built, and the
+  // transcript lines are structured, not preformatted text).
+  await page.evaluate(() => { const g = window.game; const hex = g.state.position; hex.encounter = 'battle'; hex.enemies = [{ name: 'Dummy', hp: 1, maxHp: 1, power: 0, alive: true }]; g.enter(false); });
+  await page.waitForTimeout(250);
+  const rewardBtn = await page.evaluate(() => [...document.querySelectorAll('#dialog-actions button')].map((b) => b.textContent).join('|'));
+  if (!rewardBtn.includes('+1 power')) problems.push('battle report lacks the reward button: ' + rewardBtn);
+  const transcript = await page.evaluate(() => document.getElementById('dialog-body').textContent);
+  if (/\{(attacker|defender|dmg)\}/.test(transcript)) problems.push('battle transcript shows raw placeholders');
+  await page.evaluate(() => { document.querySelector('#dialog-actions button').click(); });
+  await page.waitForTimeout(150);
+  const chooser = await page.evaluate(() => document.getElementById('dialog-title').textContent);
+  if (!/Lessons/.test(chooser)) problems.push('power-up chooser did not open after the battle: ' + chooser);
+  await page.screenshot({ path: path.join(OUT, '01e-reward-chooser.png') });
+  await dismissDialog();
+
   // The Stasis, straight through the rules layer: placement, line growth, colony
   // spawn, withering and debuffs.
   const stasisProblems = await page.evaluate(() => {
@@ -266,23 +282,11 @@ fs.mkdirSync(OUT, { recursive: true });
   await page.waitForTimeout(100);
   const resetOk = await page.evaluate(() => window.game.config.rest.cost === 20);
   if (!resetOk) problems.push('reset did not restore the config value');
-  // Language switch: Russian everywhere, then back to English.
+  // Language scaffolding: the selector exists and currently offers English only.
   await page.evaluate(() => document.querySelector('[data-tab="general"]').click());
   await page.waitForTimeout(100);
-  await page.selectOption('#settings-language', 'ru');
-  await page.waitForTimeout(200);
-  const ruState = await page.evaluate(() => ({
-    fatigue: document.querySelector('[data-i18n="status.fatigue"]').textContent,
-    enter: document.getElementById('btn-enter').textContent,
-    legend: document.getElementById('legend-items').textContent.slice(0, 40),
-    log: document.getElementById('log').textContent.slice(0, 30),
-    tab: document.querySelector('.tabs .tab.active').textContent,
-    lang: localStorage.getItem('hexmap-lang'),
-  }));
-  if (ruState.fatigue !== 'Усталость' || !/лагерь/i.test(ruState.enter) || !/Луг/.test(ruState.legend) || !/забег/i.test(ruState.log) || ruState.tab !== 'Общие' || ruState.lang !== 'ru') problems.push('Russian did not apply everywhere: ' + JSON.stringify(ruState));
-  await page.screenshot({ path: path.join(OUT, '10-russian.png') });
-  await page.selectOption('#settings-language', 'en');
-  await page.waitForTimeout(200);
+  const langs = await page.evaluate(() => [...document.querySelectorAll('#settings-language option')].map((o) => o.value));
+  if (langs.join(',') !== 'en') problems.push('language selector should offer exactly [en], got ' + JSON.stringify(langs));
   await page.click('#btn-settings-close'); await page.waitForTimeout(100);
   const unblurred = await page.evaluate(() => !document.getElementById('scene').classList.contains('blurred'));
   if (!unblurred) problems.push('blur stayed after closing settings');

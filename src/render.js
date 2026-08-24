@@ -565,33 +565,41 @@ export class MapRenderer {
 
   // Rebuilds the growing Seed -> Colony lines. Called once per turn and after
   // reveals, so it can afford to be simple: throw the old segments away and lay
-  // new ones. Segments are only laid over tiles the player has already revealed.
+  // new ones. Each line is one straight 3D segment chain from the halfway point of
+  // the Seed's cone to the Colony site - it does NOT follow the terrain. Segments
+  // are only drawn over tiles the player has already revealed.
   rebuildStasisLines(game) {
     if (this.stasisGroup) { this.scene.remove(this.stasisGroup); this.stasisGroup = null; }
     if (!game || !game.stasis) return;
     this.stasisGroup = new THREE.Group();
     this.stasisLineMat.color.set(this.config.colors.stasisLine);
     const seed = game.stasis.seed;
-    const ax = seed.x, az = -seed.y;
+    const seedRec = this.tiles.get(seed.key);
+    const seedH = seedRec ? seedRec.height : this.config.colors.fogTileHeight;
+    // Seed cone: base scale 1.7, so its centre (= half its height) sits 0.85 above the tile.
+    const start = new THREE.Vector3(seed.x, seedH + 0.85, -seed.y);
     const step = 0.3;
+    const Z = new THREE.Vector3(0, 0, 1);
     for (const c of game.stasis.colonies) {
       if (c.cleared) continue;
       const frac = c.distance > 0 ? Math.min(1, c.progress / c.distance) : 1;
       if (frac <= 0) continue;
-      const bx = c.hex.x, bz = -c.hex.y;
-      const dx = bx - ax, dz = bz - az;
-      const total = Math.hypot(dx, dz) || 1;
+      const endRec = this.tiles.get(c.hex.key);
+      const endH = endRec ? endRec.height : this.config.colors.fogTileHeight;
+      const end = new THREE.Vector3(c.hex.x, endH + 0.1, -c.hex.y);
+      const dir = end.clone().sub(start);
+      const total = dir.length() || 1;
+      dir.normalize();
       const grown = total * frac;
-      const angle = Math.atan2(dx, dz);
+      const quat = new THREE.Quaternion().setFromUnitVectors(Z, dir);
       for (let d = step / 2; d < grown; d += step) {
-        const x = ax + (dx / total) * d;
-        const z = az + (dz / total) * d;
-        const rec = this.tileAt(x, z);
+        const pos = start.clone().addScaledVector(dir, d);
+        const rec = this.tileAt(pos.x, pos.z);
         if (!rec || !rec.hex.revealed) continue;
         const seg = new THREE.Mesh(this.lineSegGeo, this.stasisLineMat);
-        seg.scale.set(0.09, 0.045, Math.min(step, grown - (d - step / 2)) * 1.1);
-        seg.rotation.y = angle;
-        seg.position.set(x, rec.height + 0.07, z);
+        seg.scale.set(0.09, 0.09, Math.min(step, grown - (d - step / 2)) * 1.1);
+        seg.quaternion.copy(quat);
+        seg.position.copy(pos);
         this.stasisGroup.add(seg);
       }
     }

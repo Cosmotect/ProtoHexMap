@@ -24,6 +24,20 @@ export function damageFor(rng, cfg, attacker, defender) {
 
 const alive = (units) => units.filter((u) => u.alive !== false && u.hp > 0);
 
+// Which unit an enemy swings at: weighted towards healthier targets (weight grows
+// with the remaining HP fraction, cfg.healthyTargetBias is the exponent; 0 = uniform).
+function pickTarget(rng, cfg, targets) {
+  const bias = cfg.healthyTargetBias ?? 0;
+  if (!bias || targets.length < 2) return rng.pick(targets);
+  const weights = targets.map((t) => 0.2 + Math.pow(Math.max(0, t.hp) / t.maxHp, bias));
+  let roll = rng.random() * weights.reduce((a, b) => a + b, 0);
+  for (let i = 0; i < targets.length; i++) {
+    roll -= weights[i];
+    if (roll < 0) return targets[i];
+  }
+  return targets[targets.length - 1];
+}
+
 /**
  * @param rng       seeded rng
  * @param cfg       config.battle
@@ -36,20 +50,22 @@ export function simulateBattle(rng, cfg, party, enemies, partyFirst) {
   const deaths = [];
   let round = 0;
 
+  // Transcript lines are structured ({attacker, defender, dmg, down}) so the UI can
+  // render them through the locale tables.
   const turn = (attackers, defenders, sideName) => {
     for (const a of alive(attackers)) {
       const targets = alive(defenders);
       if (!targets.length) return;
-      const d = rng.pick(targets);
+      const d = sideName === 'enemy' ? pickTarget(rng, cfg, targets) : rng.pick(targets);
       const dmg = damageFor(rng, cfg, a, d);
       d.hp = Math.max(0, d.hp - dmg);
-      let line = `${a.name} hits ${d.name} for ${dmg}`;
+      let down = false;
       if (d.hp <= 0) {
         d.alive = false;
         deaths.push(d);
-        line += ` - ${d.name} is down`;
+        down = true;
       }
-      lines.push({ round, side: sideName, text: line });
+      lines.push({ round, side: sideName, attacker: a.name, defender: d.name, dmg, down });
     }
   };
 

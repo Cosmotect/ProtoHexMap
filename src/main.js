@@ -146,7 +146,7 @@ function showDialog(d) {
     });
     ui.openDialog({
       title: d.title,
-      html: `<p>${escapeHtml(d.text)}</p><div class="effect">${escapeHtml(d.effect)}</div>`,
+      html: `<p>${escapeHtml(d.text)}</p>${d.lore ? `<p class="flavour">${escapeHtml(t(d.lore))}</p>` : ''}<div class="effect">${escapeHtml(d.effect)}</div>`,
       actions,
     });
   } else if (d.kind === 'blackmarket') {
@@ -175,7 +175,9 @@ function showDialog(d) {
           escapeHtml(`${tc(`debuff.${id}.name`, CONFIG)} (${tc(`debuff.${id}.desc`, CONFIG)})`)).join(', ')}</div>`
       : '';
     // Victory reward: one power pick after a normal battle, several after a Colony.
-    const picks = r.reward ? (r.rewardPicks ?? 1) : 0;
+    // Read at click time as well, so the chooser can never be lost to event ordering.
+    const picksNow = () => (r.reward ? (r.rewardPicks ?? 1) : 0);
+    const picks = picksNow();
     const askPick = (left) => {
       ui.chooseUnit({
         title: t('battle.lessons.title'),
@@ -186,22 +188,24 @@ function showDialog(d) {
         skip: { text: t('battle.lessons.skip', { n: r.reward * left }), onSkip: () => ui.closeDialog() },
       });
     };
+    const flavour = r.won && r.lore ? `<p class="flavour">${escapeHtml(t(r.lore))}</p>` : '';
     ui.openDialog({
       title: d.intro ? d.intro.title : r.stasis ? (r.title ? t('battle.stasis.title', { title: tn(r.title) }) : t('battle.stasis.untitled')) : t('battle.title'),
       html: `${intro}<div class="battle-sum ${r.won ? 'won' : 'lost'}">${t(r.won ? 'battle.victory' : 'battle.defeat', { n: r.rounds })} ${t(r.partyFirst ? 'battle.partyFirst' : 'battle.enemiesFirst')}</div>
-             ${debuffs}<p class="muted">${escapeHtml(t('battle.enemies', { list: enemies }))}</p><div class="battle-lines">${lines.join('')}</div>`,
+             ${debuffs}${flavour}<p class="muted">${escapeHtml(t('battle.enemies', { list: enemies }))}</p><div class="battle-lines">${lines.join('')}</div>`,
       actions: [{
         label: picks ? t('dialog.continueReward', { n: r.reward * picks }) : t('dialog.continue'),
         onClick: () => {
-          if (!picks) { ui.closeDialog(); return; }
-          askPick(picks);
+          const p = picksNow();
+          if (!p) { ui.closeDialog(); return; }
+          askPick(p);
         },
       }],
     });
   } else if (d.kind === 'shop') {
     const build = (g) => ({
       title: t('shop.title'),
-      html: `<p>${t('shop.text', { supplies: g.state.supplies, fatigue: g.state.fatigue })}</p><span class="muted">${t('shop.note')}</span>`,
+      html: `${d.lore ? `<p class="flavour">${escapeHtml(t(d.lore))}</p>` : ''}<p>${t('shop.text', { supplies: g.state.supplies, fatigue: g.state.fatigue })}</p><span class="muted">${t('shop.note')}</span>`,
       actions: [
         {
           label: t('shop.rest', { cost: CONFIG.shop.restCost }), sub: t('shop.rest.sub'),
@@ -233,7 +237,7 @@ function showDialog(d) {
   } else if (d.kind === 'acolyte') {
     ui.chooseUnit({
       title: t('acolyte.title'),
-      html: `<p>${t('acolyte.text', { pct: `${Math.round(CONFIG.acolyte.reviveFraction * 100)}%` })}</p>`,
+      html: `${d.lore ? `<p class="flavour">${escapeHtml(t(d.lore))}</p>` : ''}<p>${t('acolyte.text', { pct: `${Math.round(CONFIG.acolyte.reviveFraction * 100)}%` })}</p>`,
       filter: (u) => !u.alive,
       game,
       onPick: (i) => { game.restoreUnit(i); ui.closeDialog(); },
@@ -251,6 +255,18 @@ renderer.onHexClick = (hex) => {
   if (tutorial.isBlocking()) return;
   if (renderer.busy) return;
   if (game.canMoveTo(hex) && tutorial.interceptMove(hex, game)) return;
+  // A step whose terrain damage would disable someone asks for confirmation first.
+  if (game.canMoveTo(hex) && hex.hpCost > 0) {
+    const doomed = game.livingUnits().filter((u) => u.hp <= hex.hpCost);
+    if (doomed.length) {
+      ui.confirm({
+        title: t('confirm.climb.title'),
+        text: t('confirm.climb.text', { names: doomed.map((u) => tn(u.name)).join(', '), hp: hex.hpCost }),
+        onYes: () => game.moveTo(hex),
+      });
+      return;
+    }
+  }
   if (!game.moveTo(hex)) {
     if (game.state.status === 'playing' && hex !== game.state.position) {
       game.addLog(hex.passable ? 'log.tooFar' : 'log.impassable');

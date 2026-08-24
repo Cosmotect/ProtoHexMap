@@ -27,6 +27,9 @@ export const UNITS = {
     // Player units hit harder the closer they are to death ("playing carefully"):
     // damage *= 1 + desperation * (1 - hp / maxHp). 0 = off, 0.5 = up to +50% at 1 HP.
     desperation: 0.5,
+    // Enemy target choice: weight grows with the target's remaining HP fraction,
+    // raised to this exponent (0 = pick uniformly at random).
+    healthyTargetBias: 2,
     victoryPower: 1,          // power awarded to a chosen unit after winning a battle
     maxRounds: 100,           // safety cap for the simulation loop
     // Regular enemy groups. Power scales with the ring (distance from the centre),

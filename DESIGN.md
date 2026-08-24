@@ -26,23 +26,28 @@ prototyped separately (HEX-BOX, https://hex-box.pages.dev). This prototype only 
   * One **Stasis Seed** on a random tile with ring >= `seedMinRing` ('half' =
     floor(radius/2)). Destroying it wins the run. Its marker is a big cone; its tile is
     tinted `colors.seedTile`.
-  * `colonyCount` (4) future **Stasis Colony** sites, each at least `minSpacing` (5) tiles
-    from each other and from the Seed, and at least `minDistanceFromStart` (3) from the
-    start. After every player turn a line grows from the Seed towards each site by
+  * `colonyCount` (4) future **Stasis Colony** sites. Their ONLY placement rule is
+    `minSpacing` (5) tiles from each other and from the Seed - they may sit right next
+    to the start. After every player turn a line grows from the Seed towards each site by
     `lineSpeed` (0.5) tiles; when it reaches the site's centre the Colony encounter spawns
     there (half-size cone, `colors.colonyTile` tint). Spawning happens AFTER the player's
     arrival is fully resolved, so a Colony can never trap the player in the same instant
-    they step on the tile. Lines are drawn only over revealed tiles (fog hides the rest).
+    they step on the tile. Each line is one straight 3D segment from the halfway point of
+    the Seed cone's height to the site (it does not follow the terrain), and is drawn
+    only over revealed tiles (fog hides the rest).
   * Each Colony rolls one random **debuff** at generation (duplicates allowed, they stack):
     `maxHp` (party max HP -25% for the fight), `power` (party power -2), `extraEnemies`
     (+2 regular enemies). While a Colony is active its debuff also applies to the Seed
     fight - with all four Colonies up, the Seed is fought under 4 stacked debuffs. Debuffs
     are temporary per fight; damage taken stays.
   * **Withering**: the Seed and every active Colony gain 1/`witherEvery` (1.5) charge per
-    turn; each whole charge turns one random non-wither tile within `witherRadius` (2)
-    into **wither** terrain (dark blue-purple, costs 1 HP per living unit to step onto,
-    never rolled at generation; start/Seed/Colony tiles are spared). Withering water makes
-    it walkable - the Stasis dries it out.
+    turn; each whole charge turns one non-wither tile on the rot's current front (the
+    closest untouched land, one ring of slack for a ragged edge) into **wither** terrain
+    (dark blue-purple, costs 1 HP per living unit to step onto, never rolled at
+    generation). There is NO range limit: left alone, the rot swallows the whole map -
+    it exists to force the player to confront the Stasis. Only Seed/Colony tiles are
+    spared (they are the sources). A tile that withers loses its encounter (marker and
+    all); withering water makes it walkable - the Stasis dries it out.
   * Clearing a Colony lifts its debuff from the Seed and grants `rewardPicks` (2) power
     raises (chosen unit each, +`battle.victoryPower` per pick).
 * Terrain per tile, rolled from weights: grass, forest, hills (free), water (blocked),
@@ -57,7 +62,8 @@ prototyped separately (HEX-BOX, https://hex-box.pages.dev). This prototype only 
   plus each tile's `terrainHeight`, permanently. The Seed hides under the fog like every
   other tile (`run.seedAlwaysVisible: false`).
 * **Movement**: one step per turn to a neighbouring walkable tile. Ordinary steps cost
-  nothing; mountains cost supplies and HP.
+  nothing; mountains cost supplies and HP; wither costs HP. A step whose HP cost would
+  disable at least one living unit opens an "are you sure" confirm box first.
 * **Party**: three units (`config.party.units`), each with HP and **power**, shown in the
   left panel (segmented HP bars, one segment per `hpSegment` HP). On the map they move as
   one token. A unit at 0 HP is *disabled*: greyed out, skipped in battles, until an Acolyte
@@ -83,9 +89,13 @@ prototyped separately (HEX-BOX, https://hex-box.pages.dev). This prototype only 
     Enemy groups are rolled when the map is generated / when the Colony spawns
     (`hex.enemies`), so a revealed fight shows its danger up front:
     floor((enemy power - living party power) / 2) red chevrons above the marker. Player units deal extra damage the lower their HP
-    (`battle.desperation`). A report dialog shows every blow (plus the Stasis debuffs that
-    applied); after a win the player picks a unit that gains `battle.victoryPower` (1) -
-    twice (`stasis.rewardPicks`) after a Colony. Destroying the Seed wins the run.
+    (`battle.desperation`). Enemies pick their targets weighted towards the healthiest
+    party units (`battle.healthyTargetBias`, HP-fraction exponent; it simulates the
+    player shielding the wounded and is deliberately not surfaced in the UI). A report
+    dialog shows every blow (plus the Stasis debuffs that applied) as structured lines
+    rendered through the locale tables; after a win the player picks a unit that gains
+    `battle.victoryPower` (1) - twice (`stasis.rewardPicks`) after a Colony. Destroying
+    the Seed wins the run.
   * *Treasure*: +`treasure.supplies` (40). Does not reset fatigue. Supplies found in the
     field (Treasure, Fortunate find) open a dialog; if they would overflow the maximum and
     the tile is empty, it offers "make camp first, then collect" so more of the find fits.
@@ -98,6 +108,10 @@ prototyped separately (HEX-BOX, https://hex-box.pages.dev). This prototype only 
     hidden Acolyte), Black market (choose a unit: -1/3 max HP, +1 power, or decline),
     Nomads (a battle, same rules as a battle encounter), The merchant's caravan (acts as
     a rest site: heals and resets fatigue), Learned about the world (lore text only, weight 2). Does not reset fatigue (except Nomads, which is a battle).
+    Black market trades 1/3 max HP for +`events.blackMarketPower` (2) power.
+  * **Flavour lines**: battle victories, treasure, the shop, the Acolyte and camps each
+    draw one lore line from their pool (`flavour.<kind>.<n>` in the locale table,
+    pool sizes in `game.js FLAVOUR_POOL`), shown in the window (camps: in the log).
   * *Shop*: opens a dialog. Rest = `shop.restCost` (35) resets fatigue; Upgrade =
     `shop.upgradeCost` (25), +1 power on a chosen unit; Local map = `shop.mapCost` (15)
     reveals a patch of `events.blobSize` tiles. The shop stays on the tile and entering it
@@ -124,9 +138,10 @@ prototyped separately (HEX-BOX, https://hex-box.pages.dev). This prototype only 
   config), and a top-right **Menu** (seed, load, copy link, new map, restart, reveal map,
   settings, new player experience; key M). The world blurs while the menu or the settings
   window is open.
-* **Languages** (`i18n.js`, `locales/en.js`, `locales/ru.js`): every user-facing string is a
-  key in a flat per-language table (same key order in every file, so they can be audited
-  side by side). Placeholders `{x}`, plural forms `{n:one|other}` / `{n:один|два|пять}`.
+* **Languages** (`i18n.js`, `locales/en.js`): every user-facing string is a key in a flat
+  per-language table. English is the only language for now (the Russian table was removed
+  on 2026-08-23); the scaffolding stays, so adding a language = one new locale file plus
+  a LANGUAGES/TABLES/plural-rule entry in i18n.js. Placeholders `{x}`, plural forms `{n:one|other}`.
   Code calls `t(key, params)`; unit and enemy names go through `tn(name)`; static HTML uses
   `data-i18n` attributes; the log stores language-neutral entries and is re-rendered on a
   switch. Event stories and lore live in the tables too (`event.<id>.*`, `lore.<id>.*`).
@@ -212,6 +227,13 @@ Outcome choice per type is an open question (see below); the hook does not care.
   terrain, 1 HP per step, never generated). "Every 1.5 turns" is implemented as a charge
   accumulator (1/1.5 per turn, spend whole charges); debuff duplicates stack; lines are
   drawn only over revealed tiles.
+* 2026-08-23 Russian localization removed (English only for now); the i18n scaffolding
+  stays so adding a language is one locale file + one entry in i18n.js.
+* 2026-08-23 Wither spread uncapped (front-based growth until the whole map rots) and it
+  now consumes encounters; Colony placement freed (only the 5-tile spacing rule); stasis
+  lines straightened (3D segment from the Seed cone's mid-height); deadly climbs ask for
+  confirmation; enemies weight attacks towards healthier units (hidden from the UI);
+  black market pays +2 power; flavour lore lines added to encounter windows.
 
 ## Open questions
 

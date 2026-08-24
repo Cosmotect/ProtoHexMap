@@ -6,27 +6,21 @@
 // params.n using the locale's plural rule, e.g. "{n} {n:tile|tiles}".
 // Missing keys fall back to English, then to the key itself (so gaps are visible).
 
+// To add a language: create src/locales/<code>.js (same keys as en.js), import it here,
+// add it to LANGUAGES and TABLES, and give it a plural rule below. Everything else
+// (settings dropdown, fallbacks, re-rendering on switch) already works.
 import { en } from './locales/en.js';
-import { ru } from './locales/ru.js';
 
 export const LANGUAGES = [
   { code: 'en', label: 'English' },
-  { code: 'ru', label: 'Русский' },
 ];
 
-const TABLES = { en, ru };
+const TABLES = { en };
 const STORAGE_KEY = 'hexmap-lang';
 
 // Plural rules: return the index of the form to use.
 const PLURAL_RULES = {
   en: (n) => (n === 1 ? 0 : 1),
-  ru: (n) => {
-    const a = Math.abs(n) % 100, b = a % 10;
-    if (a > 10 && a < 20) return 2;
-    if (b === 1) return 0;
-    if (b >= 2 && b <= 4) return 1;
-    return 2;
-  },
 };
 
 let current = 'en';

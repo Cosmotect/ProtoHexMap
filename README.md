@@ -94,7 +94,7 @@ hex-world-map/
     tutorial.js  the new player experience (guided first run)
     text.js      texts generated from config numbers (legend entries, guide cards)
     i18n.js      language switching and the t() / tn() translation helpers
-    locales/en.js, locales/ru.js   every user-facing string, one flat table per language
+    locales/en.js   every user-facing string, one flat table per language (English only for now)
     settings.js  the in-app settings window (config values editable at runtime, saved in the browser)
     map.js       map generation from a seed, guaranteed path to the Seed and Colony sites
     hex.js       hex grid maths (axial coordinates, neighbours, distance)

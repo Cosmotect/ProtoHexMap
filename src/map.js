@@ -50,10 +50,12 @@ function buildLayout(config, rng, radius, orientation, hexSize) {
   const seedCandidates = hexesInRange(0, 0, radius).filter(([q, r]) => hexDistance(q, r, 0, 0) >= minRing);
   const seedSpot = rng.pick(seedCandidates);
 
-  const specialKeys = new Set([hexKey(seedSpot[0], seedSpot[1])]);
+  // Colony sites may sit anywhere (even next to the start) - their only placement
+  // rule is minSpacing from each other and from the Seed. The start tile itself is
+  // excluded because the player stands there.
+  const specialKeys = new Set([hexKey(seedSpot[0], seedSpot[1]), hexKey(startQ, startR)]);
   const colonySpots = [];
-  const colonyCandidates = hexesInRange(0, 0, radius).filter(([q, r]) =>
-    hexDistance(q, r, 0, 0) >= (st.minDistanceFromStart ?? 0));
+  const colonyCandidates = hexesInRange(0, 0, radius);
   let guard = 0;
   while (colonySpots.length < (st.colonyCount ?? 0) && guard++ < 800) {
     const [q, r] = rng.pick(colonyCandidates);
