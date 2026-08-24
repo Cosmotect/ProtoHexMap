@@ -1,7 +1,7 @@
 // Game rules and state. Pure data + logic, no rendering.
 // The renderer and the HUD subscribe to "events" and redraw themselves.
 import { createRng } from './rng.js';
-import { generateMap, setType } from './map.js';
+import { generateMap, setType, setBiome } from './map.js';
 import { hexKey, neighbors, hexesInRange, hexDistance } from './hex.js';
 import { simulateBattle, makeEnemies, makeRegulars, renameDuplicates } from './battle.js';
 import { EVENTS, LORE_IDS } from './events.js';
@@ -319,16 +319,18 @@ export class Game {
     this.emit('colony', { hex: c.hex });
   }
 
-  // Turns one nearby non-wither tile into wither terrain. There is no range limit:
-  // the rot always takes a tile on its current front (the closest untouched land,
-  // with one ring of slack for a ragged edge), so left alone it eventually swallows
-  // the whole map. Only the Seed and Colony sites are spared - they are the sources.
-  // A tile that withers loses whatever encounter stood on it.
+  // Withers one nearby tile: its BIOME becomes 'wither', its TYPE (shape) stays.
+  // There is no range limit: the rot always takes a tile on its current front (the
+  // closest untouched land, with one ring of slack for a ragged edge), so left alone
+  // it eventually swallows all the land. The Seed and Colony sites are spared - they
+  // are the sources. Ether is never withered: the rot has nothing to grip in the
+  // void. Withered water dries into walkable ground. A tile that withers loses
+  // whatever encounter stood on it.
   witherNear(src) {
     let bestD = Infinity;
     const all = [];
     for (const h of this.map.hexes.values()) {
-      if (h.type === 'wither' || h.isSeed || h.isColony) continue;
+      if (h.biome === 'wither' || h.type === 'ether' || h.isSeed || h.isColony) continue;
       const d = hexDistance(src.q, src.r, h.q, h.r);
       all.push([h, d]);
       if (d < bestD) bestD = d;
@@ -336,7 +338,8 @@ export class Game {
     if (!all.length) return null;
     const front = all.filter(([, d]) => d <= bestD + 1).map(([h]) => h);
     const h = this.rng.pick(front);
-    setType(h, 'wither', this.config);
+    if (h.type === 'water') setType(h, 'ground', this.config); // the Stasis dries it out
+    setBiome(h, 'wither', this.config);
     if (h.encounter) {
       const type = h.encounter;
       h.encounter = null;
@@ -861,7 +864,8 @@ export class Game {
   // visible from further away).
   reveal(q, r, radius, silent) {
     const newly = [];
-    const maxH = Math.max(0, ...Object.values(this.config.tileTypes).map((t) => t.terrainHeight ?? 0));
+    const maxH = Math.max(0, ...Object.values(this.config.tileTypes).map((t) => t.terrainHeight ?? 0))
+      + Math.max(0, ...Object.values(this.config.biomes).map((b) => b.terrainHeight ?? 0));
     for (const [hq, hr] of hexesInRange(q, r, radius + maxH)) {
       const h = this.hexAt(hq, hr);
       if (!h || h.revealed) continue;
@@ -912,7 +916,8 @@ function round1(n) {
 
 export function describeHex(hex) {
   const enc = hex.encounter ? t('hover.encounterSuffix', { label: t(`visual.${hex.encounter}.label`) }) : '';
-  // Land types read as "Grasslands Ground"; water / ether / wither ignore the biome.
+  // Land types read as "Grasslands Ground" (or "Withered Ground" once the Stasis
+  // takes them); water / ether ignore the biome.
   const tinted = hex.type === 'ground' || hex.type === 'hill' || hex.type === 'mountain';
   const name = tinted ? t('hover.tile', { biome: t(`biome.${hex.biome}`), type: t(`terrain.${hex.type}`) }) : t(`terrain.${hex.type}`);
   return `${name} (${hex.q},${hex.r})${enc}`;

@@ -122,10 +122,11 @@ export function createUI(config, handlers) {
       : tr.hpCost > 0 ? t('legend.costHp', { hp: tr.hpCost }) : '';
     legendItems.push({ swatch: `<span class="swatch" style="background:${hex(tr.color)}"></span>`, label: `${terrainName(name)}${note}`, info: terrainInfo(name, tr) });
   }
-  // Biomes: colour only - the swatch shows the pure biome colour that land tiles
-  // are shifted towards.
+  // Biomes: mostly colour - the swatch shows the pure biome colour that land tiles
+  // are shifted towards. A special biome (wither) may also add an HP cost.
   for (const [name, b] of Object.entries(config.biomes)) {
-    legendItems.push({ swatch: `<span class="swatch" style="background:${hex(b.color)}"></span>`, label: t(`biome.${name}`), info: t(`biome.${name}.info`) });
+    const note = (b.hpCost ?? 0) > 0 ? t('legend.costHp', { hp: b.hpCost }) : '';
+    legendItems.push({ swatch: `<span class="swatch" style="background:${hex(b.color)}"></span>`, label: `${t(`biome.${name}`)}${note}`, info: tc(`biome.${name}.info`, config) });
   }
   for (const [type, v] of Object.entries(config.encounters.visuals)) {
     legendItems.push({ swatch: `<span class="swatch marker" style="background:${hex(v.color)}"></span>`, label: encounterLabel(type), info: encounterInfo(type, config) });

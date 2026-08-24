@@ -28,6 +28,9 @@ fs.mkdirSync(OUT, { recursive: true });
 
 (async () => {
   const browser = await chromium.launch({
+    // CHROMIUM lets CI / sandboxes point at a preinstalled browser instead of
+    // downloading one with "npx playwright install".
+    executablePath: process.env.CHROMIUM || undefined,
     // Software WebGL so the test also works on machines / servers without a GPU.
     args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'],
   });
@@ -147,9 +150,15 @@ fs.mkdirSync(OUT, { recursive: true });
     for (let i = 0; i < need; i++) g.advanceStasis();
     if (!first.active || first.hex.encounter !== 'stasisColony') out.push(`colony did not spawn after ${need} turns`);
     if (!first.hex.enemies || !first.hex.enemies.length) out.push('spawned colony has no enemies');
-    const withered = [...g.map.hexes.values()].filter((h) => h.type === 'wither');
-    if (!withered.length) out.push(`no wither tiles after ${need} turns`);
-    if (withered.some((h) => h.hpCost !== g.config.tileTypes.wither.hpCost)) out.push('wither tiles did not take the config hpCost');
+    const withered = [...g.map.hexes.values()].filter((h) => h.biome === 'wither');
+    if (!withered.length) out.push(`no withered tiles after ${need} turns`);
+    const cfgW = g.config.biomes.wither;
+    if (withered.some((h) => h.type === 'ether')) out.push('the wither spread into the ether');
+    if (withered.some((h) => h.type === 'water')) out.push('withered water did not dry into ground');
+    if (withered.some((h) => h.hpCost !== (g.config.tileTypes[h.type].hpCost ?? 0) + cfgW.hpCost)) out.push('withered tiles did not take the biome hpCost');
+    // Ether tiles must be holes: present in the game data, absent from the renderer.
+    const ether = [...g.map.hexes.values()].filter((h) => h.type === 'ether');
+    if (ether.some((h) => window.__renderer.tiles.has(h.key))) out.push('ether tiles have meshes - they should be holes');
     // Active colonies push their debuff onto the seed fight.
     const debuffs = g.activeDebuffsFor(g.map.seed);
     const active = st.colonies.filter((c) => c.active && !c.cleared).length;

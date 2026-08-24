@@ -75,13 +75,14 @@ export class MapRenderer {
     this.scene.add(sun);
     this.scene.add(sun.target);
 
+    // The "floor" far below the map: seen through the ether holes, it sits deep in
+    // the atmosphere fog and reads as a bottomless void under the landmass.
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(400, 400),
       new THREE.MeshStandardMaterial({ color: this.config.colors.ground, roughness: 1, metalness: 0 })
     );
     ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -0.05;
-    ground.receiveShadow = true;
+    ground.position.y = -30;
     this.scene.add(ground);
   }
 
@@ -226,6 +227,10 @@ export class MapRenderer {
     const cfg = this.config;
 
     for (const hex of game.map.hexes.values()) {
+      // Ether is a hole in the world: no tile mesh at all - the camera looks straight
+      // down into the void. The hex stays in the game data (it may become navigable
+      // later); it just draws nothing, so it cannot be hovered or clicked either.
+      if (hex.type === 'ether') continue;
       const mat = new THREE.MeshStandardMaterial({
         color: cfg.colors.fogTile,
         roughness: 0.85,
@@ -468,11 +473,15 @@ export class MapRenderer {
     else if (hex.encounter === 'stasisColony') color = new THREE.Color(c.colonyTile);
     else {
       // Tile colour = type colour shifted towards the biome colour (a lerp, never a
-      // multiplication, so biomes brighten as easily as they darken).
+      // multiplication, so biomes brighten as easily as they darken). A biome may
+      // override the amount (tintAmount) and reach types that normally ignore
+      // biomes (tintAllTypes) - the wither uses both to repaint tiles completely.
       const type = this.config.tileTypes[hex.type];
       color = new THREE.Color(type.color);
       const biome = this.config.biomes[hex.biome];
-      if (type.biomeTint && biome) color.lerp(new THREE.Color(biome.color), c.biomeTintAmount ?? 0.45);
+      if (biome && (type.biomeTint || biome.tintAllTypes)) {
+        color.lerp(new THREE.Color(biome.color), biome.tintAmount ?? c.biomeTintAmount ?? 0.45);
+      }
     }
     if (hex.visited && !hex.isStart && this.game.state.position !== hex) color.multiplyScalar(c.visitedTint);
     return color;
@@ -562,7 +571,8 @@ export class MapRenderer {
     }
   }
 
-  // Tiles the Stasis turned into wither: re-colour the visible ones.
+  // Tiles the Stasis withered (biome -> 'wither', dried water -> ground): re-run
+  // the reveal animation on the visible ones so colour and height catch up.
   handleWither(hexes) {
     for (const hex of hexes) {
       const rec = this.tiles.get(hex.key);

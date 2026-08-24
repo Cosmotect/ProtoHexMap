@@ -13,7 +13,7 @@ export function placeholders(config) {
   return {
     colonyCount: c.stasis.colonyCount,
     rewardPicks: c.stasis.rewardPicks,
-    witherHp: c.tileTypes.wither?.hpCost ?? 0,
+    witherHp: c.biomes.wither?.hpCost ?? 0,
     witherEvery: c.stasis.witherEvery,
     debuffMaxHpPct: pct(c.stasis.debuffs.maxHp.fraction),
     debuffPower: c.stasis.debuffs.power.amount,

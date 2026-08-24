@@ -59,7 +59,7 @@ export const CONFIG = {
   // ----- Colours -----------------------------------------------------
   colors: {
     background: 0x0e1320,
-    ground: 0x0b0f19,
+    ground: 0x0b0f19,         // the void floor far below the map, seen through the ether holes
     fogTile: 0x1f2536,        // colour of tiles still hidden under the fog of war
     fogTileHeight: 0.22,
     startTile: 0x9fd9ff,

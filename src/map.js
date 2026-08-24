@@ -2,9 +2,11 @@
 // tested and reasoned about without a screen.
 //
 // Terrain model: every tile has a TYPE (ether / water / ground / hill / mountain,
-// all the gameplay numbers, from config.tileTypes) and a BIOME (colour only, from
-// config.biomes). Types come from a multi-octave Perlin elevation field, then a
-// second noise field pokes ether holes, then a third distributes the biomes.
+// all the gameplay numbers, from config.tileTypes) and a BIOME (mostly colour, from
+// config.biomes; special biomes like wither may add hpCost / terrainHeight on top).
+// Types come from a multi-octave Perlin elevation field, then a second noise field
+// pokes ether holes, then a third distributes the biomes. Biomes marked
+// "generated: false" (wither) are never placed here - they are applied during play.
 import { hexKey, neighbors, hexesInRange, axialToPlane, hexDistance } from './hex.js';
 import { createNoise } from './noise.js';
 
@@ -87,7 +89,7 @@ function buildLayout(config, rng, radius, orientation, hexSize) {
     ether: { ...n.ether, offsetX: off(), offsetY: off() },
     biome: { ...n.biome, offsetX: off(), offsetY: off() },
   };
-  const biomeNames = Object.keys(config.biomes);
+  const biomeNames = Object.keys(config.biomes).filter((b) => config.biomes[b].generated !== false);
 
   const coords = hexesInRange(0, 0, radius).map(([q, r]) => ({ q, r, plane: axialToPlane(q, r, hexSize, orientation) }));
   const ranked = (field) => {
@@ -132,7 +134,7 @@ function buildLayout(config, rng, radius, orientation, hexSize) {
       x: plane.x,
       y: plane.y,
     };
-    applyType(hex, type, config);
+    setType(hex, type, config);
     hexes.set(hex.key, hex);
   });
 
@@ -170,20 +172,30 @@ function buildLayout(config, rng, radius, orientation, hexSize) {
   };
 }
 
-function applyType(hex, type, config) {
-  const t = config.tileTypes[type];
-  hex.type = type;
+// Recomputes a hex's gameplay numbers from its type + biome. Biomes are mostly
+// colour, but a special biome (wither) may add hpCost / terrainHeight on top.
+function applyStats(hex, config) {
+  const t = config.tileTypes[hex.type];
+  const b = config.biomes[hex.biome] ?? {};
   hex.passable = t.passable;
   hex.supplyCost = t.supplyCost;
-  hex.hpCost = t.hpCost ?? 0;
+  hex.hpCost = (t.hpCost ?? 0) + (b.hpCost ?? 0);
   hex.revealBonus = t.revealBonus ?? 0;
-  hex.terrainHeight = t.terrainHeight ?? 0;
+  hex.terrainHeight = (t.terrainHeight ?? 0) + (b.terrainHeight ?? 0);
 }
 
 // Rewrites a hex's tile type (the biome stays). Also used by game.js when the
-// Stasis withers a tile.
+// Stasis dries withered water into ground.
 export function setType(hex, type, config) {
-  applyType(hex, type, config);
+  hex.type = type;
+  applyStats(hex, config);
+}
+
+// Rewrites a hex's biome (the type stays). Used by game.js when the Stasis
+// withers a tile.
+export function setBiome(hex, biome, config) {
+  hex.biome = biome;
+  applyStats(hex, config);
 }
 
 // Breadth-first search over passable tiles that cost no supplies (mountains are

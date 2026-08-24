@@ -40,29 +40,37 @@ prototyped separately (HEX-BOX, https://hex-box.pages.dev). This prototype only 
     (+2 regular enemies). While a Colony is active its debuff also applies to the Seed
     fight - with all four Colonies up, the Seed is fought under 4 stacked debuffs. Debuffs
     are temporary per fight; damage taken stays.
-  * **Withering**: the Seed and every active Colony gain 1/`witherEvery` (1.5) charge per
-    turn; each whole charge turns one non-wither tile on the rot's current front (the
-    closest untouched land, one ring of slack for a ragged edge) into **wither** terrain
-    (dark blue-purple, costs 1 HP per living unit to step onto, never rolled at
-    generation). There is NO range limit: left alone, the rot swallows the whole map -
-    it exists to force the player to confront the Stasis. Only Seed/Colony tiles are
-    spared (they are the sources). A tile that withers loses its encounter (marker and
-    all); withering water makes it walkable - the Stasis dries it out.
+  * **Withering**: the Seed and every active Colony gain 1/`witherEvery` charge per
+    turn; each whole charge repaints one unwithered tile on the rot's current front
+    (the closest untouched land, one ring of slack for a ragged edge) with the
+    **wither** BIOME (dark blue-purple, +1 HP per living unit to step onto, seen from
+    1 further; never rolled at generation). The tile keeps its TYPE - shape and
+    movement rules. There is NO range limit: left alone, the rot swallows all the
+    land - it exists to force the player to confront the Stasis. Seed/Colony tiles
+    are spared (they are the sources), and **ether is never withered** - the rot has
+    nothing to grip in the void. A tile that withers loses its encounter (marker and
+    all); withering water dries it into walkable ground.
   * Clearing a Colony lifts its debuff from the Seed and grants `rewardPicks` (2) power
     raises (chosen unit each, +`battle.victoryPower` per pick).
 * **Terrain = tile TYPE + tile BIOME** (since 2026-08-24):
   * Types (`config.tileTypes`) carry all the gameplay numbers (passable, supplyCost,
-    hpCost, revealBonus, terrainHeight, visual height): **ether** (the void between
-    the worldflake's landmasses - impassable, nearly flat and dark), **water**
-    (impassable), **ground**, **hill** (seen from 1 tile further), **mountain**
-    (walkable at 10 supplies + 5 HP, +2 reveal, seen from 2 further) and **wither**
-    (never generated; the Stasis makes it). A tile is revealed when its distance <=
-    revealRadius + terrainHeight. You cannot step onto a tile you cannot afford. The
-    guaranteed start-to-Seed route never uses mountains.
-  * Biomes (`config.biomes`) are colour only: grasslands, forest, mesa, desert,
-    dunes, tundra. The final tile colour = the type colour LERPED towards the biome
-    colour by `colors.biomeTintAmount` (never multiplied, so tints do not darken);
-    types with `biomeTint: false` (ether, water, wither) ignore the biome.
+    hpCost, revealBonus, terrainHeight, visual height): **ether** (a HOLE in the
+    world - impassable for now, and the renderer draws NO mesh there: the camera
+    looks straight down into the void, so ether holes are visible even under the
+    fog; the hexes stay in the map data so later mechanics can navigate them),
+    **water** (impassable), **ground**, **hill** (seen from 1 tile further) and
+    **mountain** (walkable at 10 supplies + 5 HP, +2 reveal, seen from 2 further).
+    A tile is revealed when its distance <= revealRadius + terrainHeight. You cannot
+    step onto a tile you cannot afford. The guaranteed start-to-Seed route never
+    uses mountains.
+  * Biomes (`config.biomes`) are mostly colour: grasslands, forest, mesa, desert,
+    dunes, tundra - plus **wither**, which worldgen never places (`generated:
+    false`); the Stasis applies it during play. The final tile colour = the type
+    colour LERPED towards the biome colour by `colors.biomeTintAmount` (never
+    multiplied, so tints do not darken); types with `biomeTint: false` (ether,
+    water) ignore the biome. A biome may override the lerp amount (`tintAmount`),
+    reach even `biomeTint: false` types (`tintAllTypes`) and ADD `hpCost` /
+    `terrainHeight` on top of the type's numbers - the wither uses all of these.
 * **Generation** (`map.js` + `noise.js`, seeded): three independent multi-octave
   Perlin fields, each rank-normalised across the map so the level knobs read as
   shares of the map. Elevation places water (bottom `noise.waterLevel`), ground,
@@ -76,7 +84,7 @@ prototyped separately (HEX-BOX, https://hex-box.pages.dev). This prototype only 
   plus each tile's `terrainHeight`, permanently. The Seed hides under the fog like every
   other tile (`run.seedAlwaysVisible: false`).
 * **Movement**: one step per turn to a neighbouring walkable tile. Ordinary steps cost
-  nothing; mountains cost supplies and HP; wither costs HP. A step whose HP cost would
+  nothing; mountains cost supplies and HP; withered land costs HP. A step whose HP cost would
   disable at least one living unit opens an "are you sure" confirm box first.
 * **Party**: three units (`config.party.units`), each with HP and **power**, shown in the
   left panel (segmented HP bars, one segment per `hpSegment` HP). On the map they move as
@@ -194,7 +202,7 @@ prototyped separately (HEX-BOX, https://hex-box.pages.dev). This prototype only 
   NOTE: the fixed map depends on the world/encounter config; changing those may change
   what the NPE map looks like near the start.
 * **Win**: destroy the Stasis Seed. **Lose**: whole party fallen, or boxed in
-  (rare; the first ring is always open and wither stays walkable).
+  (rare; the first ring is always open and withering never makes land impassable).
 * **Encounters**: ~33% of walkable tiles (not adjacent to the start) get a type by weight:
   battle 5, event 2, shop 1, treasure 0.8, acolyte 0.15. Stepping on one only writes a log line.
 * **Seeds**: `?seed=1234` in the URL, the HUD, and the "Copy link" button. Same seed, same map.
@@ -206,7 +214,7 @@ prototyped separately (HEX-BOX, https://hex-box.pages.dev). This prototype only 
 
 `game.js` owns truth (state, rules) and emits events: `reveal`, `move`, `encounter`,
 `change`, `log`, `end`, plus the Stasis events `colony` (a Colony spawned), `wither`
-(tiles turned to wither) and `stasis` (lines advanced; the renderer rebuilds them).
+(tiles the Stasis withered) and `stasis` (lines advanced; the renderer rebuilds them).
 `render.js` and `ui.js` only listen and draw. Nothing in the renderer
 may change game state. This separation is what will let us simulate encounter outcomes
 with plain data later, and even run the rules without a screen for balancing.
@@ -257,6 +265,14 @@ Outcome choice per type is an open question (see below); the hook does not care.
   either side's power, every won battle salvages `battle.victorySupplies` (5) supplies,
   wither pace 1 tile per 2 turns. Owner's config calls: encounter density 0.5, shop
   rest 15, wither terrainHeight 1.
+* 2026-08-24 Wither moved from a tile TYPE to a tile BIOME: a withered tile keeps its
+  type (shape, passability) and gets repainted; the biome adds +1 HP per step and
+  +1 terrainHeight on top of the type. Withered water still dries into walkable
+  ground (type -> ground). Ether reworked into true holes: the wither never spreads
+  into it, and the renderer spawns no mesh for ether tiles - the camera looks down
+  into the void (the floor plane sits 30 units below, fading into the fog). Ether
+  hexes stay in the map data, impassable for now, so future mechanics can navigate
+  them.
 
 ## Open questions
 

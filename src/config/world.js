@@ -21,21 +21,27 @@ export const WORLD = {
   // "revealBonus" = extra reveal radius when standing there.
   // "terrainHeight" = how far away this type can be seen from: a tile is revealed
   // when its distance <= revealRadius + terrainHeight. "height" is the visual thickness.
-  // Types are assigned by the elevation noise (see "noise" below); wither is special:
-  // never generated, the Stasis turns tiles into it during the run.
+  // Types are assigned by the elevation noise (see "noise" below). Ether is a HOLE
+  // in the world: the renderer draws no mesh there at all - the camera looks straight
+  // down into the void - and the wither never spreads into it. It stays in the map
+  // data (impassable for now) so later mechanics can make it navigable.
   tileTypes: {
-    ether: { passable: false, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 0, color: 0x0d1020, height: 0.04, biomeTint: false },
+    ether: { passable: false, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 0, color: 0x0d1020, height: 0, biomeTint: false },
     water: { passable: false, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 1, color: 0x3c7dc4, height: 0.18, biomeTint: false },
     ground: { passable: true, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 0, color: 0x93a56b, height: 0.35, biomeTint: true },
     hill: { passable: true, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 1, color: 0xa89a70, height: 0.55, biomeTint: true },
     mountain: { passable: true, supplyCost: 10, hpCost: 5, revealBonus: 2, terrainHeight: 2, color: 0x8e929c, height: 0.95, biomeTint: true },
-    wither: { passable: true, supplyCost: 0, hpCost: 1, revealBonus: 0, terrainHeight: 1, color: 0x3b2a6e, height: 0.3, biomeTint: false },
   },
 
   // ----- Biomes ---------------------------------------------------------
-  // Colour only, for now. The final tile colour = the type colour shifted towards
-  // the biome colour (a lerp by colors.biomeInfluence in config.js - no
+  // Mostly colour. The final tile colour = the type colour shifted towards the
+  // biome colour (a lerp by colors.biomeTintAmount in config.js - no
   // multiplication, so nothing gets darker). Types with biomeTint: false ignore it.
+  // Optional biome fields (all off by default):
+  //  * generated: false - worldgen never places it; something in play applies it
+  //  * hpCost / terrainHeight - ADDED on top of the tile type's numbers
+  //  * tintAmount - overrides colors.biomeTintAmount for this biome (1 = full recolour)
+  //  * tintAllTypes: true - recolours even types with biomeTint: false (e.g. water)
   biomes: {
     grasslands: { color: 0x62c454 },
     forest: { color: 0x1f6b38 },
@@ -43,6 +49,11 @@ export const WORLD = {
     desert: { color: 0xe0b360 },
     dunes: { color: 0xf0dca2 },
     tundra: { color: 0xd8ecf4 },
+    // Wither is not born with the world: the Stasis paints it over tiles during the
+    // run (see game.js witherNear). The tile keeps its TYPE - its shape and movement
+    // rules - but turns Stasis-purple, hurts to step onto and is seen from 1 further.
+    // Withered water dries into walkable ground; ether is never withered.
+    wither: { color: 0x3b2a6e, generated: false, hpCost: 1, terrainHeight: 1, tintAmount: 1, tintAllTypes: true },
   },
 
   // ----- Generation noise ------------------------------------------------
