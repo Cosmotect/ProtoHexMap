@@ -63,7 +63,7 @@ export const CONFIG = {
     fogTile: 0x1f2536,        // colour of tiles still hidden under the fog of war
     fogTileHeight: 0.22,
     startTile: 0x9fd9ff,
-    biomeTintAmount: 0.45,    // how far a tile's type colour is shifted towards its biome colour (0..1)
+    biomeTintAmount: 0.34,    // how far a tile's type colour is shifted towards its biome colour (0..1)
     seedTile: 0x4a1a2a,       // tile under the Stasis Seed
     colonyTile: 0x33204a,     // tile under an active Stasis Colony
     stasisLine: 0x9a5cff,     // the lines growing from the Seed to its Colonies

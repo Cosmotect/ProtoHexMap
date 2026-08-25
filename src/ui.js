@@ -191,40 +191,30 @@ export function createUI(config, handlers) {
     else if (hex.hpCost > 0) cost = t('hover.costHp', { hp: hex.hpCost });
     const seen = hex.terrainHeight > 0 ? t('hover.seen', { n: hex.terrainHeight }) : '';
     els.hover.textContent = `${describeHex(hex)}${cost}${seen}${canGo ? t('hover.click') : ''}`;
-    // A shop the party has already entered lists what it still sells, from any distance.
-    if (hex.encounter === 'shop' && hex.shop?.seen) {
-      const items = hex.shop.options.map((id) => {
-        const sold = !!hex.shop.bought[id];
-        const text = sold ? t('hover.shop.sold', { label: t(`shop.${id}.name`) }) : t('hover.shop.item', { label: t(`shop.${id}.name`), cost: game.shopCost(id) });
-        return `<span class="${sold ? 'shop-sold' : ''}">${escapeHtml(text)}</span>`;
-      });
-      const line = document.createElement('div');
-      line.className = 'hover-shop';
-      line.innerHTML = `${escapeHtml(t('hover.shop.title'))} ${items.join(escapeHtml(t('hover.shop.sep')))}`;
-      els.hover.appendChild(line);
-    }
   }
 
-  // Popup near the cursor, on every hovered tile: step count since the last fatigue reset,
-  // chance of a forced encounter if the party walks there (current fatigue, the HUD number),
-  // fatigue after that step, and what the tile's encounter does to fatigue.
+  // Popup near the cursor. On a tile the party can step onto this turn: the number of
+  // the step about to be taken (1 = first step since the last fatigue reset), the chance
+  // of a forced encounter on arrival, and the fatigue after that step. On any tile: what
+  // its encounter does to fatigue, and the stock of a shop already visited.
   function updateFatigueTip(hex, game) {
     const s = game.state;
     if (s.status !== 'playing') { els.tip.classList.add('hidden'); return; }
-    const next = game.fatigueAfterNextStep();
     const canGo = game.canMoveTo(hex);
-    const forced = canGo ? game.forcedChanceFor(hex) : null; // null = nothing to force here
     const parts = [];
-    const stepTag = `<span class="tip-step" title="${t('tip.step.title')}">${t('tip.step')} <b>${s.fatigueSteps}</b></span>`;
-    if (forced && forced.chance > 0 && !hex.revealed) {
-      parts.push(`<div class="tip-big">${stepTag} ${t('tip.forced', { chance: forced.chance })}</div><div class="tip-sub">${t('tip.forced.unexplored')}</div>`);
-    } else if (forced && forced.chance > 0) {
-      parts.push(`<div class="tip-big">${stepTag} ${t('tip.forced', { chance: forced.chance })}</div>`);
-    } else {
-      parts.push(`<div class="tip-big">${stepTag}</div>`);
+    if (canGo) {
+      const next = game.fatigueAfterNextStep();
+      const forced = game.forcedChanceFor(hex); // null = nothing to force here
+      const stepTag = `<span class="tip-step" title="${t('tip.step.title')}">${t('tip.step')} <b>${s.fatigueSteps + 1}</b></span>`;
+      if (forced && forced.chance > 0 && !hex.revealed) {
+        parts.push(`<div class="tip-big">${stepTag} ${t('tip.forced', { chance: forced.chance })}</div><div class="tip-sub">${t('tip.forced.unexplored')}</div>`);
+      } else if (forced && forced.chance > 0) {
+        parts.push(`<div class="tip-big">${stepTag} ${t('tip.forced', { chance: forced.chance })}</div>`);
+      } else {
+        parts.push(`<div class="tip-big">${stepTag}</div>`);
+      }
+      parts.push(`<div class="tip-small">${t('tip.after', { next, now: s.fatigue })}</div>`);
     }
-    if (canGo) parts.push(`<div class="tip-small">${t('tip.after', { next, now: s.fatigue })}</div>`);
-    else parts.push(`<div class="tip-small">${t('tip.now', { now: s.fatigue })}</div>`);
     if (hex.revealed && hex.encounter) {
       const rule = game.fatigueResetRule(hex.encounter);
       const note = game.fatigueResetNote(hex.encounter);
@@ -234,6 +224,16 @@ export function createUI(config, handlers) {
         : t('tip.reset.never', { label });
       parts.push(`<div class="tip-small">${escapeHtml(ruleText)}</div>`);
     }
+    // A shop the party has already entered lists what it still sells, from any distance.
+    if (hex.revealed && hex.encounter === 'shop' && hex.shop?.seen) {
+      const items = hex.shop.options.map((id) => {
+        const sold = !!hex.shop.bought[id];
+        const text = sold ? t('hover.shop.sold', { label: t(`shop.${id}.name`) }) : t('hover.shop.item', { label: t(`shop.${id}.name`), cost: game.shopCost(id) });
+        return `<span class="${sold ? 'shop-sold' : ''}">${escapeHtml(text)}</span>`;
+      });
+      parts.push(`<div class="tip-small tip-shop">${escapeHtml(t('hover.shop.title'))} ${items.join(escapeHtml(t('hover.shop.sep')))}</div>`);
+    }
+    if (!parts.length) { els.tip.classList.add('hidden'); return; }
     els.tip.innerHTML = parts.join('');
     els.tip.classList.remove('hidden');
     placeTip();

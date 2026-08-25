@@ -23,6 +23,10 @@ const TABS = [
 // Keys that are not meant to be edited by hand (visual placeholders, long texts).
 const SKIP_KEYS = new Set(['shape', 'info', 'flavour', 'names', 'icon']);
 
+// Sections whose children are uniform records (tile types, biomes): shown as one
+// table - rows = entries, columns = attributes - instead of one group per entry.
+const MATRIX_SECTIONS = new Set(['tileTypes', 'biomes']);
+
 export function createSettings({ config, defaults, onChange, onToggleCamera, getCameraMode, getUiScale, onSetUiScale, onClose }) {
   const $ = (id) => document.getElementById(id);
   const win = $('settings');
@@ -35,6 +39,33 @@ export function createSettings({ config, defaults, onChange, onToggleCamera, get
   for (const [path, value] of Object.entries(overrides)) setPath(config, path, value);
 
   $('btn-settings-close').addEventListener('click', close);
+  // "Copy changes": every property that differs from the config-file default goes
+  // to the clipboard as "path = value (default: ...)" lines - handy for pasting
+  // into a chat or a note when a tuning session found keeper values.
+  $('btn-settings-copy').addEventListener('click', async () => {
+    const btn = $('btn-settings-copy');
+    const lines = [];
+    for (const path of Object.keys(overrides).sort()) {
+      const value = overrides[path];
+      const def = getPath(defaults, path);
+      if (JSON.stringify(value) === JSON.stringify(def)) continue; // typed back to the default
+      lines.push(`${path} = ${fmtValue(path, value)}  (default: ${fmtValue(path, def)})`);
+    }
+    let feedback = 'settings.copy.none';
+    if (lines.length) {
+      feedback = (await copyToClipboard(lines.join('\n'))) ? 'settings.copied' : 'settings.copy.fail';
+    }
+    const label = btn.textContent;
+    btn.textContent = t(feedback);
+    setTimeout(() => { btn.textContent = label; }, 1600);
+  });
+  function fmtValue(path, value) {
+    if (value === undefined) return '(none)';
+    if (Array.isArray(value)) return value.join(', ');
+    const key = path.split('.').pop();
+    if (kindOf(key, value, path) === 'color') return `#${Number(value).toString(16).padStart(6, '0')}`;
+    return String(value);
+  }
   $('btn-settings-reset-tab').addEventListener('click', () => {
     const tab = TABS.find((t) => t.id === activeTab);
     for (const path of Object.keys(overrides)) {
@@ -73,7 +104,9 @@ export function createSettings({ config, defaults, onChange, onToggleCamera, get
         <select id="settings-uiscale">${scaleOptions}</select><span class="settings-reset"></span></div></div>`);
     }
     for (const section of tab.sections) {
-      parts.push(renderGroup(section, config[section], defaults[section], section));
+      parts.push(MATRIX_SECTIONS.has(section)
+        ? renderMatrix(section, config[section], defaults[section], section)
+        : renderGroup(section, config[section], defaults[section], section));
     }
     bodyEl.innerHTML = parts.join('');
     bodyEl.querySelector('#btn-settings-camera')?.addEventListener('click', () => { onToggleCamera(); render(); });
@@ -117,6 +150,46 @@ export function createSettings({ config, defaults, onChange, onToggleCamera, get
     return `<div class="settings-group"><div class="settings-group-title">${title}</div>${rows.join('')}</div>`;
   }
 
+  // One table for a section of uniform records: rows = entries (tile types /
+  // biomes), columns = the union of their attributes, so the attribute names are
+  // written once in the header instead of repeating in every group.
+  function renderMatrix(title, obj, def, path) {
+    const rowNames = Object.keys(obj);
+    const cols = [];
+    for (const rn of rowNames) {
+      for (const k of Object.keys(obj[rn])) if (!SKIP_KEYS.has(k) && !cols.includes(k)) cols.push(k);
+    }
+    const head = `<tr><th></th>${cols.map((c) => `<th>${c}</th>`).join('')}</tr>`;
+    const body = rowNames.map((rn) => {
+      const cells = cols.map((c) => {
+        const value = obj[rn][c];
+        const d = def?.[rn]?.[c];
+        // An attribute this entry does not have (e.g. hpCost on a plain biome)
+        // stays an empty cell rather than inventing a value.
+        if (value === undefined && d === undefined) return '<td class="settings-empty">-</td>';
+        return `<td>${renderCell(`${path}.${rn}.${c}`, c, value, d)}</td>`;
+      }).join('');
+      return `<tr><th title="${path}.${rn}">${rn}</th>${cells}</tr>`;
+    }).join('');
+    return `<div class="settings-group settings-matrix"><div class="settings-group-title">${title}</div>
+      <div class="settings-matrix-scroll"><table><thead>${head}</thead><tbody>${body}</tbody></table></div></div>`;
+  }
+
+  // A compact table cell: the control plus a reset button that CSS shows only
+  // while the value differs from the config file.
+  function renderCell(path, key, value, def) {
+    const kind = kindOf(key, value ?? def, path);
+    let control;
+    if (kind === 'bool') control = `<input type="checkbox" data-path="${path}" data-kind="bool" ${value ? 'checked' : ''}>`;
+    else if (kind === 'color') control = `<input type="color" data-path="${path}" data-kind="color" value="#${Number(value ?? 0).toString(16).padStart(6, '0')}">`;
+    else if (kind === 'number') control = `<input type="number" step="any" data-path="${path}" data-kind="number" value="${value ?? ''}">`;
+    else control = `<input type="text" data-path="${path}" data-kind="text" value="${escapeAttr(String(value ?? ''))}">`;
+    const changed = path in overrides;
+    const defText = def === undefined ? '' : kind === 'color' ? `#${Number(def).toString(16).padStart(6, '0')}` : String(def);
+    return `<span class="settings-cell ${changed ? 'changed' : ''}" title="${path}">
+      ${control}<button class="small cell-reset" data-reset="${path}" title="${escapeAttr(t('settings.reset.title', { value: defText }))}">&#8634;</button></span>`;
+  }
+
   function kindOf(key, value, path) {
     if (typeof value === 'boolean') return 'bool';
     if (typeof value === 'number') {
@@ -153,6 +226,7 @@ export function createSettings({ config, defaults, onChange, onToggleCamera, get
 
   function markRow(input) {
     input.closest('.settings-row')?.classList.add('changed');
+    input.closest('.settings-cell')?.classList.add('changed');
   }
 
   // ----- overrides ---------------------------------------------------------
@@ -189,4 +263,27 @@ export function deepClone(v) {
 }
 function escapeAttr(s) {
   return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+// Clipboard write with a fallback for contexts without the async clipboard API
+// (e.g. plain-http hosts).
+async function copyToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove();
+      return ok;
+    } catch {
+      return false;
+    }
+  }
 }

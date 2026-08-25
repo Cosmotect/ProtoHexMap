@@ -284,8 +284,10 @@ fs.mkdirSync(OUT, { recursive: true });
   await page.waitForTimeout(100);
   await page.evaluate(() => { const i = document.querySelector('[data-path="rest.cost"]'); i.value = '33'; i.dispatchEvent(new Event('change')); });
   await page.waitForTimeout(100);
-  const applied = await page.evaluate(() => ({ cost: window.game.config.rest.cost, label: document.getElementById('btn-enter').textContent, legend: document.getElementById('legend-items').textContent.includes('33 supplies'), stored: localStorage.getItem('hexmap-settings-v1') }));
-  if (applied.cost !== 33 || !applied.label.includes('33') || !applied.legend || !applied.stored.includes('rest.cost')) problems.push('setting change did not apply everywhere: ' + JSON.stringify(applied));
+  // The Enter button shows the camp cost only on tiles without an encounter, so that
+  // part of the check adapts to wherever the walk above happened to end.
+  const applied = await page.evaluate(() => ({ cost: window.game.config.rest.cost, label: document.getElementById('btn-enter').textContent, onEncounter: !!window.game.state.position.encounter, legend: document.getElementById('legend-items').textContent.includes('33 supplies'), stored: localStorage.getItem('hexmap-settings-v1') }));
+  if (applied.cost !== 33 || (!applied.onEncounter && !applied.label.includes('33')) || !applied.legend || !applied.stored.includes('rest.cost')) problems.push('setting change did not apply everywhere: ' + JSON.stringify(applied));
   await page.screenshot({ path: path.join(OUT, '08-settings.png') });
   await page.evaluate(() => document.querySelector('[data-reset="rest.cost"]').click());
   await page.waitForTimeout(100);

@@ -67,12 +67,12 @@ export const WORLD = {
   //    biomes are listed above (so every map gets a bit of everything).
   // "frequency" is the main dial: higher = smaller, busier features.
   noise: {
-    elevation: { frequency: 0.14, octaves: 4, persistence: 0.5 },
+    elevation: { frequency: 0.15, octaves: 4, persistence: 0.5 },
     waterLevel: 0.12,
-    hillLevel: 0.75,
+    hillLevel: 0.7,
     mountainLevel: 0.9,
-    ether: { frequency: 0.11, octaves: 3, persistence: 0.5 },
-    etherLevel: 0.88,
-    biome: { frequency: 0.06, octaves: 2, persistence: 0.5 },
+    ether: { frequency: 0.05, octaves: 3, persistence: 0.2 },
+    etherLevel: 0.8,
+    biome: { frequency: 0.05, octaves: 2, persistence: 0.5 },
   },
 };
