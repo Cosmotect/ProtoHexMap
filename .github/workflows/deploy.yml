@@ -2,7 +2,7 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    branches: [dev-prototype, dev-prototype-0.2]
   workflow_dispatch:
 
 permissions:
@@ -15,11 +15,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  # Builds the "dev-prototype" branch. This becomes the site root:
+  # https://cosmotect.github.io/ProtoHexMap/
+  build-root:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout dev-prototype
         uses: actions/checkout@v6
+        with:
+          ref: dev-prototype
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -33,21 +37,71 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v4
+      - name: Upload root build (temporary, workflow-internal)
+        uses: actions/upload-artifact@v4
         with:
+          name: build-root
           path: ./dist
+          retention-days: 1
 
-  deploy:
-    needs: build
+  # Builds the "dev-prototype-0.2" branch. This becomes the /0.2/ subfolder:
+  # https://cosmotect.github.io/ProtoHexMap/0.2/
+  build-0-2:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout dev-prototype-0.2
+        uses: actions/checkout@v6
+        with:
+          ref: dev-prototype-0.2
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload 0.2 build (temporary, workflow-internal)
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-0-2
+          path: ./dist
+          retention-days: 1
+
+  # Combines both builds into one folder structure and publishes it as the
+  # single live GitHub Pages site.
+  combine-and-deploy:
+    needs: [build-root, build-0-2]
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Download root build into combined/
+        uses: actions/download-artifact@v4
+        with:
+          name: build-root
+          path: combined
+
+      - name: Download 0.2 build into combined/0.2/
+        uses: actions/download-artifact@v4
+        with:
+          name: build-0-2
+          path: combined/0.2
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload combined site as the Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: combined
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
