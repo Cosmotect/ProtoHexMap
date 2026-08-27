@@ -7,7 +7,7 @@ export const WORLD = {
   // ----- Map shape ---------------------------------------------------
   map: {
     radius: 11,             // rings of hexes around the centre tile (7 = 169 tiles, 9 = 271, 11 = 397)
-    orientation: 'pointy',  // 'pointy' (corner points up the screen) or 'flat' (flat edge up)
+    orientation: 'flat',    // 'flat' (flat edge up, default) or 'pointy' - the LOCAL map always uses the opposite
     hexSize: 1.0,           // distance from hex centre to a corner, in world units
     gap: 0.08,              // empty space between neighbouring tiles (world units)
     tileHeight: 0.35,       // thickness of a revealed tile

@@ -33,6 +33,24 @@ export const CONFIG = {
     // Win condition: destroy the Stasis Seed (see config/encounters.js, "stasis").
   },
 
+  // ----- Local map (the encounter arena, see src/local/) ---------------
+  // A separate hex grid the camera dives into when a combat encounter starts.
+  // It always uses the OPPOSITE hex orientation to the world map, so one world
+  // tile visually breaks into a sub-grid of local tiles.
+  local: {
+    radius: 6,                // rings of local hexes around the arena centre
+    hexSize: 1.0,
+    gap: 0.06,
+    tileHeight: 0.3,
+    flyInMs: 1500,            // the dive from the world map into the arena
+    flyOutMs: 1300,           // the climb back out
+    swapPoint: 0.55,          // where in the flight (0..1) the world swaps for the arena
+    shake: 0.4,               // screenshake amplitude at the peak of the flight (world units)
+    cloudColor: 0xdfe6f2,     // the clouds punched through during the flight
+    // The arena camera: rotation only (no panning, no zooming).
+    camera: { fov: 46, tiltDegrees: 55, distance: 13, minTiltDegrees: 25, maxTiltDegrees: 70 },
+  },
+
   // ----- Camera ------------------------------------------------------
   camera: {
     mode: 'perspective',      // 'perspective' or 'orthographic' (toggle in the HUD too)

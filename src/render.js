@@ -22,6 +22,10 @@ export class MapRenderer {
     this.onHexClick = null;         // callbacks set by main.js
     this.onHexHover = null;
     this.followTween = null;
+    // A cinematic (src/local/transition.js) may install this hook to take over
+    // rendering completely (camera flights, the local map). It gets dt in ms and
+    // returns true while it owns the frame.
+    this.overrideFrame = null;
 
     // --- renderer -----------------------------------------------------
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -757,6 +761,7 @@ export class MapRenderer {
     const dt = Math.min(this.timer.getDelta(), 0.1) * 1000;
     this.elapsed += dt;
     updateTweens(dt);
+    if (this.overrideFrame && this.overrideFrame(dt)) return;
     this.controls.update();
 
     if (this.hoverDirty) {

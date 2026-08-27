@@ -233,6 +233,30 @@ Three separate pools implement it (`src/config/units.js`): `battle.enemies.bands
 * **Camera**: perspective by default (tilt 52 degrees, fov 42), follows the player with a
   glide; orthographic / isometric alternative on C. Map-style controls: left-drag pan,
   right-drag orbit, wheel zoom, arrow keys pan.
+* **The LOCAL map** (`src/local/`, since 2026-08-27): combat encounters (battle, Stasis
+  Seed, Stasis Colony) play out on a separate arena grid instead of a bare window.
+  * The local grid is a hex map of `local.radius` (6) rings using the OPPOSITE hex
+    orientation to the world map (world flat-top by default -> local pointy-top), so one
+    world tile visually breaks into a sub-grid of local tiles. Local tiles are shades of
+    the world tile's final colour. Local tiles have NO gameplay logic yet.
+  * **The dive**: pressing Enter on a combat tile (or being forced in by fatigue) flies
+    the camera into that tile: FOV stretches, the screen shakes, cloud layers rush past,
+    a blur + white flash peak mid-flight - and at that peak (`local.swapPoint`) the world
+    scene is swapped for the local scene. The flight is wall-clock timed
+    (`local.flyInMs` 1500 / `flyOutMs` 1300). Party and enemy tokens stand on random
+    distinct local tiles; the fight itself still resolves through the same simulation,
+    and the results window opens over the arena. Closing it flies the camera back out
+    and restores the world camera exactly.
+  * **Arena camera**: rotation only - no panning, no zooming (`local.camera`).
+  * **Recipes (planned)**: encounters will get handcrafted arena recipes assigned at
+    spawn (tile types, elevations, set dressing, lighting). The hook exists now:
+    `applyRecipe` in `src/local/localmap.js` runs during the fly-in, right before the
+    scene swap; `startCombatDive` in main.js already forwards `hex.recipe`.
+  * **Sandboxing**: the local system lives in `src/local/` (localmap.js data,
+    localview.js scene, transition.js flight) and touches the world only through one
+    hook, `MapRenderer.overrideFrame`, plus `Game.combatIntro` (installed by main.js so
+    forced fights take the same dive). Nothing in `src/local/` reads or writes game
+    rules or world meshes.
 
 ## How the code is split (so changes land in the right file)
 
@@ -310,6 +334,12 @@ Outcome choice per type is an open question (see below); the hook does not care.
   ground #4d4f46, hill #8f8d74, mountain #b0bbc8.
   The first pass left outer-ring regular groups harder than Colonies and bosses; fixed
   the same day by rebuilding both Stasis pools around counts and HP (see below).
+* 2026-08-27 (c) **The local map**: combat now dives into an arena grid (`src/local/`,
+  radius 6, opposite hex orientation) through a cloud cinematic with a mid-flight scene
+  swap; results window over the arena; camera flies back out on Continue. World map
+  orientation default flipped to FLAT-top so its tiles visually split into pointy-top
+  local grids (`?orient=pointy` compares). Arena camera: rotation only. Recipe hook
+  prepared for future handcrafted arenas.
 * 2026-08-27 (b) **Stasis pools rebuilt** so the ladder matches the guideline: Colonies
   are 3-7 units (P50 18), the Seed 4-9 units (P50 31), against 4-8 units for an outer-ring
   regular group (P50 16). "P50" = the power per party unit at which a full-HP party wins

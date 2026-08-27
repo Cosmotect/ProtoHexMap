@@ -412,3 +412,33 @@ button.small { padding: 2px 8px; font-size: 12px; }
   .bottom-left { max-width: 60vw; }
   .stats { gap: 12px; }
 }
+
+/* ----- combat cinematic: the cloud dive (src/local/transition.js) ----- */
+.cloud-fx {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 30;               /* above the canvas, below dialogs and the guide */
+  overflow: hidden;
+}
+.cloud-fx.hidden { display: none; }
+.cloud-layer {
+  position: absolute;
+  inset: -30%;
+  background-size: 55% 55%;
+  background-repeat: repeat;
+  opacity: 0;
+  will-change: transform, opacity;
+}
+.cloud-flash {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 45%, #ffffff 0%, #dfe8f5 45%, rgba(223, 232, 245, 0.6) 100%);
+  opacity: 0;
+}
+.cloud-vignette {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 50%, transparent 42%, rgba(6, 8, 14, 0.85) 100%);
+  opacity: 0;
+}

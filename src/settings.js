@@ -17,7 +17,7 @@ const TABS = [
   { id: 'world', sections: ['map', 'noise', 'tileTypes', 'biomes'] },
   { id: 'encounters', sections: ['encounters', 'stasis', 'rest', 'acolyte', 'shop', 'treasure', 'events', 'fatigue'] },
   { id: 'units', sections: ['party', 'battle'] },
-  { id: 'general', sections: ['run', 'camera', 'anim', 'colors'] },
+  { id: 'general', sections: ['run', 'camera', 'local', 'anim', 'colors'] },
 ];
 
 // Keys that are not meant to be edited by hand (visual placeholders, long texts).

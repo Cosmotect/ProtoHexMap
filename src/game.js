@@ -379,6 +379,10 @@ export class Game {
     if (this.isForceable(hex.encounter) && rollChance > 0 && this.rng.chance(rollChance / 100)) {
       this.addLog('log.forced', { label: { key: `visual.${hex.encounter}.label` }, chance: rollChance });
       this.emit('forced', { hex, type: hex.encounter, label, chance: rollChance });
+      // The orchestrator (main.js) may install combatIntro to play the dive into
+      // the local map first; it calls the passed continuation when the camera has
+      // arrived. Returns true when it took over.
+      if (this.combatIntro && this.combatIntro(hex, () => this.enter(true))) return;
       this.enter(true);
       return;
     }

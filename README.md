@@ -80,13 +80,14 @@ Handy URL switches (add them to the address):
 | URL | Effect |
 |---|---|
 | `?seed=1234` | Same map every time. The seed is also shown in the HUD and saved in the address bar. |
-| `?orient=flat` | Flat-top hexes instead of pointy-top. |
+| `?orient=pointy` | Pointy-top world hexes instead of the default flat-top. |
 | `?camera=ortho` | Start in the top-down (orthographic) camera. |
 | `?npe=1` | Start the guided new player experience (fixed map, interface revealed piece by piece). |
 
 Keyboard: **E** enter the encounter / make camp, **M** menu, **C** camera toggle, **N** new map,
 **R** restart, arrow keys pan.
 Mouse: left-drag pan, right-drag rotate/tilt, wheel zoom, left-click a glowing tile to move.
+Inside a combat arena (the local map) the camera only rotates - no panning or zooming.
 
 ---
 
@@ -117,6 +118,9 @@ hex-world-map/
     hex.js       hex grid maths (axial coordinates, neighbours, distance)
     rng.js       seeded random numbers (same seed = same map)
     render.js    the Three.js scene: tiles, fog, markers, player token, camera, mouse picking
+    local/localmap.js     LOCAL map data (the encounter arena grid) + the future recipe hook
+    local/localview.js    the arena's own Three.js scene, tokens and rotate-only camera
+    local/transition.js   the cloud-dive cinematic between the world and the arena
     ui.js        the HUD: status bar, party panel, log, legend, menu, encounter windows, confirm box
     tween.js     tiny animation helper (like Godot's Tween)
     style.css    HUD styling

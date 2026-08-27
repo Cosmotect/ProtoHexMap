@@ -134,6 +134,46 @@ fs.mkdirSync(OUT, { recursive: true });
   await page.screenshot({ path: path.join(OUT, '01e-reward-chooser.png') });
   await dismissDialog();
 
+  // The combat cinematic: Enter on a battle dives into the local map (clouds,
+  // scene swap), the results window opens over the arena, closing it flies back.
+  await page.evaluate(() => {
+    const g = window.game; const hex = g.state.position;
+    hex.encounter = 'battle';
+    hex.enemies = [{ name: 'Raider', hp: 14, maxHp: 14, power: 3, alive: true }, { name: 'Husk', hp: 12, maxHp: 12, power: 3, alive: true }];
+    g.emit('change');
+  });
+  await page.waitForTimeout(200);
+  await page.click('#btn-enter');
+  await page.waitForTimeout(700);
+  const midFlight = await page.evaluate(() => ({
+    mode: window.__cinematic.mode(),
+    clouds: !document.getElementById('cloud-fx').classList.contains('hidden'),
+    dialog: !document.getElementById('dialog').classList.contains('hidden'),
+  }));
+  if (midFlight.mode !== 'in' || !midFlight.clouds || midFlight.dialog) problems.push('fly-in state wrong at 700ms: ' + JSON.stringify(midFlight));
+  await page.screenshot({ path: path.join(OUT, '20-dive-mid.png') });
+  await page.waitForTimeout(1400);
+  const landed = await page.evaluate(() => ({
+    mode: window.__cinematic.mode(),
+    dialog: !document.getElementById('dialog').classList.contains('hidden'),
+    tiles: window.__localView.map ? window.__localView.map.hexes.size : 0,
+    tokens: window.__localView.tokens.length,
+    orientation: window.__localView.map ? window.__localView.map.orientation : '?',
+    pan: window.__localView.controls ? window.__localView.controls.enablePan : null,
+    zoom: window.__localView.controls ? window.__localView.controls.enableZoom : null,
+  }));
+  if (landed.mode !== 'local' || !landed.dialog) problems.push('did not land in the local map with the results open: ' + JSON.stringify(landed));
+  if (landed.tiles !== 127) problems.push(`local map should have 127 tiles (radius 6), got ${landed.tiles}`);
+  if (landed.tokens !== 5) problems.push(`expected 3 party + 2 enemy tokens, got ${landed.tokens}`);
+  if (landed.orientation === (await page.evaluate(() => window.game.config.map.orientation))) problems.push('local map orientation should be opposite to the world map');
+  if (landed.pan !== false || landed.zoom !== false) problems.push('local camera must not pan or zoom: ' + JSON.stringify(landed));
+  await page.screenshot({ path: path.join(OUT, '21-local-map.png') });
+  await dismissDialog();
+  await dismissDialog();
+  await page.waitForTimeout(1800);
+  const backOut = await page.evaluate(() => ({ mode: window.__cinematic.mode(), filter: window.__renderer.renderer.domElement.style.filter }));
+  if (backOut.mode !== 'idle' || backOut.filter) problems.push('did not return cleanly to the world map: ' + JSON.stringify(backOut));
+
   // The Stasis, straight through the rules layer: placement, line growth, colony
   // spawn, withering and debuffs.
   const stasisProblems = await page.evaluate(() => {
@@ -371,8 +411,11 @@ fs.mkdirSync(OUT, { recursive: true });
     const chev = await page.evaluate(() => { const g = window.game; const rec = window.__renderer.tiles.get(g.state.position.key); return rec?.marker?.userData.chevrons.length; });
     console.log('chevrons on this battle:', chev);
     await page.screenshot({ path: path.join(OUT, '09-npe-encounter-card.png') });
-    await page.click('#btn-tutorial-ok'); await page.waitForTimeout(2200);
-    const after = await page.evaluate(() => ({ dialog: !document.getElementById('dialog').classList.contains('hidden'), title: document.getElementById('tutorial-title').textContent }));
+    await page.click('#btn-tutorial-ok');
+    // The dive is wall-clock 1.5s, but the software renderer here can run below
+    // 1 fps late in the test, so poll for the report instead of a fixed wait.
+    await page.waitForFunction(() => !document.getElementById('dialog').classList.contains('hidden'), null, { timeout: 25000 }).catch(() => {});
+    const after = await page.evaluate(() => ({ dialog: !document.getElementById('dialog').classList.contains('hidden'), title: document.getElementById('tutorial-title').textContent, mode: window.__cinematic.mode(), lastBattle: !!window.game.state.lastBattle, posEnc: window.game.state.position.encounter, turn: window.game.state.turn }));
     if (!after.dialog) problems.push('forced encounter did not run after the encounter card: ' + JSON.stringify(after));
   }
 

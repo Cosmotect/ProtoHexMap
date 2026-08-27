@@ -7,6 +7,7 @@ import { createUI } from './ui.js';
 import { resolveSeed } from './rng.js';
 import { createTutorial, NPE_SEED } from './tutorial.js';
 import { createSettings, deepClone } from './settings.js';
+import { createCombatCinematic } from './local/transition.js';
 import { t, tn, initLanguage, applyStaticTexts, onLanguageChange } from './i18n.js';
 import { tc } from './text.js';
 
@@ -34,11 +35,11 @@ const container = document.getElementById('scene');
 
 // URL switches, handy for comparing variants without editing config.js:
 //   ?seed=1234        same map every time
-//   ?orient=flat      flat-top hexes instead of pointy-top
+//   ?orient=pointy    pointy-top world hexes instead of the default flat-top
 //   ?camera=ortho     start in the top-down camera
 //   ?npe=1            start the guided new player experience
 const params = new URLSearchParams(window.location.search);
-if (params.get('orient') === 'flat') CONFIG.map.orientation = 'flat';
+if (params.get('orient') === 'flat' || params.get('orient') === 'pointy') CONFIG.map.orientation = params.get('orient');
 
 // The config files are the defaults; settings saved in the browser are applied on top
 // (createSettings does that immediately), so they take precedence.
@@ -48,7 +49,7 @@ let ui = null;
 const settings = createSettings({
   config: CONFIG,
   defaults: DEFAULTS,
-  onToggleCamera: () => renderer.toggleCameraMode(),
+  onToggleCamera: () => { if (!cinematic.isActive()) renderer.toggleCameraMode(); },
   getCameraMode: () => renderer.cameraMode,
   getUiScale: loadUiScale,
   onSetUiScale: (v) => applyUiScale(v),
@@ -64,17 +65,57 @@ let game = null;
 let pendingEnd = false;
 let holdDialogsUntil = 0;
 
+// ----- the local map + the dive into it (src/local/) -----------------------
+// Combat encounters (battle, Stasis Seed, Stasis Colony) play out on a LOCAL
+// map: pressing Enter dives the camera into the tile through the clouds, the
+// world scene swaps for the arena mid-flight, the fight resolves there, and
+// closing the results window flies the camera back out.
+const cinematic = createCombatCinematic({ renderer, config: CONFIG, container });
+window.__cinematic = cinematic; // for debugging / automated tests
+const COMBAT_TYPES = new Set(['battle', 'stasisSeed', 'stasisColony']);
+
+// Starts the dive; `resume` runs the actual encounter once the camera lands.
+function startCombatDive(hex, resume) {
+  const enemies = (hex.enemies ?? []).map((e) => ({ ...e }));
+  return cinematic.flyIn({
+    worldHex: hex,
+    baseColor: renderer.targetColorFor(hex).getHex(),
+    party: game.livingUnits(),
+    enemies,
+    seed: game.seed,
+    recipe: hex.recipe ?? null,   // future: handcrafted arena recipes live on the hex
+    onArrived: () => {
+      // The wither may have eaten the encounter while we were in the air.
+      if (COMBAT_TYPES.has(hex.encounter)) resume();
+      else cinematic.flyOut({});
+    },
+  });
+}
+
 ui = createUI(CONFIG, {
   isInputBlocked: () => tutorial.isBlocking(),
   isSubWindowOpen: () => settings.isOpen(),
   onOpenSettings: () => { settings.open(); ui.updateBlur(); },
   onEscape: () => { if (settings.isOpen()) { settings.close(); ui.updateBlur(); } },
-  onDialogClosed: () => { if (pendingEnd && game.state.status !== 'playing' && !tutorial.isBlocking()) { pendingEnd = false; ui.showEnd(game); } },
+  onDialogClosed: () => {
+    const finishEnd = () => { if (pendingEnd && game.state.status !== 'playing' && !tutorial.isBlocking()) { pendingEnd = false; ui.showEnd(game); } };
+    // The results window just closed inside the arena: fly back out first.
+    if (cinematic.isActive() && !ui.dialogOpen()) { cinematic.flyOut({ onDone: finishEnd }); return; }
+    finishEnd();
+  },
   onNewMap: () => startRun(resolveSeed()),
   onRestart: () => startRun(game.seed),
-  onToggleCamera: () => renderer.toggleCameraMode(),
+  onToggleCamera: () => { if (!cinematic.isActive()) renderer.toggleCameraMode(); },
   onRevealAll: () => game.revealAll(),
-  onEnter: () => { if (!renderer.busy && !ui.dialogOpen() && !tutorial.isBlocking()) game.enter(false); },
+  onEnter: () => {
+    if (renderer.busy || ui.dialogOpen() || tutorial.isBlocking() || cinematic.isActive()) return;
+    const action = game.enterAction();
+    if (action.kind === 'encounter' && COMBAT_TYPES.has(action.type)) {
+      startCombatDive(game.state.position, () => game.enter(false));
+      return;
+    }
+    game.enter(false);
+  },
   onLoadSeed: (value) => startRun(resolveSeed(value)),
   onStartNpe: () => startRun(resolveSeed(NPE_SEED), { npe: true }),
 });
@@ -84,10 +125,13 @@ tutorial.setOnIdle(() => { if (pendingEnd && game && game.state.status !== 'play
 
 function startRun(seed, opts = {}) {
   pendingEnd = false;
+  cinematic.abort();
   ui.closeDialog();
   tutorial.finish('restart');
   game = new Game(CONFIG, seed);
   window.game = game; // handy for poking at the state in the browser console
+  // Forced fights (fatigue) take the same dive as the Enter button.
+  game.combatIntro = (hex, resume) => (cinematic.isActive() ? false : startCombatDive(hex, resume));
 
   // Keep the seed in the address bar so the link can be shared.
   try {
@@ -120,7 +164,7 @@ function startRun(seed, opts = {}) {
       // If a battle report / event is open, the end screen waits until it is closed.
       setTimeout(() => {
         if (thisGame !== game || game.state.status === 'playing') return;
-        if (ui.dialogOpen() || tutorial.isBlocking()) pendingEnd = true; else ui.showEnd(game);
+        if (ui.dialogOpen() || tutorial.isBlocking() || cinematic.isActive()) pendingEnd = true; else ui.showEnd(game);
       }, CONFIG.anim.hopMs + 250);
     }
   });
@@ -287,6 +331,7 @@ function escapeHtml(s) {
 }
 
 renderer.onHexClick = (hex) => {
+  if (cinematic.isActive()) return;   // the world is not on screen
   if (ui.dialogOpen()) { ui.flashDialog(); return; }
   if (tutorial.isBlocking()) return;
   if (renderer.busy) return;
