@@ -1,6 +1,12 @@
 // =====================================================================
 //  UNIT CONFIG - the player's party and everything about how units fight.
 //  (Part of the config split: world.js / encounters.js / units.js / config.js)
+//
+//  POWER SCALE (since 2026-08-27): every power number in the game lives on a
+//  x3 scale, so that a single upgrade is a small step rather than a doubling.
+//  The damage multiplier divides the power difference by battle.powerStep (3)
+//  before using it as an exponent, so "3 power" here reads like "1 power" did
+//  before. Keep the two in sync if you ever rescale again.
 // =====================================================================
 
 export const UNITS = {
@@ -9,9 +15,9 @@ export const UNITS = {
   // move as one token. "icon" is a placeholder glyph shown in the party panel.
   party: {
     units: [
-      { name: 'Vanguard', icon: '🛡️', hp: 40, maxHp: 40, power: 1 },
-      { name: 'Archer', icon: '🏹', hp: 28, maxHp: 28, power: 1 },
-      { name: 'Mystic', icon: '🔮', hp: 22, maxHp: 22, power: 1 },
+      { name: 'Vanguard', icon: '🛡️', hp: 40, maxHp: 40, power: 3 },
+      { name: 'Archer', icon: '🏹', hp: 28, maxHp: 28, power: 3 },
+      { name: 'Mystic', icon: '🔮', hp: 22, maxHp: 22, power: 3 },
     ],
     hpSegment: 10,            // one bar segment per this many HP
   },
@@ -19,39 +25,90 @@ export const UNITS = {
   // ----- Battle simulation --------------------------------------------
   battle: {
     damageMin: 2,
-    damageMax: 10,
+    damageMax: 8,
     // Bell curve control: the roll is the average of this many uniform rolls.
     // 1 = flat (every value equally likely), 2 = triangle, 3+ = increasingly bell shaped.
-    bellDice: 4,
-    powerBase: 1.2,           // damage *= powerBase ^ (attacker power - defender power)
+    bellDice: 3,
+    // Damage multiplier: powerBase ^ ((attacker power - defender power) / powerStep).
+    // Continuous: 3 points of difference are worth one full 1.1x, and every single
+    // point in between moves the number a little. Only the final damage is rounded.
+    powerBase: 1.1,
+    powerStep: 3,
     // Player units hit harder the closer they are to death ("playing carefully"):
     // damage *= 1 + desperation * (1 - hp / maxHp). 0 = off, 0.5 = up to +50% at 1 HP.
     desperation: 0.5,
     // Enemy target choice: weight grows with the target's remaining HP fraction,
     // raised to this exponent (0 = pick uniformly at random).
     healthyTargetBias: 2,
-    victoryPower: 1,          // power awarded to a chosen unit after winning a battle
+    victoryPower: 3,          // power awarded to a chosen unit after winning a battle
     victorySupplies: 5,       // supplies salvaged after winning any battle (incl. Stasis)
     maxRounds: 100,           // safety cap for the simulation loop
-    // Regular enemy groups. Power scales with the ring (distance from the centre),
-    // using the same "table with interpolation" rule as fatigue.
+    // Regular enemy groups. Difficulty is a function of the RING (distance from the
+    // map centre), described as bands: how many enemies the group holds and how much
+    // power the whole group is worth. The group's total power is rolled inside
+    // [powerMin, powerMax] and then split as evenly as possible between its units
+    // (the remainder goes to random members, so a group is not always uniform).
+    // A ring above the last band's maxRing uses the last band.
     enemies: {
-      countMin: 2,
-      countMax: 3,
       hpMin: 14,
       hpMax: 22,
-      powerByRing: { 0: 0, 9: 5 },
+      bands: {
+        inner: { maxRing: 3, countMin: 1, countMax: 3, powerMin: 3, powerMax: 6 },
+        middle: { maxRing: 7, countMin: 2, countMax: 5, powerMin: 24, powerMax: 30 },
+        outer: { maxRing: 11, countMin: 4, countMax: 8, powerMin: 50, powerMax: 60 },
+      },
       names: ['Raider', 'Drifter', 'Husk', 'Warden', 'Stalker'],
     },
-    // The Stasis pool: the Stasis Seed and every Stasis Colony roll one of these
-    // variants (seeded). Power sits in the 4-7 range by design, so the party is
-    // expected to arrive upgraded.
+    // The boss pool: ONLY the Stasis Seed rolls one of these (seeded). 80-100 on the
+    // 0-100 difficulty scale of the design guideline (see README): the run's final wall,
+    // and considerably harder than anything the outer rings hold.
+    // Shape: every variant mixes a few heavy hitters with a screen of chaff, or is a
+    // large equal-power choir. A unit's own "power" overrides the variant's "power",
+    // which is the value the unlisted (chaff) units use.
+    // Measured (600 simulated fights per point): a full-HP party beats these when each
+    // of its units is around 31 power - about twice what an outer-ring group asks for.
     bosses: [
-      { title: 'Forge Tyrant', power: 4, units: [{ name: 'Forge Tyrant', hp: 60 }, { name: 'Tyrant\'s Shadow', hp: 40 }] },
-      { title: 'Warden of the Rim', power: 6, units: [{ name: 'Warden of the Rim', hp: 120 }] },
-      { title: 'Husk Choir', power: 4, units: [{ name: 'Choir Husk', hp: 24 }, { name: 'Choir Husk', hp: 24 }, { name: 'Choir Husk', hp: 24 }, { name: 'Choir Husk', hp: 24 }] },
-      { title: 'Ether Leviathan', power: 7, units: [{ name: 'Ether Leviathan', hp: 150 }] },
-      { title: 'Twin Stalkers', power: 5, units: [{ name: 'Pale Stalker', hp: 55 }, { name: 'Dark Stalker', hp: 55 }] },
+      { title: 'Forge Tyrant', power: 11, units: [
+        { name: 'Forge Tyrant', hp: 110, power: 26 }, { name: 'Tyrant\'s Shadow', hp: 55, power: 17 },
+        { name: 'Forge Hound', hp: 22 }, { name: 'Forge Hound', hp: 22 }, { name: 'Forge Hound', hp: 22 }] },
+      { title: 'Warden of the Rim', power: 12, units: [
+        { name: 'Warden of the Rim', hp: 135, power: 29 },
+        { name: 'Rim Sentry', hp: 26 }, { name: 'Rim Sentry', hp: 26 }, { name: 'Rim Sentry', hp: 26 }, { name: 'Rim Sentry', hp: 26 }] },
+      { title: 'Husk Choir', power: 12, units: [
+        { name: 'Choir Husk', hp: 20 }, { name: 'Choir Husk', hp: 20 }, { name: 'Choir Husk', hp: 20 },
+        { name: 'Choir Husk', hp: 20 }, { name: 'Choir Husk', hp: 20 }, { name: 'Choir Husk', hp: 20 },
+        { name: 'Choir Husk', hp: 20 }, { name: 'Choir Husk', hp: 20 }, { name: 'Choir Husk', hp: 20 }] },
+      { title: 'Ether Leviathan', power: 11, units: [
+        { name: 'Ether Leviathan', hp: 165, power: 32 },
+        { name: 'Ether Spawn', hp: 28 }, { name: 'Ether Spawn', hp: 28 }, { name: 'Ether Spawn', hp: 28 }] },
+      { title: 'Twin Stalkers', power: 10, units: [
+        { name: 'Pale Stalker', hp: 70, power: 23 }, { name: 'Dark Stalker', hp: 70, power: 23 },
+        { name: 'Stalker Shade', hp: 18 }, { name: 'Stalker Shade', hp: 18 },
+        { name: 'Stalker Shade', hp: 18 }, { name: 'Stalker Shade', hp: 18 }] },
+    ],
+    // The Colony pool: every Stasis Colony rolls one of these (seeded). 50-70 on the
+    // same scale - a step ABOVE the toughest regular groups of the outer rings, and far
+    // below a boss. Same shapes as the bosses (leaders + chaff, or an equal-power swarm)
+    // at smaller numbers, so a Colony reads as a set piece rather than a bigger patrol.
+    // Measured: a full-HP party beats these at around 18 power per unit, against 16 for
+    // an outer-ring group and 31 for a boss.
+    colonies: [
+      { title: 'Colony Warden', power: 8, units: [
+        { name: 'Colony Warden', hp: 80, power: 18 },
+        { name: 'Warden Servitor', hp: 28 }, { name: 'Warden Servitor', hp: 28 }, { name: 'Warden Servitor', hp: 28 }] },
+      { title: 'Stasis Brood', power: 10, units: [
+        { name: 'Brood Husk', hp: 20 }, { name: 'Brood Husk', hp: 20 }, { name: 'Brood Husk', hp: 20 },
+        { name: 'Brood Husk', hp: 20 }, { name: 'Brood Husk', hp: 20 }, { name: 'Brood Husk', hp: 20 }] },
+      { title: 'Twin Sentinels', power: 7, units: [
+        { name: 'Pale Sentinel', hp: 54, power: 15 }, { name: 'Dark Sentinel', hp: 54, power: 15 },
+        { name: 'Stasis Mote', hp: 20 }, { name: 'Stasis Mote', hp: 20 }] },
+      { title: 'Colony Anchor', power: 9, units: [
+        { name: 'Colony Anchor', hp: 115, power: 22 },
+        { name: 'Anchor Tether', hp: 34 }, { name: 'Anchor Tether', hp: 34 }] },
+      { title: 'Rot Chorus', power: 9, units: [
+        { name: 'Rot Chorister', hp: 16 }, { name: 'Rot Chorister', hp: 16 }, { name: 'Rot Chorister', hp: 16 },
+        { name: 'Rot Chorister', hp: 16 }, { name: 'Rot Chorister', hp: 16 }, { name: 'Rot Chorister', hp: 16 },
+        { name: 'Rot Chorister', hp: 16 }] },
     ],
   },
 };

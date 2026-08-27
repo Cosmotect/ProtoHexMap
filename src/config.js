@@ -45,7 +45,7 @@ export const CONFIG = {
     maxTiltDegrees: 72,
     orthoTiltDegrees: 30,     // starting tilt of the orthographic (isometric style) camera
     orthoViewHeight: 14,      // how many world units tall the orthographic view is
-    followPlayer: true,       // camera glides after the player when they move
+    followPlayer: false,      // camera glides after the player when they move
     followDurationMs: 650,
   },
 

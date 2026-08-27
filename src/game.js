@@ -3,7 +3,7 @@
 import { createRng } from './rng.js';
 import { generateMap, setType, setBiome } from './map.js';
 import { hexKey, neighbors, hexesInRange, hexDistance } from './hex.js';
-import { simulateBattle, makeEnemies, makeRegulars, renameDuplicates } from './battle.js';
+import { simulateBattle, makeEnemies, makeRegulars, renameDuplicates, regularUnitPower } from './battle.js';
 import { EVENTS, LORE_IDS } from './events.js';
 import { t, tn } from './i18n.js';
 
@@ -22,7 +22,7 @@ export class Game {
     // battle can be shown before the party enters it.
     for (const h of this.map.hexes.values()) {
       if (h.encounter === 'battle' || h.encounter === 'stasisSeed') {
-        h.enemies = makeEnemies(this.rng, config.battle, h.ring, h.isSeed, lerpTable);
+        h.enemies = makeEnemies(this.rng, config.battle, h.ring, h.isSeed ? 'boss' : 'regular');
       }
     }
 
@@ -209,7 +209,7 @@ export class Game {
     for (const id of this.activeDebuffsFor(hex)) {
       if (id === 'power') party -= cfgDebuffs.power.amount * living.length;
       else if (id === 'extraEnemies') {
-        const extraPower = Math.round(lerpTable(this.config.battle.enemies.powerByRing, hex.ring));
+        const extraPower = regularUnitPower(this.config.battle, hex.ring);
         enemy += cfgDebuffs.extraEnemies.count * extraPower;
       }
     }
@@ -318,7 +318,7 @@ export class Game {
   spawnColony(c) {
     c.active = true;
     c.hex.encounter = 'stasisColony';
-    c.hex.enemies = makeEnemies(this.rng, this.config.battle, c.hex.ring, true, lerpTable);
+    c.hex.enemies = makeEnemies(this.rng, this.config.battle, c.hex.ring, 'colony');
     this.addLog('log.colonySpawn', {
       where: { hex: { type: c.hex.type, biome: c.hex.biome, q: c.hex.q, r: c.hex.r } },
       debuff: { key: `debuff.${c.debuff}.name` },
@@ -583,7 +583,7 @@ export class Game {
   resolveBattle(hex, forced, opts = {}) {
     const s = this.state;
     const isStasis = hex.isSeed || hex.isColony;
-    const enemies = hex.enemies ?? makeEnemies(this.rng, this.config.battle, hex.ring, isStasis, lerpTable);
+    const enemies = hex.enemies ?? makeEnemies(this.rng, this.config.battle, hex.ring, hex.isSeed ? 'boss' : hex.isColony ? 'colony' : 'regular');
     hex.enemies = null;
 
     // Stasis debuffs: temporarily weaken the party and/or reinforce the enemy for
@@ -600,7 +600,7 @@ export class Game {
       } else if (id === 'power') {
         for (const u of s.party) u.power -= cfgDebuffs.power.amount;
       } else if (id === 'extraEnemies') {
-        enemies.push(...makeRegulars(this.rng, this.config.battle, hex.ring, cfgDebuffs.extraEnemies.count, lerpTable));
+        enemies.push(...makeRegulars(this.rng, this.config.battle, hex.ring, cfgDebuffs.extraEnemies.count));
         renameDuplicates(enemies);
       }
     }

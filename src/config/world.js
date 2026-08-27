@@ -28,9 +28,9 @@ export const WORLD = {
   tileTypes: {
     ether: { passable: false, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 0, color: 0x0d1020, height: 0, biomeTint: false },
     water: { passable: false, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 1, color: 0x3c7dc4, height: 0.18, biomeTint: false },
-    ground: { passable: true, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 0, color: 0x93a56b, height: 0.35, biomeTint: true },
-    hill: { passable: true, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 1, color: 0xa89a70, height: 0.55, biomeTint: true },
-    mountain: { passable: true, supplyCost: 10, hpCost: 5, revealBonus: 2, terrainHeight: 2, color: 0x8e929c, height: 0.95, biomeTint: true },
+    ground: { passable: true, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 0, color: 0x4d4f46, height: 0.35, biomeTint: true },
+    hill: { passable: true, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 1, color: 0x8f8d74, height: 0.55, biomeTint: true },
+    mountain: { passable: true, supplyCost: 10, hpCost: 5, revealBonus: 2, terrainHeight: 2, color: 0xb0bbc8, height: 0.95, biomeTint: true },
   },
 
   // ----- Biomes ---------------------------------------------------------
@@ -44,7 +44,7 @@ export const WORLD = {
   //  * tintAllTypes: true - recolours even types with biomeTint: false (e.g. water)
   biomes: {
     grasslands: { color: 0x62c454 },
-    forest: { color: 0x1f6b38 },
+    forest: { color: 0x135b32 },
     mesa: { color: 0xc4622e },
     desert: { color: 0xe0b360 },
     dunes: { color: 0xf0dca2 },
@@ -53,7 +53,7 @@ export const WORLD = {
     // run (see game.js witherNear). The tile keeps its TYPE - its shape and movement
     // rules - but turns Stasis-purple, hurts to step onto and is seen from 1 further.
     // Withered water dries into walkable ground; ether is never withered.
-    wither: { color: 0x3b2a6e, generated: false, hpCost: 1, terrainHeight: 1, tintAmount: 1, tintAllTypes: true },
+    wither: { color: 0x3b2a6e, generated: false, hpCost: 1, terrainHeight: 1, tintAmount: 0.5, tintAllTypes: true },
   },
 
   // ----- Generation noise ------------------------------------------------

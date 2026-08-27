@@ -10,6 +10,16 @@ layer where the player picks where to go next between battles. Battles themselve
 prototyped separately (HEX-BOX, https://hex-box.pages.dev). This prototype only needs to
 **simulate the outcomes** of encounters, never the encounters themselves.
 
+### Design guideline: the difficulty scale (2026-08-27)
+
+> If we consider the entire range of combat difficulties in the game as a 0-100 rating,
+> the regular combat encounters should occupy the space from 0 to 60, Stasis Colonies
+> would rate between 50 and 70, and bosses would rate between 80 and 100.
+
+Three separate pools implement it (`src/config/units.js`): `battle.enemies.bands`
+(regular groups, scaled by ring), `battle.colonies` (Stasis Colonies) and
+`battle.bosses` (the Stasis Seed only).
+
 ## Links
 
 * Hosted playable build (Claude artifact, updatable in place by republishing with this URL):
@@ -36,7 +46,7 @@ prototyped separately (HEX-BOX, https://hex-box.pages.dev). This prototype only 
     the Seed cone's height to the site (it does not follow the terrain), and is drawn
     only over revealed tiles (fog hides the rest).
   * Each Colony rolls one random **debuff** at generation (duplicates allowed, they stack):
-    `maxHp` (party max HP -25% for the fight), `power` (party power -2), `extraEnemies`
+    `maxHp` (party max HP -25% for the fight), `power` (party power -6), `extraEnemies`
     (+2 regular enemies). While a Colony is active its debuff also applies to the Seed
     fight - with all four Colonies up, the Seed is fought under 4 stacked debuffs. Debuffs
     are temporary per fight; damage taken stays.
@@ -104,10 +114,24 @@ prototyped separately (HEX-BOX, https://hex-box.pages.dev). This prototype only 
 * **Encounter logic** (`game.js enter()`):
   * *Battle / Stasis Seed / Stasis Colony*: automatic simulation (`battle.js`). Player
     strikes first unless the battle was forced by fatigue. Each unit hits a random living
-    enemy; damage = a bell shaped roll in [`damageMin`, `damageMax`] (average of `bellDice`
-    uniform rolls) times `powerBase` ^ (attacker power - defender power). Enemy groups:
-    `countMin..countMax` units, HP `hpMin..hpMax`, power from `powerByRing` (interpolated
-    by ring). Seed and Colony groups roll one of the `battle.bosses` variants (power 4-7).
+    enemy; damage = a roll in [`damageMin`, `damageMax`] (2-8, bell shaped: the average of
+    `bellDice` (3) uniform rolls) times
+    `powerBase` ^ ((attacker power - defender power) / `powerStep`) - i.e. 1.1x per 3 points
+    of power difference, continuous (only the final damage is rounded).
+    **All power numbers live on a x3 scale** (party units start at 3, a victory or a shop
+    upgrade grants 3, the black market 6, a Colony debuff removes 6).
+    Regular enemy groups are described by RING BANDS (`battle.enemies.bands`): each band
+    gives a count range and a range for the group's TOTAL power, which is rolled and then
+    split as evenly as possible between its units. Current bands: rings 1-3 = 1-3 enemies
+    worth 3-6 power total, rings 4-7 = 2-5 enemies worth 24-30, rings 8-11 = 4-8 enemies
+    worth 50-60. HP stays `hpMin..hpMax` per enemy. The Stasis Seed rolls one of the
+    `battle.bosses` variants (power 12-21); a Stasis Colony rolls its own separate pool,
+    `battle.colonies` - added 2026-08-27 because the bosses were too strong for Colony
+    fights. Both Stasis pools mix a few heavy hitters with a screen of chaff, or field one
+    large equal-power choir; a unit's own `power` overrides the variant's `power`, which
+    the chaff uses. Measured on 600 simulated fights per data point, the party power per
+    unit at which a full-HP party wins half the time is 16 for an outer-ring regular
+    group, 18 for a Colony and 31 for the Seed - the ladder the 0-100 guideline asks for.
     Enemy groups are rolled when the map is generated / when the Colony spawns
     (`hex.enemies`), so a revealed fight shows its danger up front:
     floor((enemy power - living party power) / 2) red chevrons above the marker
@@ -118,7 +142,7 @@ prototyped separately (HEX-BOX, https://hex-box.pages.dev). This prototype only 
     player shielding the wounded and is deliberately not surfaced in the UI). A report
     dialog shows every blow (plus the Stasis debuffs that applied) as structured lines
     rendered through the locale tables; after a win the player picks a unit that gains
-    `battle.victoryPower` (1) - twice (`stasis.rewardPicks`) after a Colony. Destroying
+    `battle.victoryPower` (3) - twice (`stasis.rewardPicks`) after a Colony. Destroying
     the Seed wins the run.
   * *Treasure*: +`treasure.supplies` (40). Does not reset fatigue. Supplies found in the
     field (Treasure, Fortunate find) open a dialog; if they would overflow the maximum and
@@ -128,16 +152,16 @@ prototyped separately (HEX-BOX, https://hex-box.pages.dev). This prototype only 
     `blobSize` hidden tiles), Rumours (reveals up to 3 hidden battles within 3, or the nearest
     hidden ones anywhere when none are in range), Vantage point
     (reveals radius 2 plus all mountains within 5), Fortunate find (+10..20 supplies),
-    Wandering scholar (+1 power to one random living unit), Forge procession (reveals nearest
-    hidden Acolyte), Black market (choose a unit: -1/3 max HP, +1 power, or decline),
+    Wandering scholar (+`events.scholarPower` (3) power to one random living unit), Forge procession
+    (reveals nearest hidden Acolyte), Black market (choose a unit: -1/3 max HP, +6 power, or decline),
     Nomads (a battle, same rules as a battle encounter), The merchant's caravan (acts as
     a rest site: heals and resets fatigue), Learned about the world (lore text only, weight 2). Does not reset fatigue (except Nomads, which is a battle).
-    Black market trades 1/3 max HP for +`events.blackMarketPower` (2) power.
+    Black market trades 1/3 max HP for +`events.blackMarketPower` (6) power.
   * **Flavour lines**: battle victories, treasure, the shop, the Acolyte and camps each
     draw one lore line from their pool (`flavour.<kind>.<n>` in the locale table,
     pool sizes in `game.js FLAVOUR_POOL`), shown in the window (camps: in the log).
-  * *Shop*: opens a dialog. Rest = `shop.restCost` (35) resets fatigue; Upgrade =
-    `shop.upgradeCost` (25), +1 power on a chosen unit; Local map = `shop.mapCost` (15)
+  * *Shop*: opens a dialog. Rest = `shop.restCost` (15) resets fatigue; Upgrade =
+    `shop.upgradeCost` (25), +`shop.upgradeAmount` (3) power on a chosen unit; Local map = `shop.mapCost` (15)
     reveals a patch of `events.blobSize` tiles. The shop stays on the tile and entering it
     does not reset fatigue.
   * *Acolyte of the Great Forge*: restores one chosen fallen unit to `acolyte.reviveFraction`
@@ -273,6 +297,27 @@ Outcome choice per type is an open question (see below); the hook does not care.
   into the void (the floor plane sits 30 units below, fading into the fog). Ether
   hexes stay in the map data, impassable for now, so future mechanics can navigate
   them.
+* 2026-08-27 **Power rescaled x3** across the whole game (party, victory reward, shop
+  upgrade / relic, scholar, black market, Colony debuff, boss pool) and the damage
+  formula changed to `roll(2..8, bell of 3) * 1.1 ^ (powerDiff / 3)` - the exponent is
+  continuous (only the final damage is rounded), so every point of power counts a little.
+  The flat progression this gives is deliberate: the owner wants to feel it in play first. Regular encounter difficulty is now a
+  RING BAND table (count range + total-power range per band) instead of a single
+  `powerByRing` value. Stasis Colonies got their own enemy pool (`battle.colonies`),
+  separate from the bosses, which were judged too strong for them. The 0-100 difficulty
+  guideline above was written down as the yardstick for all of it. Owner's config calls:
+  forest #135b32, wither tintAmount 0.5, camera followPlayer off, shop rest 15,
+  ground #4d4f46, hill #8f8d74, mountain #b0bbc8.
+  The first pass left outer-ring regular groups harder than Colonies and bosses; fixed
+  the same day by rebuilding both Stasis pools around counts and HP (see below).
+* 2026-08-27 (b) **Stasis pools rebuilt** so the ladder matches the guideline: Colonies
+  are 3-7 units (P50 18), the Seed 4-9 units (P50 31), against 4-8 units for an outer-ring
+  regular group (P50 16). "P50" = the power per party unit at which a full-HP party wins
+  half the time, measured with a binary search over 600 simulated fights per point
+  (`node bench.mjs`, kept out of the repo). Shapes are deliberately varied: equal-power
+  swarms (Husk Choir 9, Rot Chorus 7, Stasis Brood 6) and hierarchies (a 26-32 power
+  leader plus chaff). Also: `bellDice` back to 3 (bell shaped damage) and the damage
+  exponent is no longer rounded.
 
 ## Open questions
 
@@ -282,6 +327,10 @@ Outcome choice per type is an open question (see below); the hook does not care.
 4. Map shape: rectangle now. Branching "lanes" like Slay the Spire, or an open field?
 5. Is "supplies" the resource we want, or days / food / something tied to the battle prototype?
 6. Do we want elevation on the world map (the battle prototype has it)?
+7. (2026-08-27) Party HP never grows, only power does, and power is a weak multiplier
+   by design. So the late game is gated on how many upgrades a run can collect: reaching
+   ~18 power on all three units takes about 15 wins or shop upgrades. Is that the pacing
+   we want, or should HP or healing scale too?
 
 ## Roadmap (suggested order)
 

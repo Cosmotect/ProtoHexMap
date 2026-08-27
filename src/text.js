@@ -8,8 +8,10 @@ const pct = (f) => `${Math.round(f * 100)}%`;
 // Placeholders usable inside locale strings (visual.*.info, npe.*).
 export function placeholders(config) {
   const c = config;
-  const enemyPowerMax = Math.max(...Object.values(c.battle.enemies.powerByRing));
+  const bands = Object.values(c.battle.enemies.bands);
+  const enemyPowerMax = Math.max(...bands.map((b) => b.powerMax));
   const bossPowers = c.battle.bosses.map((b) => b.power);
+  const colonyPowers = (c.battle.colonies ?? c.battle.bosses).map((b) => b.power);
   return {
     colonyCount: c.stasis.colonyCount,
     rewardPicks: c.stasis.rewardPicks,
@@ -36,6 +38,8 @@ export function placeholders(config) {
     acolyteMin: c.encounters.guaranteed?.acolyte ?? 0,
     bossPowerMin: Math.min(...bossPowers),
     bossPowerMax: Math.max(...bossPowers),
+    colonyPowerMin: Math.min(...colonyPowers),
+    colonyPowerMax: Math.max(...colonyPowers),
     enemyPowerMax,
     unitCount: c.party.units.length,
     damageMin: c.battle.damageMin,

@@ -57,7 +57,7 @@ export const ENCOUNTERS = {
     // The debuff pool. Each Colony rolls one id; values are read by the battle code.
     debuffs: {
       maxHp: { fraction: 0.25 },     // party max HP reduced by this fraction (per stack)
-      power: { amount: 2 },          // party power reduced by this much (per stack)
+      power: { amount: 6 },          // party power reduced by this much (per stack)
       extraEnemies: { count: 2 },    // extra regular enemies join the fight (per stack)
     },
   },
@@ -90,9 +90,9 @@ export const ENCOUNTERS = {
     pool: ['rest', 'relic', 'rumors', 'spareParts'],
     randomCount: 2,
     upgradeCost: 25,
-    upgradeAmount: 1,         // shared by "upgrade" and "relic"
+    upgradeAmount: 3,         // shared by "upgrade" and "relic"
     mapCost: 15,
-    restCost: 20,             // a camp costs rest.cost (20); same price by default
+    restCost: 15,             // a shop bed is a little cheaper than pitching your own camp (rest.cost)
     relicCost: 25,
     rumorsCost: 15,
     sparePartsCost: 30,
@@ -111,9 +111,9 @@ export const ENCOUNTERS = {
     vantageMountainRadius: 5,
     suppliesMin: 10,
     suppliesMax: 20,
-    scholarPower: 1,          // +power for ONE random living unit
+    scholarPower: 3,          // +power for ONE random living unit
     blackMarketHpFraction: 1 / 3,  // max HP sacrificed...
-    blackMarketPower: 2,           // ...for this much power
+    blackMarketPower: 6,           // ...for this much power
     // "Merchant caravan" acts as a rest site: same healing as a camp (rest.healFraction).
   },
 

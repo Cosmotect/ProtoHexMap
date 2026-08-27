@@ -12,6 +12,22 @@ Plain JavaScript, no framework.
 
 ---
 
+## 0. Design guideline: the difficulty scale
+
+> If we consider the entire range of combat difficulties in the game as a 0-100 rating,
+> the regular combat encounters should occupy the space from 0 to 60, Stasis Colonies
+> would rate between 50 and 70, and bosses would rate between 80 and 100.
+
+Every change to enemy pools, power numbers or damage maths is judged against this scale.
+The three pools live in `src/config/units.js`: `battle.enemies.bands` (regular groups, by
+ring), `battle.colonies` (Stasis Colonies) and `battle.bosses` (the Stasis Seed).
+
+The way it is measured: **P50**, the power per party unit at which a full-HP party of
+three wins half the time. As of 2026-08-27 an outer-ring regular group sits at P50 16,
+a Stasis Colony at 18 (slightly harder) and the Stasis Seed at 31 (considerably harder).
+
+---
+
 ## 1. The moving parts, explained for an Unreal / Godot person
 
 | Thing | What it is | Closest thing you know |

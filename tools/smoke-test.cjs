@@ -121,7 +121,10 @@ fs.mkdirSync(OUT, { recursive: true });
   await page.evaluate(() => { const g = window.game; const hex = g.state.position; hex.encounter = 'battle'; hex.enemies = [{ name: 'Dummy', hp: 1, maxHp: 1, power: 0, alive: true }]; g.enter(false); });
   await page.waitForTimeout(250);
   const rewardBtn = await page.evaluate(() => [...document.querySelectorAll('#dialog-actions button')].map((b) => b.textContent).join('|'));
-  if (!rewardBtn.includes('+1 power')) problems.push('battle report lacks the reward button: ' + rewardBtn);
+  // The reward text is built from config (battle.victoryPower), so read it rather than
+  // hardcoding a number that a balance pass will change.
+  const victoryPower = await page.evaluate(() => window.game.config.battle.victoryPower);
+  if (!rewardBtn.includes(`+${victoryPower} power`)) problems.push('battle report lacks the reward button: ' + rewardBtn);
   const transcript = await page.evaluate(() => document.getElementById('dialog-body').textContent);
   if (/\{(attacker|defender|dmg)\}/.test(transcript)) problems.push('battle transcript shows raw placeholders');
   await page.evaluate(() => { document.querySelector('#dialog-actions button').click(); });
@@ -173,6 +176,21 @@ fs.mkdirSync(OUT, { recursive: true });
   await page.goto(URL, { waitUntil: 'load', timeout: 60000 });
   await page.waitForTimeout(1200);
 
+  // The camera only glides after the party when camera.followPlayer is on. With it off
+  // the party walks out of view and projected tile positions stop being usable, so the
+  // test recentres by hand between steps.
+  const recenter = async () => {
+    const moved = await page.evaluate(() => {
+      const r = window.__renderer, g = window.game;
+      if (!r || !g || r.config.camera.followPlayer) return false;
+      const rec = r.tiles.get(g.state.position.key);
+      if (!rec) return false;
+      r.followTo(rec.mesh.position);
+      return true;
+    });
+    if (moved) await page.waitForTimeout(800);
+  };
+
   // Walk a couple of steps so fatigue rises, then check the hover popup.
   for (let i = 0; i < 6; i++) {
     await waitIdle();
@@ -183,8 +201,10 @@ fs.mkdirSync(OUT, { recursive: true });
     await page.mouse.down(); await page.mouse.up();
     await page.waitForTimeout(150);
     await dismissDialog();
+    await recenter();
   }
   await waitIdle();
+  await recenter();
   const probe = await page.evaluate(() => { const g = window.game; const n = g.reachable()[0]; return n ? [n.q, n.r, g.fatigueAfterNextStep()] : null; });
   if (probe && probe[2] > 0) {
     const p = await screenPos(probe[0], probe[1]);
