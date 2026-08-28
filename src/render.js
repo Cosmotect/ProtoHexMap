@@ -40,10 +40,13 @@ export class MapRenderer {
 
     // --- scene --------------------------------------------------------
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(config.colors.background);
+    // The world map's own background settings (the local map has its own set).
+    const bg = config.worldBackground;
+    this.scene.background = new THREE.Color(bg.color);
     // "Atmosphere" fog: distant tiles fade into the background (not the gameplay fog of war).
-    this.atmosphere = new THREE.Fog(config.colors.background, 30, 80);
-    this.scene.fog = this.atmosphere;
+    this.atmosphere = new THREE.Fog(bg.color, bg.fogNear, bg.fogFar);
+    this.scene.fog = bg.fog === false ? null : this.atmosphere;
+    this.groundMaterial = null;   // set by buildGround; kept so the colour can be re-applied live
     this.timer = new THREE.Timer();
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2(-10, -10);
@@ -81,13 +84,25 @@ export class MapRenderer {
 
     // The "floor" far below the map: seen through the ether holes, it sits deep in
     // the atmosphere fog and reads as a bottomless void under the landmass.
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(400, 400),
-      new THREE.MeshStandardMaterial({ color: this.config.colors.ground, roughness: 1, metalness: 0 })
-    );
+    this.groundMaterial = new THREE.MeshStandardMaterial({ color: this.config.worldBackground.groundColor, roughness: 1, metalness: 0 });
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), this.groundMaterial);
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = -30;
     this.scene.add(ground);
+  }
+
+  // Re-reads config.worldBackground onto the live scene, so tweaking the colour
+  // or the fog distances in Settings shows up immediately instead of on the next
+  // map. (The local map reads its own settings every time it is built.)
+  applyBackground() {
+    const bg = this.config.worldBackground;
+    const col = new THREE.Color(bg.color);
+    this.scene.background = col;
+    this.atmosphere.color.copy(col);
+    this.atmosphere.near = bg.fogNear;
+    this.atmosphere.far = bg.fogFar;
+    this.scene.fog = (this.cameraMode === 'orthographic' || bg.fog === false) ? null : this.atmosphere;
+    if (this.groundMaterial) this.groundMaterial.color.set(bg.groundColor);
   }
 
   buildSharedGeometry() {
@@ -193,7 +208,7 @@ export class MapRenderer {
     this.controls = controls;
     this.cameraMode = mode;
     // Distance based fog makes no sense for a camera without perspective.
-    this.scene.fog = mode === 'orthographic' ? null : this.atmosphere;
+    this.scene.fog = (mode === 'orthographic' || this.config.worldBackground.fog === false) ? null : this.atmosphere;
   }
 
   toggleCameraMode() {

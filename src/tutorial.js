@@ -19,9 +19,10 @@ const PIECES = {
   statusbar: '#statusbar',
   fatiguebar: '#fatigue-bar',
   party: '#party',
-  log: '.bottom-left',
   legend: '.bottom-right',
 };
+// (The event log is not here: it is off by default and lives in Settings > General,
+// so the guide neither hides nor reveals it.)
 // (The menu is never hidden: it is the one control that always answers, but cards may point at it.)
 const TARGETS = { ...PIECES, menu: '#menu-wrap' };
 
@@ -278,7 +279,7 @@ export function createTutorial({ config, ui, renderer }) {
         k === 'acolyte' ? 'acolyte' :
         k === 'supplies' ? (payload.titleKey === 'treasure.title' ? 'treasure' : 'event') :
         'event';
-      sayRaw(`enc:${kind}`, encounterLabel(kind), `<p>${encounterInfo(kind, config)}</p>`, { target: { el: '#dialog' }, onShow: () => reveal('log') });
+      sayRaw(`enc:${kind}`, encounterLabel(kind), `<p>${encounterInfo(kind, config)}</p>`, { target: { el: '#dialog' } });
       if (k === 'battle') say('battle-report', 'npe.report', {}, { target: { el: '#dialog' }, onShow: () => reveal('legend') });
     }
 

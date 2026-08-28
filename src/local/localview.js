@@ -15,6 +15,17 @@ import { createRng } from '../rng.js';
 const SQRT3 = Math.sqrt(3);
 const deg = (d) => (d * Math.PI) / 180;
 
+// Canvas rounded-rectangle path (roundRect is not in every browser yet).
+function roundRect(g, x, y, w, h, r) {
+  g.beginPath();
+  g.moveTo(x + r, y);
+  g.arcTo(x + w, y, x + w, y + h, r);
+  g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r);
+  g.arcTo(x, y, x + w, y, r);
+  g.closePath();
+}
+
 export class LocalMapView {
   constructor(webglRenderer, domElement, config) {
     this.renderer = webglRenderer;
@@ -44,10 +55,13 @@ export class LocalMapView {
     const rng = createRng((seed ?? 1) ^ ((worldHex?.q ?? 0) * 73856093) ^ ((worldHex?.r ?? 0) * 19349663));
     this.rng = rng;
 
+    this.layout = layout;
     this.map = generateLocalMap(this.config, recipe);
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(this.config.colors.background);
-    this.scene.fog = new THREE.Fog(this.config.colors.background, 26, 70);
+    // The local map's own background settings, separate from the world map's.
+    const bg = this.config.localBackground;
+    this.scene.background = new THREE.Color(bg.color);
+    this.scene.fog = bg.fog === false ? null : new THREE.Fog(bg.color, bg.fogNear, bg.fogFar);
 
     // Lights (recipes will drive these later via map.lighting).
     const hemi = new THREE.HemisphereLight(0xdfe9ff, 0x3b2f2a, 1.05);
@@ -67,7 +81,7 @@ export class LocalMapView {
     // The void floor far below, like on the world map.
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(300, 300),
-      new THREE.MeshStandardMaterial({ color: this.config.colors.ground, roughness: 1 })
+      new THREE.MeshStandardMaterial({ color: bg.groundColor, roughness: 1 })
     );
     floor.rotation.x = -Math.PI / 2;
     floor.position.y = -30;
@@ -136,9 +150,31 @@ export class LocalMapView {
     this.campfire = { group: g, flame, core, light };
   }
 
-  // Seats the living party on alternating tiles of the first ring, facing the fire.
+  // Seats the party on the first ring, on the tiles FURTHEST from the camera, so
+  // the shot reads as "looking across the fire at the party". The ring is sorted
+  // by depth (the far side first) and the seats are taken in order, which keeps
+  // the group together on neighbouring tiles instead of scattering it around the
+  // fire. Sorting rather than hard-coding keys means a change of hex orientation
+  // or radius cannot silently put someone behind the lens.
   placeCampParty(party) {
-    const seats = ['1,0', '-1,1', '0,-1', '1,-1', '-1,0', '0,1'];
+    const ring = [];
+    for (const tile of this.map.hexes.values()) {
+      if (Math.max(Math.abs(tile.q), Math.abs(tile.r), Math.abs(tile.q + tile.r)) === 1) ring.push(tile);
+    }
+    // Sort by how far each tile sits from "straight back", measured as the angle
+    // between it and the away-from-camera direction. Taking seats in that order
+    // fills the back-centre tile first and then its two neighbours, which is a
+    // contiguous row across the far side of the fire.
+    const az = deg(this.config.local.startCamera?.azimuthDegrees ?? 0);
+    const away = { x: -Math.sin(az), z: -Math.cos(az) };
+    const bearing = (tile) => {
+      const x = tile.x, z = -tile.y;          // world position of the tile
+      const dot = x * away.x + z * away.z;
+      const cross = x * away.z - z * away.x;
+      return Math.abs(Math.atan2(cross, dot));
+    };
+    ring.sort((a, b) => bearing(a) - bearing(b) || a.x - b.x);
+    const seats = ring.map((tile) => `${tile.q},${tile.r}`);
     this.campSeats = seats;
     party.forEach((u, i) => this.addPartyToken(u, i, seats[i % seats.length]));
   }
@@ -163,7 +199,45 @@ export class LocalMapView {
     );
     body.geometry.translate(0, 0.4, 0);
     body.userData.partyIndex = index;
+    // A little portrait floating over the head, so the three identical capsules
+    // can be told apart at a glance. A Sprite always faces the camera, so it
+    // stays readable however the shot is rotated.
+    if (unit?.icon) body.add(this.makePortrait(unit.icon));
     this.attachToken(tileKey, body, c.playerGlow, (this.rng?.random() ?? Math.random()) * Math.PI * 2);
+  }
+
+  // The unit's glyph drawn onto a canvas and hung above it as a billboard.
+  // Textures are cached per glyph: three units sharing an icon share one texture.
+  makePortrait(glyph) {
+    this.portraitCache = this.portraitCache ?? new Map();
+    let tex = this.portraitCache.get(glyph);
+    if (!tex) {
+      const size = 128;
+      const cv = document.createElement('canvas');
+      cv.width = size; cv.height = size;
+      const g = cv.getContext('2d');
+      // A dark rounded plate behind the glyph: without it a light emoji
+      // disappears against a pale tile.
+      g.fillStyle = 'rgba(10, 14, 24, 0.72)';
+      roundRect(g, 6, 6, size - 12, size - 12, 26);
+      g.fill();
+      g.strokeStyle = 'rgba(255, 209, 102, 0.75)';
+      g.lineWidth = 5;
+      roundRect(g, 6, 6, size - 12, size - 12, 26);
+      g.stroke();
+      g.font = `${Math.round(size * 0.58)}px "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif`;
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillText(glyph, size / 2, size / 2 + 2);
+      tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      this.portraitCache.set(glyph, tex);
+    }
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+    sprite.scale.setScalar(0.42);
+    sprite.position.set(0, 1.0, 0);
+    sprite.renderOrder = 10;   // always drawn on top, never buried in a tile
+    return sprite;
   }
 
   attachToken(tileKey, mesh, lightColor, phase) {
@@ -236,24 +310,35 @@ export class LocalMapView {
   }
 
   buildCamera() {
-    const cam = this.config.local.camera;
+    const pose = this.finalCameraPose();
     const w = this.domElement.clientWidth || window.innerWidth;
     const h = this.domElement.clientHeight || window.innerHeight;
-    this.camera = new THREE.PerspectiveCamera(cam.fov, w / h, 0.1, 300);
-    const pose = this.finalCameraPose();
+    this.camera = new THREE.PerspectiveCamera(pose.fov, w / h, 0.1, 300);
     this.camera.position.copy(pose.position);
-    this.camera.lookAt(0, 0, 0);
+    this.camera.lookAt(pose.target);
   }
 
-  // Where the camera settles after the fly-in.
+  // Where the camera settles - the arena's resting pose. The start screen (the
+  // campfire) has its own, closer, composed shot; this is also the pose the
+  // fly-out to the world map starts from, so the two always agree.
   finalCameraPose() {
-    const cam = this.config.local.camera;
+    const isCamp = this.layout === 'camp';
+    const cam = isCamp
+      ? { ...this.config.local.camera, ...(this.config.local.startCamera ?? {}) }
+      : this.config.local.camera;
     const tilt = deg(cam.tiltDegrees);
+    const az = isCamp ? deg(cam.azimuthDegrees ?? 0) : 0;
+    const height = isCamp ? (cam.targetHeight ?? 0) : 0;
+    const ground = cam.distance * Math.sin(tilt);   // how far out in the XZ plane
     return {
-      position: new THREE.Vector3(0, cam.distance * Math.cos(tilt), cam.distance * Math.sin(tilt)),
-      target: new THREE.Vector3(0, 0, 0),
+      position: new THREE.Vector3(ground * Math.sin(az), height + cam.distance * Math.cos(tilt), ground * Math.cos(az)),
+      target: new THREE.Vector3(0, height, 0),
       fov: cam.fov,
     };
+  }
+  // True while the current shot is a locked one (the start screen).
+  controlsLocked() {
+    return this.layout === 'camp' && (this.config.local.startCamera?.lockControls ?? false);
   }
   // Where the camera is at the moment of the world -> local swap: high above the
   // arena, looking straight down, as if still falling through the clouds.
@@ -262,8 +347,11 @@ export class LocalMapView {
   }
 
   // Rotation only: no panning, no zooming (the arena is one screen).
+  // A locked shot (the start screen) gets no controls at all.
   activate() {
     if (this.controls) this.controls.dispose();
+    this.controls = null;
+    if (this.controlsLocked()) return;
     const cam = this.config.local.camera;
     const controls = new MapControls(this.camera, this.domElement);
     controls.target.set(0, 0, 0);
@@ -322,5 +410,9 @@ export class LocalMapView {
     this.tokens = [];
     this.campfire = null;
     this.campSeats = null;
+    this.layout = null;
+    // portraitCache is deliberately kept: the traverse above disposes the
+    // per-sprite materials but never the textures, and one small texture per
+    // glyph is worth reusing for the whole session.
   }
 }

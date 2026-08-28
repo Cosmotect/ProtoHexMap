@@ -192,16 +192,30 @@ Three separate pools implement it (`src/config/units.js`): `battle.enemies.bands
   re-tuning the table re-colours the bar by itself. The box that just filled shakes once
   and then breathes in a slow sine until the next step replaces it. A reset empties the
   row right to left. Sounds come from `audio.js`.
-* **Sound** (`audio.js`, `config.audio`): no audio files - every blip is synthesised with
-  the Web Audio API (sine oscillator, short attack, exponential decay, low-pass filter, a
-  small downward glide). Each fatigue box sounds `audio.stepSemitones` higher than the one
-  before it; a reset walks the ladder back down, lower and quieter. Pitch and volume get a
-  small random jitter on every play (`pitchJitter`, `gainJitter`) so a sound heard
-  thousands of times never repeats exactly. Browsers forbid audio before a user gesture,
-  so the AudioContext is created on the first click and the game is simply silent until
-  then.
-* **HUD**: top-centre **fatigue bar** (see below), bottom-centre status bar (the turn, the
-  Enter button, supplies), party panel on the left middle, log bottom left, legend bottom right
+* **Event log** (bottom left): a design / debugging aid, so it is **off by default**.
+  Settings > General ("Show event log", next to the UI scale) turns it on; like the UI
+  scale it is a browser preference in localStorage, not a config value, and the guided
+  run neither hides nor reveals it.
+* **Backgrounds** (`config.worldBackground`, `config.localBackground`, both on the World
+  settings tab): the colour behind the map, whether distance fog is on and where it
+  starts and ends, and the colour of the void floor far below. The two maps are tuned
+  separately - a wide vista and a single tile blown up to arena size want different
+  numbers. World changes apply live (`renderer.applyBackground`); local ones apply the
+  next time an arena is built.
+* **Sound** (`audio.js`): no audio files - every blip is synthesised with the Web Audio
+  API. The voice is deliberately muted: a sine oscillator, a slow 26 ms attack (a fast
+  one is what makes a tone read as a "pluck"), a short hold, a long soft decay, and a
+  low-pass at 1.7x the pitch that closes further as the note fades, the way a damped
+  sound really behaves. Each fatigue box sounds a step higher than the one before it; a
+  reset walks the ladder back down, lower and quieter. Pitch and volume get a small
+  random jitter on every play, so a sound heard thousands of times never repeats
+  exactly. All of that lives in one `VOICE` block at the top of the file - it is
+  voicing, not tuning, so it is NOT in the settings window: `config.audio` holds only
+  `volume`, on its own **Audio** tab. Browsers forbid audio before a user gesture, so
+  the AudioContext is created on the first click and the game is silent until then.
+* **HUD**: one top-centre bar holding supplies, the **fatigue scale** (see below) and the
+  turn, separated by hairlines; a bottom-centre status bar that is now just the Enter
+  button; the party panel on the left middle, the legend bottom right
   (collapsed; expands on hover, each entry expands on click with its `info` text from the
   config), and a top-right **Menu** (seed, load, copy link, new map, restart, reveal map,
   settings, new player experience; key M). The world blurs while the menu or the settings
@@ -282,9 +296,17 @@ Three separate pools implement it (`src/config/units.js`): `battle.enemies.bands
   load; behind it the game loads STRAIGHT into the local map of the starting tile - the
   "start screen": the party sits on tiles around a flickering campfire. Clicking a party
   unit (its 3D token, or its row in the party panel) opens the **roster**: a
-  fighting-game style grid of portraits (icon, name, HP, power) built from
-  `config.party.roster` (10 characters; current members are greyed out with an "in
-  party" tag). Clicking an entry swaps that party slot (`game.setPartyUnit`, only at
+  fighting-game style grid of portraits (icon, name, HP, power), five to a row, built
+  from `config.party.roster` (10 characters; current members are greyed out with an "in
+  party" tag). The roster is the ONLY place a character's numbers are written: the run
+  opens with its first `party.size` (3) entries, so there is no second list to keep in
+  sync and the Units settings tab has no per-unit rows.
+  The start shot is composed, not explored (`config.local.startCamera`): the camera sits
+  close to the fire, spun 30 degrees so a tile - not the seam between two - is dead
+  centre behind the flame, which is what lets the party sit as one row of three across
+  the far side. Its controls are locked, and that exact pose is what the fly-out to the
+  world map starts from, so "Begin journey" lifts off from the shot the player was
+  looking at. Clicking an entry swaps that party slot (`game.setPartyUnit`, only at
   turn 0) and reseats the tokens. "Begin journey" sits exactly where the Enter button
   lives on the world map; pressing it plays the same zoom-out-through-the-clouds
   flight, and the run officially begins. `?nostart=1` (tests) and `?npe=1` skip the
@@ -319,6 +341,19 @@ Outcome choice per type is an open question (see below); the hook does not care.
 
 ## Decisions log
 
+* 2026-08-28 Second UI pass. Supplies and the turn moved INTO the top bar on either side
+  of the fatigue scale (hairline separators between them), leaving the bottom bar as one
+  button - one place to read the run's state instead of two. The event log went off by
+  default with a switch in Settings > General: it is a design tool, not something a
+  player needs on screen. Audio settings collapsed to a single volume on their own tab
+  and the blip was revoiced to something muted (slow attack, heavy low-pass) - the rest
+  of the synth is a voicing decision and belongs in the code, not in a tuning window.
+  Party units carry a billboard portrait above their heads on the local map, because
+  three identical capsules told the player nothing. The start-screen camera became its
+  own locked, composed shot (and the pose the fly-out departs from). Backgrounds split
+  into worldBackground / localBackground. Tile types and biomes stopped being
+  full-width tables so they flow in the same columns as every other settings section.
+  `party.units` deleted: the roster is now the single source of a character's numbers.
 * 2026-08-28 (b) **The start flow**: black Everlands splash masking the load, boot
   straight into the campfire start screen on the local map of the start tile, a
   fighting-game roster grid (7 new selectable characters: Warden, Stonestep,

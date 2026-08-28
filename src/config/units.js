@@ -14,14 +14,14 @@ export const UNITS = {
   // The three units the player controls inside encounters. On the world map they
   // move as one token. "icon" is a placeholder glyph shown in the party panel.
   party: {
-    units: [
-      { name: 'Vanguard', icon: '🛡️', hp: 40, maxHp: 40, power: 3 },
-      { name: 'Archer', icon: '🏹', hp: 28, maxHp: 28, power: 3 },
-      { name: 'Mystic', icon: '🔮', hp: 22, maxHp: 22, power: 3 },
-    ],
+    // How many characters the player starts with. There is no separate list of
+    // starting units any more: the run opens with the FIRST `size` entries of the
+    // roster below, so a character's numbers live in exactly one place. Reorder
+    // the roster to change who the default party is.
+    size: 3,
     hpSegment: 10,            // one bar segment per this many HP
     // Everyone the player can take along, shown in the start-screen roster grid
-    // (the first three are the default party). Stats on the x3 power scale;
+    // (the first `size` are the default party). Stats on the x3 power scale;
     // hp doubles as maxHp when a character joins.
     roster: [
       { name: 'Vanguard', icon: '🛡️', hp: 40, power: 3 },

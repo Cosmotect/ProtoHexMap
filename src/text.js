@@ -41,7 +41,7 @@ export function placeholders(config) {
     colonyPowerMin: Math.min(...colonyPowers),
     colonyPowerMax: Math.max(...colonyPowers),
     enemyPowerMax,
-    unitCount: c.party.units.length,
+    unitCount: c.party.size ?? 3,
     damageMin: c.battle.damageMin,
     damageMax: c.battle.damageMax,
   };

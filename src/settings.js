@@ -14,20 +14,24 @@ const STORAGE_KEY = 'hexmap-settings-v1';
 // Which config sections live on which tab (mirrors the config files). Labels and
 // notes come from the locale tables (settings.tab.<id>, settings.note.<id>).
 const TABS = [
-  { id: 'world', sections: ['map', 'noise', 'tileTypes', 'biomes'] },
+  { id: 'world', sections: ['map', 'worldBackground', 'localBackground', 'noise', 'tileTypes', 'biomes'] },
   { id: 'encounters', sections: ['encounters', 'stasis', 'rest', 'acolyte', 'shop', 'treasure', 'events', 'fatigue'] },
   { id: 'units', sections: ['party', 'battle'] },
-  { id: 'general', sections: ['run', 'camera', 'local', 'anim', 'audio', 'fatigueBar', 'colors'] },
+  { id: 'general', sections: ['run', 'camera', 'local', 'anim', 'fatigueBar', 'colors'] },
+  { id: 'audio', sections: ['audio'] },
 ];
 
 // Keys that are not meant to be edited by hand (visual placeholders, long texts).
 const SKIP_KEYS = new Set(['shape', 'info', 'flavour', 'names', 'icon']);
 
-// Sections whose children are uniform records (tile types, biomes): shown as one
-// table - rows = entries, columns = attributes - instead of one group per entry.
-const MATRIX_SECTIONS = new Set(['tileTypes', 'biomes']);
+// Sections shown as one wide table (rows = entries, columns = attributes)
+// instead of one group per entry. Empty on purpose: a table that wide has to
+// span the full width of the window, which pushed tile types and biomes onto
+// their own rows below everything else. As ordinary groups they flow into the
+// same columns as every other section. Put a name back here to get the table.
+const MATRIX_SECTIONS = new Set();
 
-export function createSettings({ config, defaults, onChange, onToggleCamera, getCameraMode, getUiScale, onSetUiScale, onClose }) {
+export function createSettings({ config, defaults, onChange, onToggleCamera, getCameraMode, getUiScale, onSetUiScale, getShowLog, onSetShowLog, onClose }) {
   const $ = (id) => document.getElementById(id);
   const win = $('settings');
   const tabsEl = $('settings-tabs');
@@ -101,7 +105,9 @@ export function createSettings({ config, defaults, onChange, onToggleCamera, get
       const scaleOptions = scales.map((s) => `<option value="${s}" ${Math.abs(s - current) < 0.01 ? 'selected' : ''}>${Math.round(s * 100)}%</option>`).join('');
       parts.push(`<div class="settings-group"><div class="settings-group-title">${t('settings.uiscale.group')}</div>
         <div class="settings-row"><span class="settings-label">${t('settings.uiscale')}</span>
-        <select id="settings-uiscale">${scaleOptions}</select><span class="settings-reset"></span></div></div>`);
+        <select id="settings-uiscale">${scaleOptions}</select><span class="settings-reset"></span></div>
+        <div class="settings-row"><span class="settings-label">${t('settings.showlog')}</span>
+        <input type="checkbox" id="settings-showlog" ${getShowLog && getShowLog() ? 'checked' : ''}><span class="settings-reset"></span></div></div>`);
     }
     for (const section of tab.sections) {
       parts.push(MATRIX_SECTIONS.has(section)
@@ -112,6 +118,7 @@ export function createSettings({ config, defaults, onChange, onToggleCamera, get
     bodyEl.querySelector('#btn-settings-camera')?.addEventListener('click', () => { onToggleCamera(); render(); });
     bodyEl.querySelector('#settings-language')?.addEventListener('change', (e) => { setLanguage(e.target.value); render(); });
     bodyEl.querySelector('#settings-uiscale')?.addEventListener('change', (e) => { if (onSetUiScale) onSetUiScale(Number(e.target.value)); });
+    bodyEl.querySelector('#settings-showlog')?.addEventListener('change', (e) => { if (onSetShowLog) onSetShowLog(e.target.checked); });
     bodyEl.querySelectorAll('[data-path]').forEach((input) => {
       input.addEventListener('change', () => {
         const path = input.dataset.path;
@@ -193,7 +200,9 @@ export function createSettings({ config, defaults, onChange, onToggleCamera, get
   function kindOf(key, value, path) {
     if (typeof value === 'boolean') return 'bool';
     if (typeof value === 'number') {
-      const isColor = key === 'color' || (path.startsWith('colors.') && !/tint|height/i.test(key));
+      // "color", anything ending in "Color" (groundColor, cloudColor...), and the
+      // whole colors section get a colour picker instead of a raw number.
+      const isColor = key === 'color' || /Color$/.test(key) || (path.startsWith('colors.') && !/tint|height/i.test(key));
       return isColor ? 'color' : 'number';
     }
     return 'text';

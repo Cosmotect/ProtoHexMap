@@ -47,10 +47,20 @@
         </div>
       </div>
 
-      <!-- Fatigue bar (top centre): one box per step, each showing the fatigue %
-           that step brings. Boxes fill up as the party walks and empty on a reset. -->
-      <div class="panel top-center fatigue-bar" id="fatigue-bar" data-i18n-title="fatiguebar.title">
-        <div id="fatigue-boxes" class="fatigue-boxes"></div>
+      <!-- Top-centre bar: supplies on the left, the fatigue scale in the middle
+           (one box per step, each showing the fatigue % that step brings; the
+           boxes fill as the party walks and empty on a reset), the turn on the
+           right. Hairline separators keep the three readings apart. -->
+      <div class="panel top-center fatigue-bar" id="fatigue-bar">
+        <div class="bar-slot" id="slot-supplies">
+          <div class="stat"><span class="label" data-i18n="status.supplies">Supplies</span><span id="stat-supplies" class="value">-</span></div>
+        </div>
+        <div class="bar-sep"></div>
+        <div id="fatigue-boxes" class="fatigue-boxes" data-i18n-title="fatiguebar.title"></div>
+        <div class="bar-sep"></div>
+        <div class="bar-slot" id="slot-turn">
+          <div class="stat"><span class="label" data-i18n="status.turn">Turn</span><span id="stat-turn" class="value">-</span></div>
+        </div>
       </div>
 
       <div class="panel left-mid party" id="party">
@@ -75,22 +85,17 @@
         </div>
       </div>
 
-      <!-- Status bar: the turn on the left, the Enter button in the middle, supplies on the right.
-           (Fatigue lives in its own bar at the top of the screen.) -->
+      <!-- Status bar: just the one action button. Supplies, fatigue and the turn
+           all live in the top-centre bar. -->
       <div class="panel bottom-center statusbar" id="statusbar">
-        <div class="stats">
-          <div class="stat"><span class="label" data-i18n="status.turn">Turn</span><span id="stat-turn" class="value">-</span></div>
-        </div>
         <button id="btn-enter" class="enter" disabled>Enter</button>
-        <div class="stats">
-          <div class="stat"><span class="label" data-i18n="status.supplies">Supplies</span><span id="stat-supplies" class="value">-</span></div>
-        </div>
       </div>
 
       <div id="fatigue-tip" class="fatigue-tip hidden"></div>
       <div id="banner" class="banner hidden"></div>
 
-      <div class="panel bottom-left">
+      <!-- The event log. Hidden by default; Settings > General turns it back on. -->
+      <div class="panel bottom-left hidden" id="log-panel">
         <div id="log" class="log"></div>
       </div>
 

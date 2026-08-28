@@ -121,7 +121,7 @@ hex-world-map/
     local/localmap.js     LOCAL map data (the encounter arena grid) + the future recipe hook
     local/localview.js    the arena's own Three.js scene, tokens and rotate-only camera
     local/transition.js   the cloud-dive cinematic between the world and the arena
-    ui.js        the HUD: fatigue bar, status bar, party panel, log, legend, menu, encounter windows, confirm box
+    ui.js        the HUD: the top bar (supplies, fatigue, turn), party panel, log, legend, menu, encounter windows, roster
     audio.js     the sounds, synthesised in the browser (no files): the fatigue bar's blips
     tween.js     tiny animation helper (like Godot's Tween)
     style.css    HUD styling

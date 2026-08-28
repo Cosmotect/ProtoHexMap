@@ -57,6 +57,39 @@ export const CONFIG = {
     cloudColor: 0xdfe6f2,     // the clouds punched through during the flight
     // The arena camera: rotation only (no panning, no zooming).
     camera: { fov: 46, tiltDegrees: 55, distance: 13, minTiltDegrees: 25, maxTiltDegrees: 70 },
+    // The START SCREEN camera (the party around the campfire) is its own pose:
+    // much closer to the fire and locked, because that shot is composed, not
+    // explored. It is also the pose the fly-out to the world map starts from.
+    startCamera: {
+      fov: 46,
+      tiltDegrees: 58,        // 0 = straight down; higher = more of a ground-level look
+      azimuthDegrees: 30,     // spin around the fire. 30 puts a TILE dead centre behind the
+                              // flame instead of the seam between two, which is what lets the
+                              // party sit as one row of three rather than two-plus-a-straggler
+      distance: 7.4,          // how far from the fire
+      targetHeight: 0.5,      // the camera aims this high above the centre tile (the flame)
+      lockControls: true,     // true = the player cannot rotate the start shot
+    },
+  },
+
+  // ----- Backgrounds ---------------------------------------------------
+  // The empty space each map sits in: the colour behind everything, the
+  // distance fog that fades far tiles into it, and the void floor far below.
+  // The two maps are tuned separately - the world map is a wide vista, the
+  // local map is one tile blown up to arena size.
+  worldBackground: {
+    color: 0x0e1320,          // behind the map, and the colour distant tiles fade into
+    fog: true,                // distance fog on (off = tiles stay sharp to the horizon)
+    fogNear: 30,              // world units at which the fade starts
+    fogFar: 80,               // ...and at which a tile is fully the background colour
+    groundColor: 0x0b0f19,    // the void floor far below, seen through the ether holes
+  },
+  localBackground: {
+    color: 0x0e1320,
+    fog: true,
+    fogNear: 26,
+    fogFar: 70,
+    groundColor: 0x0b0f19,
   },
 
   // ----- Camera ------------------------------------------------------
@@ -83,24 +116,11 @@ export const CONFIG = {
   },
 
   // ----- Sound (src/audio.js) ----------------------------------------
-  // Every sound is generated in the browser, so these are the knobs of a
-  // tiny synthesiser rather than a list of files.
+  // Every sound is generated in the browser, not loaded from a file. The
+  // whole voice of it (pitch, envelope, filter) is a fixed design decision
+  // living at the top of src/audio.js; the only setting is how loud it is.
   audio: {
-    enabled: true,
-    volume: 0.35,             // master volume, 0..1
-    wave: 'sine',             // 'sine' (softest), 'triangle', 'square', 'sawtooth'
-    baseFreq: 392,            // pitch of the FIRST fatigue box, in Hz (392 = G4)
-    stepSemitones: 1.5,       // how much higher each following box sounds (12 = a full octave)
-    blipGain: 0.5,            // loudness of one blip before the master volume
-    attackMs: 8,              // fade-in: anything above ~4 removes the click at the start
-    decayMs: 150,             // fade-out
-    glide: 0.94,              // the tone slides to this fraction of its pitch while fading (a soft "tock")
-    filterRatio: 3.5,         // low-pass cutoff as a multiple of the pitch: lower = duller, gentler
-    pitchJitter: 0.012,       // +-1.2% random pitch per play, so repeats never sound identical
-    gainJitter: 0.09,         // +-9% random volume per play
-    clearStaggerMs: 55,       // delay between the boxes emptying, right to left
-    clearDrop: 3,             // semitones below the filling ladder, for the reset sound
-    clearGain: 0.55,          // the reset is quieter than the steps
+    volume: 0.35,             // master volume, 0..1 (0 = silent)
   },
 
   // ----- Fatigue bar (the boxes at the top of the screen) -------------
@@ -117,9 +137,8 @@ export const CONFIG = {
   },
 
   // ----- Colours -----------------------------------------------------
+  // (The background and the void floor moved to worldBackground / localBackground above.)
   colors: {
-    background: 0x0e1320,
-    ground: 0x0b0f19,         // the void floor far below the map, seen through the ether holes
     fogTile: 0x1f2536,        // colour of tiles still hidden under the fog of war
     fogTileHeight: 0.22,
     startTile: 0x9fd9ff,

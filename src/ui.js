@@ -3,7 +3,7 @@
 import { describeHex, lerpTable } from './game.js';
 import { terrainInfo, terrainName, encounterLabel, encounterInfo, tc } from './text.js';
 import { t, tn } from './i18n.js';
-import { playFatigueStep, playFatigueClear } from './audio.js';
+import { playFatigueStep, playFatigueClear, clearStaggerMs } from './audio.js';
 
 export function createUI(config, handlers) {
   const $ = (id) => document.getElementById(id);
@@ -217,7 +217,7 @@ export function createUI(config, handlers) {
   function clearBar(from) {
     cancelBarTimers();
     clearBarAnimations();
-    const stagger = config.audio.clearStaggerMs;
+    const stagger = clearStaggerMs;
     for (let i = from - 1; i >= 0; i--) {
       const delayMs = (from - 1 - i) * stagger;
       const box = boxes[i];

@@ -50,7 +50,10 @@ export class Game {
     this.state = {
       status: 'playing',      // 'playing' | 'won' | 'lost'
       // The party: a fresh copy of the config units so HP can change per run.
-      party: config.party.units.map((u) => ({ ...u, alive: true, isPlayer: true })),
+      // The starting party is the first `party.size` entries of the roster, so a
+      // character's stats are defined once (config/units.js, party.roster).
+      party: (config.party.roster ?? []).slice(0, config.party.size ?? 3)
+        .map((u) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.hp, power: u.power, alive: true, isPlayer: true })),
       supplies,
       maxSupplies: supplies,
       turn: 0,

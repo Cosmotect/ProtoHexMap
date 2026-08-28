@@ -35,6 +35,22 @@ function loadUiScale() {
 }
 applyUiScale(loadUiScale());
 
+// ----- the event log (Settings > General) ---------------------------------
+// The log is a debugging / design aid rather than something the player needs,
+// so it is OFF by default. Like the UI scale it is a browser preference, not a
+// config value: it changes nothing about the game, only what is on screen.
+const SHOW_LOG_KEY = 'hexmap-show-log';
+function applyShowLog(v) {
+  const on = !!v;
+  document.getElementById('log-panel')?.classList.toggle('hidden', !on);
+  try { localStorage.setItem(SHOW_LOG_KEY, on ? '1' : '0'); } catch { /* private mode etc. */ }
+  return on;
+}
+function loadShowLog() {
+  try { return localStorage.getItem(SHOW_LOG_KEY) === '1'; } catch { return false; }
+}
+applyShowLog(loadShowLog());
+
 const container = document.getElementById('scene');
 
 // URL switches, handy for comparing variants without editing config.js:
@@ -57,11 +73,15 @@ const settings = createSettings({
   getCameraMode: () => renderer.cameraMode,
   getUiScale: loadUiScale,
   onSetUiScale: (v) => applyUiScale(v),
+  getShowLog: loadShowLog,
+  onSetShowLog: (v) => applyShowLog(v),
   onChange: (path) => {
     ui.buildLegend();
     // The bar's shape comes from the fatigue table and its look from fatigueBar,
     // so both need a rebuild rather than a refresh.
     if (typeof path !== 'string' || path === '*' || path.startsWith('fatigue.') || path.startsWith('fatigueBar.')) ui.buildFatigueBar();
+    // The sky, the fog and the void floor can change without rebuilding the map.
+    if (typeof path !== 'string' || path === '*' || path.startsWith('worldBackground.')) renderer.applyBackground();
     if (game) ui.update(game);
   },
   onClose: () => ui.updateBlur(),
