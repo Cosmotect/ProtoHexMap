@@ -40,9 +40,12 @@ fs.mkdirSync(OUT, { recursive: true });
   page.on('pageerror', (e) => problems.push('PAGE ERROR: ' + e.message));
   page.on('console', (m) => {
     if (m.type() !== 'error' && m.type() !== 'warning') return;
-    // Sandboxed test machines cannot reach Google Fonts; that failure is expected noise.
+    // Sandboxed test machines cannot reach Google Fonts; those failures are
+    // expected noise (a tunnel error, or the proxy answering with a 404).
+    const src = (m.location() && m.location().url) || '';
     if (m.text().includes('ERR_TUNNEL_CONNECTION_FAILED')) return;
-    problems.push(m.type() + ': ' + m.text());
+    if (src.includes('fonts.googleapis.com') || src.includes('fonts.gstatic.com')) return;
+    problems.push(m.type() + ': ' + m.text() + (src ? ` [${src}]` : ''));
   });
 
   await page.goto(URL, { waitUntil: 'load', timeout: 60000 });
@@ -66,6 +69,18 @@ fs.mkdirSync(OUT, { recursive: true });
   const waitIdle = async () => {
     await page.waitForFunction(() => !window.__renderer.busy, null, { timeout: 20000 });
     await page.waitForTimeout(900); // let the camera glide settle
+  };
+  // Combat is interactive now: a fight dives into the arena and waits for the
+  // player. If one started (e.g. a fatigue-forced battle mid-walk), win it from
+  // the console, close the report + reward windows and fly back out.
+  const settleBattleIfAny = async () => {
+    await page.waitForFunction(() => !!window.__battle || window.__cinematic.mode() === 'idle', null, { timeout: 30000 }).catch(() => {});
+    if (!(await page.evaluate(() => !!window.__battle))) return;
+    await page.evaluate(() => window.__battle.debugResolve(true));
+    await page.waitForFunction(() => !document.getElementById('dialog').classList.contains('hidden'), null, { timeout: 25000 }).catch(() => {});
+    await dismissDialog();
+    await dismissDialog();
+    await page.waitForFunction(() => window.__cinematic.mode() === 'idle', null, { timeout: 25000 }).catch(() => {});
   };
 
   const start = await page.evaluate(() => ({ seed: window.game.seed, supplies: window.game.state.supplies, path: window.game.state.shortestPathLength }));
@@ -116,11 +131,26 @@ fs.mkdirSync(OUT, { recursive: true });
   const capOk = await page.evaluate(() => { const g = window.game; g.addSupplies(999); return g.state.supplies === g.state.maxSupplies; });
   if (!capOk) problems.push('supplies exceeded the maximum');
 
-  // A won battle offers the +power chooser and a placeholder-free transcript
-  // (regression checks: the reward is decided before the dialog is built, and the
-  // transcript lines are structured, not preformatted text).
+  // A won battle offers the +power chooser (regression: the reward is decided
+  // before the dialog is built). Fights are interactive now: enter() dives into
+  // the arena and starts the engine; the test wins instantly via debugResolve.
   await page.evaluate(() => { const g = window.game; const hex = g.state.position; hex.encounter = 'battle'; hex.enemies = [{ name: 'Dummy', hp: 1, maxHp: 1, power: 0, alive: true }]; g.enter(false); });
-  await page.waitForTimeout(250);
+  await page.waitForFunction(() => !!window.__battle, null, { timeout: 30000 });
+  const engineState = await page.evaluate(() => ({
+    mode: window.__cinematic.mode(),
+    bar: !document.getElementById('battle-bar').classList.contains('hidden'),
+    units: window.__battle.state.units.length,
+    wave: Object.values(window.__battle.state.heights).some((h) => h > 0),
+    abilities: window.__battle.state.units.every((u) => u.abilityIds.length > 0),
+  }));
+  if (engineState.mode !== 'local') problems.push('battle engine started outside the local map: ' + JSON.stringify(engineState));
+  if (!engineState.bar) problems.push('battle bar is not shown during a fight');
+  if (engineState.units !== 4) problems.push(`expected 3 party + 1 enemy in the engine, got ${engineState.units}`);
+  if (!engineState.wave) problems.push('battle arena has no elevation wave (all tiles flat)');
+  if (!engineState.abilities) problems.push('some combat units have no abilities');
+  await page.screenshot({ path: path.join(OUT, '01e-battle-engine.png') });
+  await page.evaluate(() => window.__battle.debugResolve(true));
+  await page.waitForFunction(() => !document.getElementById('dialog').classList.contains('hidden'), null, { timeout: 25000 });
   const rewardBtn = await page.evaluate(() => [...document.querySelectorAll('#dialog-actions button')].map((b) => b.textContent).join('|'));
   // The reward text is built from config (battle.victoryPower), so read it rather than
   // hardcoding a number that a balance pass will change.
@@ -134,9 +164,12 @@ fs.mkdirSync(OUT, { recursive: true });
   if (!/Lessons/.test(chooser)) problems.push('power-up chooser did not open after the battle: ' + chooser);
   await page.screenshot({ path: path.join(OUT, '01e-reward-chooser.png') });
   await dismissDialog();
+  // Closing the last window flies the camera back out to the world map.
+  await page.waitForFunction(() => window.__cinematic.mode() === 'idle', null, { timeout: 25000 }).catch(() => problems.push('did not fly back out after the reward chooser'));
 
-  // The combat cinematic: Enter on a battle dives into the local map (clouds,
-  // scene swap), the results window opens over the arena, closing it flies back.
+  // The combat cinematic + the playable fight: Enter on a battle dives into the
+  // local map (clouds, scene swap), the engine takes over, the results window
+  // opens when it ends, closing everything flies back.
   await page.evaluate(() => {
     const g = window.game; const hex = g.state.position;
     hex.encounter = 'battle';
@@ -153,27 +186,27 @@ fs.mkdirSync(OUT, { recursive: true });
   }));
   if (midFlight.mode !== 'in' || !midFlight.clouds || midFlight.dialog) problems.push('fly-in state wrong at 700ms: ' + JSON.stringify(midFlight));
   await page.screenshot({ path: path.join(OUT, '20-dive-mid.png') });
-  await page.waitForTimeout(1400);
+  await page.waitForFunction(() => !!window.__battle && window.__cinematic.mode() === 'local', null, { timeout: 30000 }).catch(() => {});
   const landed = await page.evaluate(() => ({
     mode: window.__cinematic.mode(),
-    dialog: !document.getElementById('dialog').classList.contains('hidden'),
+    battle: !!window.__battle,
+    bar: !document.getElementById('battle-bar').classList.contains('hidden'),
     tiles: window.__localView.map ? window.__localView.map.hexes.size : 0,
     tokens: window.__localView.tokens.length,
     orientation: window.__localView.map ? window.__localView.map.orientation : '?',
     pan: window.__localView.controls ? window.__localView.controls.enablePan : null,
     zoom: window.__localView.controls ? window.__localView.controls.enableZoom : null,
   }));
-  if (landed.mode !== 'local' || !landed.dialog) problems.push('did not land in the local map with the results open: ' + JSON.stringify(landed));
+  if (landed.mode !== 'local' || !landed.battle || !landed.bar) problems.push('did not land in the local map with the fight running: ' + JSON.stringify(landed));
   if (landed.tiles !== 127) problems.push(`local map should have 127 tiles (radius 6), got ${landed.tiles}`);
   if (landed.tokens !== 5) problems.push(`expected 3 party + 2 enemy tokens, got ${landed.tokens}`);
   if (landed.orientation === (await page.evaluate(() => window.game.config.map.orientation))) problems.push('local map orientation should be opposite to the world map');
   if (landed.pan !== false || landed.zoom !== false) problems.push('local camera must not pan or zoom: ' + JSON.stringify(landed));
   await page.screenshot({ path: path.join(OUT, '21-local-map.png') });
-  await dismissDialog();
-  await dismissDialog();
-  await page.waitForTimeout(1800);
-  const backOut = await page.evaluate(() => ({ mode: window.__cinematic.mode(), filter: window.__renderer.renderer.domElement.style.filter }));
+  await settleBattleIfAny();
+  const backOut = await page.evaluate(() => ({ mode: window.__cinematic.mode(), filter: window.__renderer.renderer.domElement.style.filter, bar: document.getElementById('battle-bar').classList.contains('hidden') }));
   if (backOut.mode !== 'idle' || backOut.filter) problems.push('did not return cleanly to the world map: ' + JSON.stringify(backOut));
+  if (!backOut.bar) problems.push('battle bar stayed visible after the fight');
 
   // The Stasis, straight through the rules layer: placement, line growth, colony
   // spawn, withering and debuffs.
@@ -241,6 +274,7 @@ fs.mkdirSync(OUT, { recursive: true });
     await page.mouse.move(p.x, p.y); await page.waitForTimeout(60);
     await page.mouse.down(); await page.mouse.up();
     await page.waitForTimeout(150);
+    await settleBattleIfAny();   // a fatigue-forced fight would open the arena
     await dismissDialog();
     await recenter();
   }
@@ -414,7 +448,12 @@ fs.mkdirSync(OUT, { recursive: true });
     await page.screenshot({ path: path.join(OUT, '09-npe-encounter-card.png') });
     await page.click('#btn-tutorial-ok');
     // The dive is wall-clock 1.5s, but the software renderer here can run below
-    // 1 fps late in the test, so poll for the report instead of a fixed wait.
+    // 1 fps late in the test, so poll instead of fixed waits. The forced fight
+    // is interactive and opens with an AMBUSH enemy phase; win it from the console.
+    await page.waitForFunction(() => !!window.__battle, null, { timeout: 30000 }).catch(() => {});
+    const fought = await page.evaluate(() => (window.__battle ? { forcedOk: true } : null));
+    if (!fought) problems.push('forced encounter did not start an interactive battle');
+    await page.evaluate(() => window.__battle && window.__battle.debugResolve(true));
     await page.waitForFunction(() => !document.getElementById('dialog').classList.contains('hidden'), null, { timeout: 25000 }).catch(() => {});
     const after = await page.evaluate(() => ({ dialog: !document.getElementById('dialog').classList.contains('hidden'), title: document.getElementById('tutorial-title').textContent, mode: window.__cinematic.mode(), lastBattle: !!window.game.state.lastBattle, posEnc: window.game.state.position.encounter, turn: window.game.state.turn }));
     if (!after.dialog) problems.push('forced encounter did not run after the encounter card: ' + JSON.stringify(after));

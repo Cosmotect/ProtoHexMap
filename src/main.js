@@ -8,6 +8,8 @@ import { resolveSeed } from './rng.js';
 import { createTutorial, NPE_SEED } from './tutorial.js';
 import { createSettings, deepClone } from './settings.js';
 import { createCombatCinematic } from './local/transition.js';
+import { createBattle } from './local/battle/engine.js';
+import { COMBAT_CONFIG } from './config/abilities.js';
 import { t, tn, initLanguage, applyStaticTexts, onLanguageChange } from './i18n.js';
 import { tc } from './text.js';
 import { initAudio } from './audio.js';
@@ -161,6 +163,66 @@ function beginJourney() {
   ui.update(game);
 }
 
+// ----- interactive combat (src/local/battle/) --------------------------------
+// game.startCombat prepares the fight (enemies, Stasis debuffs) and hands the
+// context here; the engine plays it out on the arena and reports the outcome
+// back through game.finishCombat. The world map never sees the middle part.
+let battle = null;      // the running combat engine, if any
+let battleCtx = null;   // the context game.prepareCombat handed over
+
+function beginInteractiveBattle(ctx) {
+  const view = cinematic.localView;
+  // Plain copies: the engine keeps its own instances; wounds are written back at the end.
+  const partyDefs = game.state.party
+    .map((u, i) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.maxHp, power: u.power, partyIndex: i, alive: u.alive }))
+    .filter((u) => u.alive && u.hp > 0);
+  const enemyDefs = ctx.enemies.map((e) => ({ name: e.name, hp: e.hp, maxHp: e.maxHp, power: e.power }));
+  const placement = view.beginBattle({ party: partyDefs, enemies: enemyDefs });
+  battleCtx = ctx;
+  battle = createBattle({
+    config: COMBAT_CONFIG,
+    radius: CONFIG.local.radius,
+    heights: placement.heights,
+    party: partyDefs,
+    enemies: enemyDefs,
+    partyKeys: placement.partyKeys,
+    enemyKeys: placement.enemyKeys,
+    forced: ctx.forced,
+    onChange: () => { view.syncBattle(); ui.updateBattle(); },
+    onFloater: (k, text, color) => view.addFloater(k, text, color),
+    onLog: () => {},   // the floaters carry the story; a combat log can come later
+    onAnim: (anim, done) => view.runMoveAnim(anim, done),
+    // A beat after the last hit, so the killing blow is seen before the report.
+    onEnd: (won) => setTimeout(() => finishInteractiveBattle(won), 900),
+  });
+  window.__battle = battle;   // for debugging / automated tests
+  view.bindBattle(battle);
+  ui.setBattleMode(battle);
+}
+
+function finishInteractiveBattle(won) {
+  if (!battle || !battleCtx) return;
+  const ctx = battleCtx;
+  const b = battle;
+  battle = null; battleCtx = null; window.__battle = null;
+  // Wounds (and deaths) carry back to the world-map party.
+  for (const u of b.state.units) {
+    if (u.partyIndex == null) continue;
+    const p = game.state.party[u.partyIndex];
+    if (p) p.hp = u.hp;
+  }
+  ui.setBattleMode(null);
+  cinematic.localView.endBattle();
+  game.finishCombat(ctx, { won, rounds: b.state.round, interactive: true });
+}
+
+// Restart / new map while a fight is open: drop the engine, the new Game
+// object discards the battle state anyway.
+function abortBattle() {
+  battle = null; battleCtx = null; window.__battle = null;
+  ui.setBattleMode(null);
+}
+
 // Starts the dive; `resume` runs the actual encounter once the camera lands.
 function startCombatDive(hex, resume) {
   const enemies = (hex.enemies ?? []).map((e) => ({ ...e }));
@@ -219,6 +281,7 @@ function startRun(seed, opts = {}) {
   pendingEnd = false;
   startScreen = false;
   ui.setStartScreen(false);
+  abortBattle();
   cinematic.abort();
   ui.closeDialog();
   tutorial.finish('restart');
@@ -226,6 +289,23 @@ function startRun(seed, opts = {}) {
   window.game = game; // handy for poking at the state in the browser console
   // Forced fights (fatigue) take the same dive as the Enter button.
   game.combatIntro = (hex, resume) => (cinematic.isActive() ? false : startCombatDive(hex, resume));
+  // Fights are played out on the local map. Camera already down in the arena:
+  // start straight away. Not there yet (the Nomads event): dive first. Anything
+  // in between should not happen; refusing makes the fight auto-resolve safely.
+  game.combatDelegate = (ctx) => {
+    if (battle) return false;
+    if (cinematic.mode() === 'local') { beginInteractiveBattle(ctx); return true; }
+    if (cinematic.isActive()) return false;
+    return cinematic.flyIn({
+      worldHex: ctx.hex,
+      baseColor: renderer.targetColorFor(ctx.hex).getHex(),
+      party: game.livingUnits(),
+      enemies: ctx.enemies.map((e) => ({ ...e })),
+      seed: game.seed,
+      recipe: ctx.hex.recipe ?? null,
+      onArrived: () => beginInteractiveBattle(ctx),
+    });
+  };
 
   // Keep the seed in the address bar so the link can be shared.
   try {

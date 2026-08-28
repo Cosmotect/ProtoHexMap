@@ -4,6 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
     <title>Hex World Map</title>
+    <!-- Inline favicon: stops the browser's automatic /favicon.ico request (a 404). -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⬡</text></svg>" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700&family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;600&display=swap" />
   </head>
@@ -89,6 +91,18 @@
            all live in the top-centre bar. -->
       <div class="panel bottom-center statusbar" id="statusbar">
         <button id="btn-enter" class="enter" disabled>Enter</button>
+      </div>
+
+      <!-- Battle bar: shown instead of the status bar while a fight runs on the
+           local map. Active unit, its abilities, End turn. src/ui.js fills it
+           from the combat engine's state. -->
+      <div class="panel bottom-center battlebar hidden" id="battle-bar">
+        <div class="battle-info">
+          <span id="battle-round" class="battle-round"></span>
+          <span id="battle-active" class="battle-active"></span>
+        </div>
+        <div id="battle-abilities" class="battle-abilities"></div>
+        <button id="btn-end-turn" class="enter" data-i18n="battle.ui.endTurn" data-i18n-title="battle.ui.endTurn.title">End turn</button>
       </div>
 
       <div id="fatigue-tip" class="fatigue-tip hidden"></div>

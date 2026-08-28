@@ -9,7 +9,8 @@
 // =====================================================================
 import * as THREE from 'three';
 import { MapControls } from 'three/addons/controls/MapControls.js';
-import { generateLocalMap, pickRandomTiles } from './localmap.js';
+import { generateLocalMap, pickRandomTiles, applyElevationWave } from './localmap.js';
+import { COMBAT_CONFIG } from '../config/abilities.js';
 import { createRng } from '../rng.js';
 
 const SQRT3 = Math.sqrt(3);
@@ -57,6 +58,9 @@ export class LocalMapView {
 
     this.layout = layout;
     this.map = generateLocalMap(this.config, recipe);
+    // Battle arenas get rolling tile heights (high ground matters in combat);
+    // the campfire start screen stays flat and calm.
+    if (layout !== 'camp') applyElevationWave(this.map, () => rng.random(), COMBAT_CONFIG.combat.elevationLevels);
     this.scene = new THREE.Scene();
     // The local map's own background settings, separate from the world map's.
     const bg = this.config.localBackground;
@@ -93,17 +97,20 @@ export class LocalMapView {
     geo.translate(0, 0.5, 0);
     if (this.map.orientation === 'flat') geo.rotateY(Math.PI / 6);
     const base = new THREE.Color(baseColor ?? 0x7a8a6a);
+    this.tileMeshes = [];
     for (const tile of this.map.hexes.values()) {
       const mat = new THREE.MeshStandardMaterial({ color: base.clone().multiplyScalar(0.9 + rng.random() * 0.2), roughness: 0.85 });
       const mesh = new THREE.Mesh(geo, mat);
-      const h = cfg.tileHeight + (tile.elevation ?? 0);
+      const h = cfg.tileHeight + (tile.elevation ?? 0) * (cfg.elevationStep ?? 0.35);
       mesh.scale.y = Math.max(0.05, h);
       mesh.position.set(tile.x, 0, -tile.y);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
+      mesh.userData.key = tile.key;
       this.scene.add(mesh);
       tile.mesh = mesh;
       tile.top = Math.max(0.05, h);
+      this.tileMeshes.push(mesh);
     }
 
     if (layout === 'camp') {
@@ -247,6 +254,7 @@ export class LocalMapView {
     mesh.castShadow = true;
     mesh.userData.baseY = tile.top;
     mesh.userData.phase = phase;
+    mesh.userData.tileKey = tileKey;
     const ring = new THREE.Mesh(
       new THREE.RingGeometry(0.26, 0.38, 24).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({ color: lightColor, transparent: true, opacity: 0.85, side: THREE.DoubleSide })
@@ -289,8 +297,8 @@ export class LocalMapView {
     this.pickingHandlers = null;
   }
 
-  // For now units land on random distinct tiles - the encounter itself is still
-  // resolved by the world-side simulation; these tokens are the stage dressing.
+  // Units land on random distinct tiles. Used both for the fly-in stage dressing
+  // and (via beginBattle) for the real fight; returns where everyone stood.
   placeUnits(party, enemies, rng) {
     const used = new Set();
     const partyKeys = pickRandomTiles(this.map, party.length, () => rng.random(), used);
@@ -305,8 +313,269 @@ export class LocalMapView {
         new THREE.MeshStandardMaterial({ color: enemyColor, emissive: 0x330b0b, roughness: 0.45 })
       );
       body.geometry.translate(0, 0.45, 0);
+      // Enemies have no emoji; their portrait plate shows the name's initial.
+      body.add(this.makePortrait((u.name ?? '?').charAt(0)));
       this.attachToken(enemyKeys[i], body, enemyColor, rng.random() * Math.PI * 2);
     });
+    return { partyKeys, enemyKeys };
+  }
+
+  // ===== BATTLE MODE ======================================================
+  // The view stays dumb: the combat engine (src/local/battle/engine.js) owns
+  // every rule; this block only draws its state and reports tile clicks.
+
+  // Removes every unit token (the fly-in dressing) so the real fight can place
+  // its own. Tiles, campfire and lights stay.
+  clearUnits() {
+    for (const m of this.tokens) {
+      this.scene.remove(m);
+      if (m.userData.ring) this.scene.remove(m.userData.ring);
+    }
+    this.tokens = [];
+  }
+
+  // Re-places both sides for the actual battle and reports the layout the
+  // engine needs: who stands where, and each tile's elevation level.
+  beginBattle({ party, enemies }) {
+    this.clearUnits();
+    const rng = this.rng ?? { random: Math.random };
+    const placement = this.placeUnits(party, enemies, rng);
+    const heights = {};
+    for (const tile of this.map.hexes.values()) heights[tile.key] = tile.elevation ?? 0;
+    return { ...placement, heights };
+  }
+
+  // Wires a created battle to the scene: tokens get their engine uids (matched
+  // by starting tile), tile clicks go to the engine, floaters get a DOM layer.
+  bindBattle(battle, { onTileClick } = {}) {
+    this.battle = battle;
+    this.battleTokens = new Map();
+    for (const u of battle.state.units) {
+      const tok = this.tokens.find((m) => m.userData.tileKey === u.pos && m.userData.uid == null);
+      if (tok) { tok.userData.uid = u.uid; this.battleTokens.set(u.uid, tok); }
+    }
+    this.highlights = [];
+    this.tagSprites = new Map();
+    this.walk = null;
+    // Floating combat text lives in the DOM, projected from tile positions.
+    const layer = document.createElement('div');
+    layer.className = 'battle-floaters';
+    document.body.appendChild(layer);
+    this.floaterLayer = layer;
+    this.enableTilePicking(onTileClick ?? ((k) => battle.clickTile(k)));
+    this.syncBattle();
+  }
+
+  // Same short-press-counts-as-click pattern as enablePicking, but against the
+  // TILES: the engine decides what a click on a tile means.
+  enableTilePicking(onTile) {
+    this.disableTilePicking();
+    const ray = new THREE.Raycaster();
+    const el = this.domElement;
+    let down = null;
+    const onDown = (e) => { down = { x: e.clientX, y: e.clientY, time: performance.now() }; };
+    const onUp = (e) => {
+      if (!down) return;
+      const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
+      const quick = performance.now() - down.time < 600;
+      down = null;
+      if (moved > 6 || !quick || !this.camera) return;
+      const rect = el.getBoundingClientRect();
+      const p = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+      ray.setFromCamera(p, this.camera);
+      const hit = ray.intersectObjects(this.tileMeshes ?? [], false)[0];
+      if (hit) onTile(hit.object.userData.key);
+    };
+    el.addEventListener('pointerdown', onDown);
+    el.addEventListener('pointerup', onUp);
+    this.tileHandlers = { onDown, onUp };
+  }
+  disableTilePicking() {
+    if (!this.tileHandlers) return;
+    this.domElement.removeEventListener('pointerdown', this.tileHandlers.onDown);
+    this.domElement.removeEventListener('pointerup', this.tileHandlers.onUp);
+    this.tileHandlers = null;
+  }
+
+  // Redraws everything the engine may have changed: token positions, deaths,
+  // tile heights, terrain tags, and the reach / aim highlights.
+  syncBattle() {
+    const battle = this.battle;
+    if (!battle || !this.map) return;
+    const sb = battle.state;
+
+    // Tile heights (abilities can raise / lower ground).
+    const cfg = this.config.local;
+    for (const tile of this.map.hexes.values()) {
+      const lvl = sb.heights[tile.key] ?? 0;
+      if (lvl === (tile.elevation ?? 0)) continue;
+      tile.elevation = lvl;
+      const h = Math.max(0.05, cfg.tileHeight + lvl * (cfg.elevationStep ?? 0.35));
+      tile.mesh.scale.y = h;
+      tile.top = h;
+    }
+
+    // Tokens: dead ones vanish, live ones stand on their engine tile.
+    for (const u of sb.units) {
+      const tok = this.battleTokens.get(u.uid);
+      if (!tok) continue;
+      const dead = u.hp <= 0;
+      tok.visible = !dead;
+      if (tok.userData.ring) tok.userData.ring.visible = !dead;
+      if (dead) continue;
+      if (!tok.userData.walking && tok.userData.tileKey !== u.pos) this.teleportToken(tok, u.pos);
+      else {
+        // Height may have changed under a standing unit.
+        const tile = this.map.hexes.get(u.pos);
+        if (tile && !tok.userData.walking) tok.userData.baseY = tile.top;
+      }
+    }
+
+    // Terrain tags: one emoji sprite per tagged tile.
+    const want = new Set(Object.keys(sb.tags));
+    for (const [k, sprite] of this.tagSprites) {
+      if (!want.has(k)) { this.scene.remove(sprite); this.tagSprites.delete(k); }
+    }
+    for (const k of want) {
+      if (this.tagSprites.has(k)) continue;
+      const tile = this.map.hexes.get(k);
+      if (!tile) continue;
+      const sprite = this.makePortrait(sb.tags[k].icon ?? '⭐');
+      sprite.scale.setScalar(0.5);
+      sprite.position.set(tile.x, tile.top + 0.35, -tile.y);
+      this.scene.add(sprite);
+      this.tagSprites.set(k, sprite);
+    }
+
+    this.syncHighlights(battle);
+  }
+
+  teleportToken(tok, key) {
+    const tile = this.map.hexes.get(key);
+    if (!tile) return;
+    tok.userData.tileKey = key;
+    tok.userData.baseY = tile.top;
+    tok.position.set(tile.x, tile.top, -tile.y);
+    if (tok.userData.ring) tok.userData.ring.position.set(tile.x, tile.top + 0.02, -tile.y);
+  }
+
+  // Reach (walkable tiles) and aim (castable tiles) as translucent hex plates.
+  syncHighlights(battle) {
+    for (const m of this.highlights) this.scene.remove(m);
+    this.highlights = [];
+    const sb = battle.state;
+    if (sb.over || sb.phase !== 'player') return;
+    const add = (k, color, opacity) => {
+      const tile = this.map.hexes.get(k);
+      if (!tile) return;
+      if (!this.hlGeo) {
+        this.hlGeo = new THREE.CylinderGeometry(this.config.local.hexSize * 0.86, this.config.local.hexSize * 0.86, 0.04, 6, 1);
+        if (this.map.orientation === 'flat') this.hlGeo.rotateY(Math.PI / 6);
+      }
+      const m = new THREE.Mesh(this.hlGeo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false }));
+      m.position.set(tile.x, tile.top + 0.03, -tile.y);
+      this.scene.add(m);
+      this.highlights.push(m);
+    };
+    if (sb.selAb && sb.aimMap) {
+      const ab = battle.abilityById(sb.selAb);
+      const color = new THREE.Color(ab?.color ?? '#ffd166').getHex();
+      for (const k of Object.keys(sb.aimMap)) add(k, color, 0.38);
+    } else if (sb.reach) {
+      const { d, occ } = sb.reach;
+      const cur = battle.curPlayer();
+      for (const k of Object.keys(d)) {
+        if (occ.has(k) || (cur && k === cur.pos)) continue;
+        add(k, 0xffd166, 0.25);
+      }
+    }
+  }
+
+  // The engine hands each move here: slide the token tile by tile (or one long
+  // glide for flyers), reporting every tile entered; enter() returning true
+  // means "stop the walk here" (a trap fired, the unit died or was moved).
+  runMoveAnim(anim, done) {
+    const tok = this.battleTokens.get(anim.u.uid);
+    if (!tok) { for (let i = 1; i < anim.path.length; i++) if (anim.enter(anim.path[i])) break; done(); return; }
+    tok.userData.walking = true;
+    this.walk = {
+      tok, anim, done,
+      i: 0,                     // segment index (path[i] -> path[i+1])
+      t0: performance.now(),
+      segMs: anim.fly ? 520 : 170,
+    };
+  }
+
+  // Advances the walk; called from update(). Handles segment ends + early stops.
+  stepWalk(now) {
+    const w = this.walk;
+    if (!w) return;
+    const { path } = w.anim;
+    const from = this.map.hexes.get(path[w.i]);
+    const to = this.map.hexes.get(path[w.i + 1]);
+    if (!from || !to) { this.finishWalk(); return; }
+    const t = Math.min(1, (now - w.t0) / w.segMs);
+    const hop = Math.sin(t * Math.PI) * (w.anim.fly ? 0.9 : 0.18);
+    const x = from.x + (to.x - from.x) * t;
+    const z = -from.y + (-to.y - -from.y) * t;
+    const y = from.top + (to.top - from.top) * t + hop;
+    w.tok.position.set(x, y, z);
+    if (w.tok.userData.ring) w.tok.userData.ring.position.set(x, (from.top + (to.top - from.top) * t) + 0.02, z);
+    if (t >= 1) {
+      const key = path[w.i + 1];
+      w.tok.userData.tileKey = key;
+      w.tok.userData.baseY = to.top;
+      const stop = w.anim.enter(key);
+      if (stop || w.i + 2 >= path.length) { this.finishWalk(); return; }
+      w.i++;
+      w.t0 = performance.now();
+    }
+  }
+  finishWalk() {
+    const w = this.walk;
+    this.walk = null;
+    if (!w) return;
+    w.tok.userData.walking = false;
+    this.teleportToken(w.tok, w.anim.u.pos);   // snap exactly onto the engine's tile
+    w.done();
+  }
+
+  // Floating combat text over a tile (damage, heals, statuses). Pure DOM: a span
+  // that rises and fades, positioned by projecting the tile into the viewport.
+  addFloater(k, text, color) {
+    if (!this.floaterLayer || !this.camera) return;
+    const tile = this.map.hexes.get(k);
+    if (!tile) return;
+    const v = new THREE.Vector3(tile.x, tile.top + 0.9, -tile.y).project(this.camera);
+    if (v.z > 1) return;   // behind the camera
+    const el = document.createElement('span');
+    el.className = 'battle-floater';
+    el.textContent = text;
+    el.style.color = color ?? '#fff';
+    // Stack repeats on the same tile so numbers do not print over each other.
+    const n = (this.floaterStack = this.floaterStack ?? new Map());
+    const cnt = (n.get(k) ?? 0) + 1;
+    n.set(k, cnt);
+    setTimeout(() => n.set(k, Math.max(0, (n.get(k) ?? 1) - 1)), 700);
+    el.style.left = `${((v.x + 1) / 2) * window.innerWidth}px`;
+    el.style.top = `${((-v.y + 1) / 2) * window.innerHeight - (cnt - 1) * 20}px`;
+    this.floaterLayer.appendChild(el);
+    el.addEventListener('animationend', () => el.remove());
+    setTimeout(() => el.remove(), 2400);   // fallback
+  }
+
+  // Battle over: clean the combat chrome but leave the scene standing (the
+  // results window and the fly-out still show it).
+  endBattle() {
+    this.disableTilePicking();
+    for (const m of this.highlights ?? []) this.scene?.remove(m);
+    this.highlights = [];
+    for (const s of (this.tagSprites ?? new Map()).values()) this.scene?.remove(s);
+    this.tagSprites = new Map();
+    if (this.walk) { this.walk.tok.userData.walking = false; this.walk = null; }
+    if (this.floaterLayer) { this.floaterLayer.remove(); this.floaterLayer = null; }
+    this.battle = null;
+    this.battleTokens = new Map();
   }
 
   buildCamera() {
@@ -379,9 +648,23 @@ export class LocalMapView {
   update(dt) {
     this.elapsed += dt;
     if (this.controls) this.controls.update();
+    if (this.walk) this.stepWalk(performance.now());
     for (const m of this.tokens) {
+      if (m.userData.walking || !m.visible) continue;
       m.position.y = m.userData.baseY + Math.sin(this.elapsed / 620 + m.userData.phase) * 0.05;
       m.rotation.y += dt * 0.0006;
+    }
+    // The active combatant's ground ring breathes so the player sees whose turn it is.
+    if (this.battle) {
+      const activeUid = this.battle.state.activeUid;
+      for (const [uid, tok] of this.battleTokens) {
+        const ring = tok.userData.ring;
+        if (!ring) continue;
+        const active = uid === activeUid;
+        const s = active ? 1 + Math.sin(this.elapsed / 240) * 0.25 : 1;
+        ring.scale.setScalar(s);
+        ring.material.opacity = active ? 0.95 : 0.5;
+      }
     }
     if (this.campfire) {
       // The flame breathes and the light jitters like a real fire.
@@ -399,6 +682,9 @@ export class LocalMapView {
   dispose() {
     this.deactivate();
     this.disablePicking();
+    this.endBattle();
+    this.tileMeshes = [];
+    if (this.hlGeo) { this.hlGeo.dispose(); this.hlGeo = null; }
     if (this.scene) {
       this.scene.traverse((o) => {
         if (o.geometry) o.geometry.dispose();

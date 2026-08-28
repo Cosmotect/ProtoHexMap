@@ -35,6 +35,10 @@ export function createUI(config, handlers) {
     overlayText: $('overlay-text'),
     scene: $('scene'),
     pathInfo: $('path-info'),
+    battleBar: $('battle-bar'),
+    battleRound: $('battle-round'),
+    battleActive: $('battle-active'),
+    battleAbilities: $('battle-abilities'),
   };
 
   // ----- buttons -----------------------------------------------------
@@ -85,7 +89,11 @@ export function createUI(config, handlers) {
     if (e.key === 'c' || e.key === 'C') handlers.onToggleCamera();
     if (e.key === 'n' || e.key === 'N') handlers.onNewMap();
     if (e.key === 'r' || e.key === 'R') handlers.onRestart();
-    if (e.key === 'e' || e.key === 'E') handlers.onEnter();
+    if (e.key === 'e' || e.key === 'E') {
+      // In a fight, E ends the active unit's turn instead of "Enter".
+      if (battleRef) { battleRef.endTurn(); return; }
+      handlers.onEnter();
+    }
     if (e.key === 'Escape') { closeMenu(); closeRoster(); handlers.onEscape && handlers.onEscape(); }
   });
 
@@ -440,6 +448,48 @@ export function createUI(config, handlers) {
     bannerTimer = setTimeout(() => els.banner.classList.add('hidden'), ms);
   }
 
+  // ----- the battle bar (interactive combat on the local map) ---------------
+  // Shown instead of the status bar while a fight runs. Everything is read off
+  // the combat engine's state on every updateBattle() call; the buttons talk
+  // straight back to the engine (selectAbility / endTurn).
+  let battleRef = null;
+  $('btn-end-turn').addEventListener('click', () => { if (battleRef) battleRef.endTurn(); });
+  els.battleAbilities.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-ab]');
+    if (b && battleRef) battleRef.selectAbility(b.dataset.ab);
+  });
+  function setBattleMode(battle) {
+    battleRef = battle ?? null;
+    document.body.classList.toggle('battle-mode', !!battleRef);
+    els.battleBar.classList.toggle('hidden', !battleRef);
+    if (battleRef) updateBattle();
+  }
+  function updateBattle() {
+    if (!battleRef) return;
+    const sb = battleRef.state;
+    els.battleRound.textContent = sb.ambush ? t('battle.ui.ambush') : t('battle.ui.round', { n: sb.round });
+    const c = battleRef.curPlayer();
+    if (sb.phase === 'player' && c) {
+      const moved = c.usedMove ? t('battle.ui.moved') : t('battle.ui.canMove');
+      els.battleActive.innerHTML = `<b>${c.icon ?? ''} ${escapeHtml(tn(c.name))}</b> <span class="hp">${t('battle.ui.hp', { hp: c.hp, max: c.maxHp })}</span> <span class="muted">${escapeHtml(moved)}</span>`;
+      els.battleAbilities.innerHTML = c.abilityIds.map((id) => {
+        const ab = battleRef.abilityById(id);
+        if (!ab) return '';
+        const sel = sb.selAb === id ? 'selected' : '';
+        const num = ab.damage > 0 ? `⚔${ab.damage}` : ab.heal > 0 ? `+${ab.heal}` : '';
+        const tip = `${ab.name}${ab.damage > 0 ? ` - ${t('battle.ui.dmg', { n: ab.damage })}` : ''}${ab.heal > 0 ? ` - ${t('battle.ui.heal', { n: ab.heal })}` : ''}`;
+        return `<button class="ab ${sel}" data-ab="${id}" title="${escapeAttr(tip)}" ${sb.busy ? 'disabled' : ''}>
+          <span class="ab-icon">${ab.icon}</span><small>${escapeHtml(ab.name)}</small>${num ? `<span class="ab-num">${num}</span>` : ''}
+        </button>`;
+      }).join('');
+      $('btn-end-turn').disabled = !!sb.busy;
+    } else {
+      els.battleActive.innerHTML = `<span class="muted">${t(sb.over ? 'battle.ui.over' : 'battle.ui.enemyPhase')}</span>`;
+      els.battleAbilities.innerHTML = '';
+      $('btn-end-turn').disabled = true;
+    }
+  }
+
   // ----- the start screen (party around the campfire) ----------------------
   // While it is on, the Enter button reads "Begin journey" and clicking a unit
   // in the party panel opens the roster grid.
@@ -492,7 +542,7 @@ export function createUI(config, handlers) {
   }
   function rosterOpen() { return !rosterEl.classList.contains('hidden'); }
 
-  return { update, renderLog, setHover, showEnd, hideEnd, openDialog, closeDialog, dialogOpen, flashDialog, confirm, chooseUnit, showBanner, buildLegend, buildFatigueBar, updateBlur, setStartScreen, openRoster, closeRoster, rosterOpen };
+  return { update, renderLog, setHover, showEnd, hideEnd, openDialog, closeDialog, dialogOpen, flashDialog, confirm, chooseUnit, showBanner, buildLegend, buildFatigueBar, updateBlur, setStartScreen, openRoster, closeRoster, rosterOpen, setBattleMode, updateBattle };
 }
 
 // Log parameters are stored language-neutral and resolved at render time:

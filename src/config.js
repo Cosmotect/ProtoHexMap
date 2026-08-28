@@ -50,6 +50,8 @@ export const CONFIG = {
     hexSize: 1.0,
     gap: 0.06,
     tileHeight: 0.3,
+    elevationStep: 0.35,      // world units of visual height per combat elevation level
+                              // (the LEVELS themselves are combat rules: src/config/abilities.js)
     flyInMs: 1500,            // the dive from the world map into the arena
     flyOutMs: 1300,           // the climb back out
     swapPoint: 0.55,          // where in the flight (0..1) the world swaps for the arena

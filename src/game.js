@@ -423,7 +423,7 @@ export class Game {
       case 'battle':
       case 'stasisSeed':
       case 'stasisColony':
-        return this.resolveBattle(hex, forced);
+        return this.startCombat(hex, forced);
       case 'treasure': {
         this.consume(hex, type, forced);
         this.offerSupplies(this.config.treasure.supplies, 'treasure.title', 'treasure.text', 'treasure');
@@ -603,9 +603,15 @@ export class Game {
   }
 
   // ----- battle ---------------------------------------------------------
-  resolveBattle(hex, forced, opts = {}) {
+  // A fight happens in three steps, so the INTERACTIVE combat on the local map
+  // (src/local/battle/) can slot in between them:
+  //   prepareCombat()  rolls the enemies, applies the Stasis debuffs, logs the
+  //                    opening - and returns a context describing the fight
+  //   ...the fight...  either simulateBattle (the old auto-resolve) or the
+  //                    combatDelegate set by main.js (the playable arena)
+  //   finishCombat()   lifts the debuffs, applies deaths, rewards, dialogs, end
+  prepareCombat(hex, forced, opts = {}) {
     const s = this.state;
-    const isStasis = hex.isSeed || hex.isColony;
     const enemies = hex.enemies ?? makeEnemies(this.rng, this.config.battle, hex.ring, hex.isSeed ? 'boss' : hex.isColony ? 'colony' : 'regular');
     hex.enemies = null;
 
@@ -631,7 +637,17 @@ export class Game {
       this.addLog('log.debuffs', { list: { list: debuffs.map((id) => ({ key: `debuff.${id}.name` })) } });
     }
 
-    const result = simulateBattle(this.rng, this.config.battle, s.party, enemies, !forced);
+    const who = { list: enemies.map((e) => ({ key: 'log.battle.enemy', params: { name: { name: e.name }, hp: e.maxHp, power: e.power } })) };
+    const first = { key: forced ? 'log.battle.enemiesFirst' : 'log.battle.partyFirst' };
+    if (enemies.title) this.addLog('log.battle.stasis', { title: { name: enemies.title }, who, first });
+    else this.addLog('log.battle', { who, first });
+
+    return { hex, forced, opts, enemies, debuffs, saved };
+  }
+
+  finishCombat(ctx, result) {
+    const s = this.state;
+    const { hex, forced, opts, enemies, debuffs, saved } = ctx;
 
     // Undo the temporary debuffs (wounds and deaths remain).
     for (let i = 0; i < s.party.length; i++) {
@@ -641,18 +657,24 @@ export class Game {
       u.hp = Math.min(u.hp, u.maxHp);
     }
 
+    // An interactive fight reports only the outcome; deaths are read off the party.
+    if (result.interactive) {
+      result.lines = result.lines ?? [];
+      result.deaths = result.deaths ?? [];
+      result.partyFirst = !forced;
+      for (const u of s.party) {
+        if (u.alive && u.hp <= 0) { u.hp = 0; u.alive = false; result.deaths.push(u); }
+      }
+    }
+
     result.enemies = enemies;
-    result.stasis = isStasis;
+    result.stasis = hex.isSeed || hex.isColony;
     result.seedFight = hex.isSeed;
     result.colonyFight = hex.isColony;
     result.debuffs = debuffs;
     result.title = enemies.title || null;
     s.lastBattle = result;
 
-    const who = { list: enemies.map((e) => ({ key: 'log.battle.enemy', params: { name: { name: e.name }, hp: e.maxHp, power: e.power } })) };
-    const first = { key: forced ? 'log.battle.enemiesFirst' : 'log.battle.partyFirst' };
-    if (enemies.title) this.addLog('log.battle.stasis', { title: { name: enemies.title }, who, first });
-    else this.addLog('log.battle', { who, first });
     for (const d of result.deaths) {
       if (s.party.includes(d)) this.addLog('log.unitDisabled', { name: { name: d.name } });
     }
@@ -704,6 +726,29 @@ export class Game {
     }
     this.emit('change');
     return true;
+  }
+
+  // The auto-resolve fallback: the same three steps with simulateBattle in the
+  // middle. Used when no combatDelegate is wired in (headless tests, safety net).
+  resolveBattle(hex, forced, opts = {}) {
+    const ctx = this.prepareCombat(hex, forced, opts);
+    const result = simulateBattle(this.rng, this.config.battle, this.state.party, ctx.enemies, !forced);
+    return this.finishCombat(ctx, result);
+  }
+
+  // Routes a fight to the interactive arena when main.js has provided one.
+  // The delegate receives the prepared context and must later call
+  // finishCombat(ctx, { won, rounds, interactive: true }); returning false
+  // means "cannot take it now" and the fight auto-resolves instead.
+  startCombat(hex, forced, opts = {}) {
+    if (this.combatDelegate) {
+      const ctx = this.prepareCombat(hex, forced, opts);
+      if (this.combatDelegate(ctx)) return true;
+      // Delegate refused: fall through to the simulation on the SAME context.
+      const result = simulateBattle(this.rng, this.config.battle, this.state.party, ctx.enemies, !forced);
+      return this.finishCombat(ctx, result);
+    }
+    return this.resolveBattle(hex, forced, opts);
   }
 
   // ----- event effects ---------------------------------------------------
@@ -794,7 +839,7 @@ export class Game {
       }
       case 'battle': {
         // Same as a battle encounter on this tile. The dialog shows the story first.
-        this.resolveBattle(pos, forced, { alreadyConsumed: true, intro: { title, text } });
+        this.startCombat(pos, forced, { alreadyConsumed: true, intro: { title, text } });
         return;
       }
       case 'rest': {

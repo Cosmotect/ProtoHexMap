@@ -74,6 +74,24 @@ export function applyRecipe(map, recipe) {
 }
 
 /**
+ * ELEVATION WAVE - gentle rolling heights for battle arenas.
+ * Three overlapping sine waves with seeded phase offsets, snapped to whole
+ * levels 0..levels (the combat rules read these as high/low ground). The camp
+ * layout skips this: the start screen wants a flat, calm stage.
+ */
+export function applyElevationWave(map, random, levels) {
+  const ph = [random() * Math.PI * 2, random() * Math.PI * 2, random() * Math.PI * 2];
+  for (const tile of map.hexes.values()) {
+    const v = Math.sin(tile.q * 0.9 + ph[0])
+            + Math.cos(tile.r * 0.8 + ph[1])
+            + Math.sin((tile.q + tile.r) * 0.6 + ph[2]);
+    // v runs -3..3; squash it onto 0..levels.
+    tile.elevation = Math.max(0, Math.min(levels, Math.round(((v + 3) / 6) * levels)));
+  }
+  return map;
+}
+
+/**
  * Picks `count` distinct random tile keys, using the caller's rng function
  * (a () => number in [0,1)). `exclude` is a Set of keys to avoid.
  */

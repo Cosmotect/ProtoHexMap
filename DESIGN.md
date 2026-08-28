@@ -277,11 +277,48 @@ Three separate pools implement it (`src/config/units.js`): `battle.enemies.bands
     the camera into that tile: FOV stretches, the screen shakes, cloud layers rush past,
     a blur + white flash peak mid-flight - and at that peak (`local.swapPoint`) the world
     scene is swapped for the local scene. The flight is wall-clock timed
-    (`local.flyInMs` 1500 / `flyOutMs` 1300). Party and enemy tokens stand on random
-    distinct local tiles; the fight itself still resolves through the same simulation,
-    and the results window opens over the arena. Closing it flies the camera back out
-    and restores the world camera exactly.
+    (`local.flyInMs` 1500 / `flyOutMs` 1300). When the camera lands, the INTERACTIVE
+    combat takes over (below); the results window opens over the arena when it ends.
+    Closing it flies the camera back out and restores the world camera exactly.
   * **Arena camera**: rotation only - no panning, no zooming (`local.camera`).
+* **INTERACTIVE COMBAT** (`src/local/battle/`, since 2026-08-28): fights are PLAYED on
+  the local map, ported from the hex-box combat prototype (its battle core only - no
+  editors, no storage, no 2D renderer, no auto-simulation UI).
+  * **Files**: `bhex.js` (combat hex math: "q,r" string keys, 60-degree zone rotation),
+    `engine.js` (the whole rules core: effect resolver, statuses, pushes/falls/crushes,
+    terrain tags, turn flow, outcome-scoring enemy AI - pure state, no DOM/Three.js;
+    all output goes through callbacks: onChange / onFloater / onLog / onAnim / onEnd),
+    and the config slice `src/config/abilities.js` (COMBAT_CONFIG.combat rules, the
+    ABILITIES / COMBAT_TAGS tables, UNIT_COMBAT per-name stats with a `default`
+    fallback; deliberately NOT in the settings window).
+  * **Rules kept from hex-box**: players activate their units in any order; moving is
+    once per activation, casting ends the activation; enemies act by initiative;
+    uphill steps cost 2 movement, flyers glide; high ground +1 damage, low ground -1
+    (2+ levels); shield blocks one hit or push; stun skips the turn; pushes crash into
+    walls (2 dmg), fall 2+ levels (2 dmg + stun), crush whoever they land on.
+  * **Everlands additions**: a unit's world-map POWER adds ability damage
+    (`round(power / powerPerDamage)`, powerPerDamage 3), and a fatigue-FORCED fight
+    opens with an AMBUSH: one extra enemy phase before round 1 (no tag ticks, no round
+    counter - the world-map "enemies strike first" rule made playable).
+  * **Arena heights**: `applyElevationWave` in localmap.js rolls three seeded sine
+    waves into whole levels 0..`elevationLevels` (3); `local.elevationStep` (0.35) is
+    the visual height per level. The camp layout stays flat.
+  * **Wiring** (the only three touch points): `game.startCombat` calls
+    `prepareCombat` (enemies + Stasis debuffs applied to the party, context out),
+    then hands the context to `game.combatDelegate` (installed by main.js) - or, with
+    no delegate, falls back to the old `simulateBattle` auto-resolve (resolveBattle
+    still exists for headless tests). main.js builds the engine over the arena
+    (localview `beginBattle` places both sides and reports tiles + heights,
+    `bindBattle` maps engine uids to tokens and routes tile clicks), the battle bar
+    (`#battle-bar`, src/ui.js `setBattleMode`/`updateBattle`: active unit, ability
+    buttons, End turn, E key) replaces the status bar for the duration, and when the
+    engine reports the end, main writes the survivors' HP back into the party and
+    calls `game.finishCombat` (debuffs lifted, deaths, rewards, dialogs, end states -
+    the same tail the simulation used). `window.__battle` exposes the engine to tests;
+    `debugResolve(won)` decides a fight instantly.
+  * **Balance is RAW**: ability numbers in abilities.js are first guesses; the P50
+    difficulty scale was tuned for the simulation and needs re-measuring against
+    interactive play (a bot that plays like a human is a separate future project).
   * **Recipes (planned)**: encounters will get handcrafted arena recipes assigned at
     spawn (tile types, elevations, set dressing, lighting). The hook exists now:
     `applyRecipe` in `src/local/localmap.js` runs during the fly-in, right before the
@@ -341,6 +378,21 @@ Outcome choice per type is an open question (see below); the hook does not care.
 
 ## Decisions log
 
+* 2026-08-28 (c) **Interactive combat**: the hex-box combat core moved in
+  (`src/local/battle/bhex.js` + `engine.js`, config in `src/config/abilities.js`) and
+  fights are now PLAYED on the local map instead of simulated - free player activation
+  order, move + cast per activation, enemy phases by initiative, heights/pushes/tags,
+  the outcome-scoring enemy AI. Only the battle core came over: no editors, no
+  saves/undo, no 2D renderer, and the auto-simulation stayed behind as agreed (a
+  human-like bot is a separate future project; `battle.js` remains for enemy
+  generation and as the no-delegate fallback via `resolveBattle`). Everlands grafts:
+  world-map power adds ability damage (power/3), forced fights open with an ambush
+  enemy phase, arenas get a seeded elevation wave (flat for the campfire). The split
+  is `game.prepareCombat` -> `combatDelegate` (main.js runs the engine on the arena)
+  -> `game.finishCombat`; the world map never learns how the fight went, only the
+  outcome. Ability/unit combat stats are hand-authored config, deliberately outside
+  the settings window for now. BALANCE IS RAW - numbers are first guesses and the
+  P50 scale needs re-measuring against real play.
 * 2026-08-28 Second UI pass. Supplies and the turn moved INTO the top bar on either side
   of the fatigue scale (hairline separators between them), leaving the bottom bar as one
   button - one place to read the run's state instead of two. The event log went off by

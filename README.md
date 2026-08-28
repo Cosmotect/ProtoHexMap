@@ -3,8 +3,9 @@
 A browser prototype of the world map (level select) for a roguelike in the spirit of
 Slay the Spire and Into the Breach: a hex grid under fog of war, a party of three moving
 one step at a time, fatigue that can force encounters on you, supplies as the currency,
-simulated battles, and the Stasis: a Seed hidden in the outer rings (destroy it to win)
-whose lines grow towards four future Colonies, withering the land as they spread.
+battles played out on a local arena map (tactics-style: move, aim, cast, high ground,
+pushes), and the Stasis: a Seed hidden in the outer rings (destroy it to win) whose
+lines grow towards four future Colonies, withering the land as they spread.
 The rules are in DESIGN.md.
 
 Built with **Three.js** (3D in the browser) and **Vite** (the tool that runs and packages it).
@@ -85,9 +86,10 @@ Handy URL switches (add them to the address):
 | `?npe=1` | Start the guided new player experience (fixed map, interface revealed piece by piece). |
 | `?nostart=1` | Skip the Everlands splash and the campfire start screen (used by the tests). |
 
-Keyboard: **E** enter the encounter / make camp, **M** menu, **C** camera toggle, **N** new map,
-**R** restart, arrow keys pan.
+Keyboard: **E** enter the encounter / make camp (in a fight: end the turn), **M** menu,
+**C** camera toggle, **N** new map, **R** restart, arrow keys pan.
 Mouse: left-drag pan, right-drag rotate/tilt, wheel zoom, left-click a glowing tile to move.
+In a fight: click a lit tile to move, an ability button to aim, a lit tile again to cast.
 
 ---
 
@@ -103,10 +105,11 @@ hex-world-map/
     config.js    design knobs: run rules, camera, colours + glue for the three files below
     config/world.js       map size, terrain
     config/encounters.js  encounter odds, rest / shop / treasure / events, fatigue
-    config/units.js       the party and the battle simulation
+    config/units.js       the party and the enemy groups
+    config/abilities.js   combat rules, abilities, tile tags, per-unit combat stats
     main.js      entry point, wires the three parts below together
     game.js      rules and state: movement, fog, fatigue, party, encounters, win / lose (no graphics)
-    battle.js    the battle simulation (damage rolls, power multiplier, enemy groups)
+    battle.js    enemy group generation + the legacy auto-resolve (fallback when no arena)
     events.js    flavour texts for Event encounters
     tutorial.js  the new player experience (guided first run)
     text.js      texts generated from config numbers (legend entries, guide cards)
@@ -118,9 +121,11 @@ hex-world-map/
     hex.js       hex grid maths (axial coordinates, neighbours, distance)
     rng.js       seeded random numbers (same seed = same map)
     render.js    the Three.js scene: tiles, fog, markers, player token, camera, mouse picking
-    local/localmap.js     LOCAL map data (the encounter arena grid) + the future recipe hook
-    local/localview.js    the arena's own Three.js scene, tokens and rotate-only camera
+    local/localmap.js     LOCAL map data (the encounter arena grid), elevation wave, recipe hook
+    local/localview.js    the arena's own Three.js scene, tokens, highlights, rotate-only camera
     local/transition.js   the cloud-dive cinematic between the world and the arena
+    local/battle/bhex.js     combat hex math (ported from the hex-box prototype)
+    local/battle/engine.js   the INTERACTIVE combat rules: turns, abilities, pushes, enemy AI
     ui.js        the HUD: the top bar (supplies, fatigue, turn), party panel, log, legend, menu, encounter windows, roster
     audio.js     the sounds, synthesised in the browser (no files): the fatigue bar's blips
     tween.js     tiny animation helper (like Godot's Tween)
