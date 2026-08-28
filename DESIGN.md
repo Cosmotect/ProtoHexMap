@@ -114,9 +114,9 @@ Three separate pools implement it (`src/config/units.js`): `battle.enemies.bands
 * **Encounter logic** (`game.js enter()`):
   * *Battle / Stasis Seed / Stasis Colony*: automatic simulation (`battle.js`). Player
     strikes first unless the battle was forced by fatigue. Each unit hits a random living
-    enemy; damage = a roll in [`damageMin`, `damageMax`] (2-8, bell shaped: the average of
-    `bellDice` (3) uniform rolls) times
-    `powerBase` ^ ((attacker power - defender power) / `powerStep`) - i.e. 1.1x per 3 points
+    enemy; damage = a roll in [`damageMin`, `damageMax`] (2-8, triangular: the average of
+    `bellDice` (2) uniform rolls) times
+    `powerBase` ^ ((attacker power - defender power) / `powerStep`) - i.e. 1.15x per 3 points
     of power difference, continuous (only the final damage is rounded).
     **All power numbers live on a x3 scale** (party units start at 3, a victory or a shop
     upgrade grants 3, the black market 6, a Colony debuff removes 6).
@@ -133,10 +133,14 @@ Three separate pools implement it (`src/config/units.js`): `battle.enemies.bands
     unit at which a full-HP party wins half the time is 16 for an outer-ring regular
     group, 18 for a Colony and 31 for the Seed - the ladder the 0-100 guideline asks for.
     Enemy groups are rolled when the map is generated / when the Colony spawns
-    (`hex.enemies`), so a revealed fight shows its danger up front:
-    floor((enemy power - living party power) / 2) red chevrons above the marker
-    (on Stasis tiles the active debuffs are counted in when they move either side's
-    total power). Player units deal extra damage the lower their HP
+    (`hex.enemies`), so a revealed fight shows its danger up front, as red chevrons above
+    the marker (`config.battle.danger`, since 2026-08-28):
+    `base` (1.2) ^ ((total enemy power - total living party power) / `powerStep` (3))
+    * (enemy count / living party count), rounded. Equal power on both sides and equal
+    numbers = 1 chevron; being outnumbered pushes it up even at equal power, which is what
+    the fight simulation actually punishes. `maxChevrons` (8) caps the DRAWING only, not
+    the maths. On Stasis tiles the active debuffs are counted in where they move power or
+    numbers. Player units deal extra damage the lower their HP
     (`battle.desperation`). Enemies pick their targets weighted towards the healthiest
     party units (`battle.healthyTargetBias`, HP-fraction exponent; it simulates the
     player shielding the wounded and is deliberately not surfaced in the UI). A report
@@ -180,8 +184,24 @@ Three separate pools implement it (`src/config/units.js`): `battle.enemies.bands
   Table entries are interpolated linearly, steps outside the table are clamped.
   Default: steps 1-4 free, step 5 = 5%, rising to 100% at step 24. When fatigue > 0,
   hovering a reachable tile shows a popup with the chance after that step.
-* **HUD**: bottom-centre status bar (fatigue and turn, the Enter button, gold and
-  supplies), party panel on the left middle, log bottom left, legend bottom right
+* **Fatigue bar** (`ui.js`, `config.fatigueBar`, top centre): one box per step of
+  `fatigue.byStep`, from step 1 to the last entry in the table, each labelled with the
+  percentage that step brings. A box is faint until the party has taken that step and
+  solid afterwards, so the row reads left to right like a fuse. 0% boxes are green; the
+  rest run from yellow to red across the range of non-zero percentages present, so
+  re-tuning the table re-colours the bar by itself. The box that just filled shakes once
+  and then breathes in a slow sine until the next step replaces it. A reset empties the
+  row right to left. Sounds come from `audio.js`.
+* **Sound** (`audio.js`, `config.audio`): no audio files - every blip is synthesised with
+  the Web Audio API (sine oscillator, short attack, exponential decay, low-pass filter, a
+  small downward glide). Each fatigue box sounds `audio.stepSemitones` higher than the one
+  before it; a reset walks the ladder back down, lower and quieter. Pitch and volume get a
+  small random jitter on every play (`pitchJitter`, `gainJitter`) so a sound heard
+  thousands of times never repeats exactly. Browsers forbid audio before a user gesture,
+  so the AudioContext is created on the first click and the game is simply silent until
+  then.
+* **HUD**: top-centre **fatigue bar** (see below), bottom-centre status bar (the turn, the
+  Enter button, supplies), party panel on the left middle, log bottom left, legend bottom right
   (collapsed; expands on hover, each entry expands on click with its `info` text from the
   config), and a top-right **Menu** (seed, load, copy link, new map, restart, reveal map,
   settings, new player experience; key M). The world blurs while the menu or the settings
@@ -207,7 +227,7 @@ Three separate pools implement it (`src/config/units.js`): `battle.enemies.bands
   fatigue after the step, and the tile's encounter reset rule.
 * **New player experience** (`tutorial.js`, seed `NPE_SEED` = 6, also `?npe=1`): a guided
   run on a fixed map. The HUD starts empty; cards explain movement (step 1), the party
-  (step 2, panel appears), fatigue (step 3, status bar appears), the first encounter tile,
+  (step 2, panel appears), fatigue (step 3, the fatigue bar and the status bar appear), the first encounter tile,
   each encounter type on first entry (log appears), battle reports (legend appears), forced
   encounters, camps, and the first step onto costly terrain (a mountain): that card asks
   "Climb / Stay here" before the move happens, pointing at the tile's top; the first cleared
@@ -233,30 +253,6 @@ Three separate pools implement it (`src/config/units.js`): `battle.enemies.bands
 * **Camera**: perspective by default (tilt 52 degrees, fov 42), follows the player with a
   glide; orthographic / isometric alternative on C. Map-style controls: left-drag pan,
   right-drag orbit, wheel zoom, arrow keys pan.
-* **The LOCAL map** (`src/local/`, since 2026-08-27): combat encounters (battle, Stasis
-  Seed, Stasis Colony) play out on a separate arena grid instead of a bare window.
-  * The local grid is a hex map of `local.radius` (6) rings using the OPPOSITE hex
-    orientation to the world map (world flat-top by default -> local pointy-top), so one
-    world tile visually breaks into a sub-grid of local tiles. Local tiles are shades of
-    the world tile's final colour. Local tiles have NO gameplay logic yet.
-  * **The dive**: pressing Enter on a combat tile (or being forced in by fatigue) flies
-    the camera into that tile: FOV stretches, the screen shakes, cloud layers rush past,
-    a blur + white flash peak mid-flight - and at that peak (`local.swapPoint`) the world
-    scene is swapped for the local scene. The flight is wall-clock timed
-    (`local.flyInMs` 1500 / `flyOutMs` 1300). Party and enemy tokens stand on random
-    distinct local tiles; the fight itself still resolves through the same simulation,
-    and the results window opens over the arena. Closing it flies the camera back out
-    and restores the world camera exactly.
-  * **Arena camera**: rotation only - no panning, no zooming (`local.camera`).
-  * **Recipes (planned)**: encounters will get handcrafted arena recipes assigned at
-    spawn (tile types, elevations, set dressing, lighting). The hook exists now:
-    `applyRecipe` in `src/local/localmap.js` runs during the fly-in, right before the
-    scene swap; `startCombatDive` in main.js already forwards `hex.recipe`.
-  * **Sandboxing**: the local system lives in `src/local/` (localmap.js data,
-    localview.js scene, transition.js flight) and touches the world only through one
-    hook, `MapRenderer.overrideFrame`, plus `Game.combatIntro` (installed by main.js so
-    forced fights take the same dive). Nothing in `src/local/` reads or writes game
-    rules or world meshes.
 
 ## How the code is split (so changes land in the right file)
 
@@ -273,20 +269,31 @@ Data shapes:
 unit   = { name, icon, hp, maxHp, power, alive }
 hex    = { q, r, ring, key, type, biome, passable, supplyCost, encounter, isStart, isSeed,
            isColony, revealed, visited, x, y }
-state  = { status, party, gold, supplies, maxSupplies, turn, position, shortestPathLength,
-           fatigue, coloniesCleared, endReason }
+state  = { status, party, supplies, maxSupplies, turn, position, shortestPathLength,
+           fatigueSteps, fatigue, coloniesCleared, endReason }
 stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }], witherCharge }
 ```
 
 ## Where encounter outcomes will plug in
 
 `Game.onEnter(hex)` is the single hook. Plan: each encounter type gets a small "outcome
-table" in config (e.g. battle: win 70% -> gold +15, HP -10; loss 30% -> HP -30), a panel in
+table" in config (e.g. battle: win 70% -> supplies +15, HP -10; loss 30% -> HP -30), a panel in
 the UI that shows the possible outcomes, and a way to **pick** or **roll** the result.
 Outcome choice per type is an open question (see below); the hook does not care.
 
 ## Decisions log
 
+* 2026-08-28 Fatigue moved out of the status bar into its own **fatigue bar** at the top
+  centre: a row of boxes, one per step, that fills as the party walks and empties on a
+  reset. Reason: a single "18%" number told the player nothing about how close the next
+  step was to the cliff; a row of boxes shows the whole ramp at a glance and turns the
+  decision "one more step or camp now" into something you read without hovering.
+  Gold was removed from the game entirely (state, config, HUD, texts) - supplies had
+  become the only currency long ago and the second counter was dead weight.
+  Sound arrived with it (`audio.js`): synthesised rather than sampled, so pitch and
+  volume can be jittered per play and the blip survives thousands of repetitions.
+  Floating windows moved from `top: 72px` to `--window-top` (44%) so nothing sits under
+  the new bar.
 * 2026-08-21 Three.js + plain JavaScript + Vite chosen over Godot web export: instant load,
   small build, simple hosting on Cloudflare Pages, and Claude can build/test/screenshot it
   fully inside its own session.
@@ -334,20 +341,21 @@ Outcome choice per type is an open question (see below); the hook does not care.
   ground #4d4f46, hill #8f8d74, mountain #b0bbc8.
   The first pass left outer-ring regular groups harder than Colonies and bosses; fixed
   the same day by rebuilding both Stasis pools around counts and HP (see below).
-* 2026-08-27 (c) **The local map**: combat now dives into an arena grid (`src/local/`,
-  radius 6, opposite hex orientation) through a cloud cinematic with a mid-flight scene
-  swap; results window over the arena; camera flies back out on Continue. World map
-  orientation default flipped to FLAT-top so its tiles visually split into pointy-top
-  local grids (`?orient=pointy` compares). Arena camera: rotation only. Recipe hook
-  prepared for future handcrafted arenas.
 * 2026-08-27 (b) **Stasis pools rebuilt** so the ladder matches the guideline: Colonies
-  are 3-7 units (P50 18), the Seed 4-9 units (P50 31), against 4-8 units for an outer-ring
-  regular group (P50 16). "P50" = the power per party unit at which a full-HP party wins
+  are 3-7 units, the Seed 4-9 units, against 4-8 units for an outer-ring regular group. "P50" = the power per party unit at which a full-HP party wins
   half the time, measured with a binary search over 600 simulated fights per point
   (`node bench.mjs`, kept out of the repo). Shapes are deliberately varied: equal-power
   swarms (Husk Choir 9, Rot Chorus 7, Stasis Brood 6) and hierarchies (a 26-32 power
   leader plus chaff). Also: `bellDice` back to 3 (bell shaped damage) and the damage
   exponent is no longer rounded.
+* 2026-08-28 Damage roll softened to a triangle (`bellDice` 2) and the power coefficient
+  raised to `powerBase` 1.15. The **danger chevrons got their own formula**
+  (`config.battle.danger`): `1.2 ^ (powerGap / 3) * (enemy count / living party count)`,
+  rounded, capped at 8 drawn. The preview now reacts to being OUTNUMBERED, which is what
+  the simulation punishes hardest, instead of only to the power gap. Measured P50 (party
+  power per unit for a coin-flip win, 600 fights per point) after these two changes:
+  outer-ring regular group 14, Stasis Colony 16, Stasis Seed 28 - the same ladder as
+  before, one to three points softer across the board.
 
 ## Open questions
 
@@ -365,7 +373,7 @@ Outcome choice per type is an open question (see below); the hook does not care.
 ## Roadmap (suggested order)
 
 1. Encounter panel + outcome tables (manual pick and weighted roll).
-2. HP / gold consequences, rest sites healing, shops spending gold.
+2. HP / supply consequences, rest sites healing, shops spending supplies.
 3. Terrain supply costs and a "path preview" on hover (cost to reach a tile).
 4. Map variants: branching lanes, bigger fields, more Stasis Seeds.
 5. Save / load a run to the browser (localStorage) so a tab refresh does not reset.

@@ -9,6 +9,9 @@
   --font: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --display: "Cinzel", "Times New Roman", Georgia, serif;
+  /* Where floating windows sit vertically. Slightly above the middle, so they
+     clear the fatigue bar at the top and the status bar at the bottom. */
+  --window-top: 44%;
 }
 
 html, body {
@@ -80,8 +83,9 @@ button.npe:hover { background: rgba(85, 175, 140, 0.7); }
   color: var(--accent);
   margin-bottom: 8px;
 }
-/* Bottom status bar: [fatigue, turn] [Enter] [gold, supplies] */
+/* Bottom status bar: [turn] [Enter] [supplies] */
 .bottom-center { left: 0; right: 0; bottom: 14px; margin: 0 auto; width: fit-content; }
+.top-center { left: 0; right: 0; top: 14px; margin: 0 auto; width: fit-content; }
 .statusbar { display: flex; align-items: center; gap: 22px; padding: 10px 18px; }
 .statusbar .stats { gap: 16px; }
 .version {
@@ -246,13 +250,15 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   0% { box-shadow: 0 0 0 5px #8fe0b8, 0 0 24px rgba(143, 224, 184, 0.8); }
   100% { box-shadow: 0 0 0 2px #8fe0b8, 0 0 14px rgba(143, 224, 184, 0.45); }
 }
-.stat.npe-target, #stat-fatigue.npe-target, #stat-supplies.npe-target { padding: 0 4px; margin: 0 -4px; }
+.stat.npe-target, #stat-supplies.npe-target { padding: 0 4px; margin: 0 -4px; }
 /* HUD pieces hidden during the guided run */
 .npe-hidden { display: none !important; }
 
-/* Generic dialog (shop, event, battle report, unit chooser) */
+/* Generic dialog (shop, event, battle report, unit chooser).
+   Centred horizontally, its middle sitting at --window-top: high enough to
+   clear the fatigue bar, low enough to clear the status bar. */
 .dialog {
-  top: 72px; left: 50%; transform: translateX(-50%);
+  top: var(--window-top); left: 50%; transform: translate(-50%, -50%);
   width: min(520px, 92vw);
   padding: 14px 18px 16px;
 }
@@ -260,8 +266,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 /* Flashes when the player clicks the world while the window is open */
 .dialog.flash { animation: dialog-flash 0.45s ease-out; }
 @keyframes dialog-flash {
-  0% { box-shadow: 0 0 0 3px var(--accent), 0 6px 24px rgba(0, 0, 0, 0.35); transform: translateX(-50%) scale(1.02); }
-  100% { box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35); transform: translateX(-50%) scale(1); }
+  0% { box-shadow: 0 0 0 3px var(--accent), 0 6px 24px rgba(0, 0, 0, 0.35); transform: translate(-50%, -50%) scale(1.02); }
+  100% { box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35); transform: translate(-50%, -50%) scale(1); }
 }
 .dialog-title { font-family: var(--display); font-weight: 700; letter-spacing: 0.12em; font-size: 14px; color: var(--accent); }
 .dialog-body { font-size: 13.5px; line-height: 1.5; max-height: 40vh; overflow-y: auto; }
@@ -306,6 +312,65 @@ button.small { padding: 2px 8px; font-size: 12px; }
 .enter.camp:hover { background: rgba(85, 175, 140, 0.95); }
 .enter:disabled { opacity: 0.35; cursor: default; background: rgba(255, 255, 255, 0.08); }
 
+/* ----- Fatigue bar (top centre) --------------------------------------
+   One box per step. A box is faint until the party has taken that step,
+   then it turns solid: the row reads left to right like a fuse burning
+   down. --hue (green -> yellow -> red) and --size are written per box by
+   ui.js from CONFIG.fatigueBar. */
+.fatigue-bar { padding: 8px 10px; }
+.fatigue-boxes { display: flex; gap: 6px; align-items: center; }
+.fbox {
+  --hue: 135;
+  --size: 30px;
+  opacity: var(--empty-opacity, 0.22);
+  transition: opacity 0.3s ease;
+}
+.fbox.filled { opacity: var(--filled-opacity, 1); }
+/* The face is a separate element so the wiggle / pulse transforms never
+   fight with the opacity change above. */
+.fbox-face {
+  width: var(--size);
+  height: var(--size);
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: calc(var(--size) * 0.36);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.92);
+  border: 2px solid hsl(var(--hue) 72% 55%);
+  background: hsl(var(--hue) 60% 40% / 0.18);
+  transition: background 0.3s ease, box-shadow 0.3s ease;
+  will-change: transform;
+}
+.fbox.filled .fbox-face {
+  background: hsl(var(--hue) 68% 42% / 0.9);
+  box-shadow: 0 0 10px hsl(var(--hue) 80% 50% / 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+/* The moment a box fills: a short shake... */
+.fbox.wiggle .fbox-face { animation: fbox-wiggle var(--wiggle-ms, 260ms) ease-out; }
+@keyframes fbox-wiggle {
+  0%   { transform: scale(1.24) rotate(0deg); }
+  22%  { transform: scale(1.18) rotate(-5deg); }
+  45%  { transform: scale(1.12) rotate(4.5deg); }
+  68%  { transform: scale(1.06) rotate(-2.5deg); }
+  85%  { transform: scale(1.02) rotate(1deg); }
+  100% { transform: scale(1) rotate(0deg); }
+}
+/* ...then it breathes in a sine until the next step takes over. */
+.fbox.pulse .fbox-face { animation: fbox-pulse var(--pulse-ms, 1500ms) ease-in-out infinite; }
+@keyframes fbox-pulse {
+  0%   { transform: scale(1); }
+  50%  { transform: scale(calc(1 + var(--pulse-scale, 0.09))); }
+  100% { transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fbox.wiggle .fbox-face, .fbox.pulse .fbox-face { animation: none; }
+}
+
 .fatigue-tip {
   position: absolute;
   pointer-events: none;
@@ -343,12 +408,17 @@ button.small { padding: 2px 8px; font-size: 12px; }
 .modal {
   position: absolute;
   inset: 0;
+  box-sizing: border-box;
   pointer-events: auto;
   display: flex;
   align-items: center;
   justify-content: center;
   background: rgba(4, 6, 12, 0.55);
 }
+/* Everything except the near-fullscreen settings window is nudged up, so it
+   lands at --window-top instead of dead centre (12vh of padding at the bottom
+   moves the centred box up by half that). */
+.modal:not(.settings) { padding-bottom: 12vh; }
 .modal-box {
   background: var(--panel-bg);
   border: 1px solid var(--panel-border);

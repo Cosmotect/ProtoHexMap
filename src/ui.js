@@ -1,14 +1,16 @@
 // The HUD: plain HTML elements layered over the 3D canvas.
 // (In Godot terms: a CanvasLayer with Labels and Buttons.)
-import { describeHex } from './game.js';
+import { describeHex, lerpTable } from './game.js';
 import { terrainInfo, terrainName, encounterLabel, encounterInfo, tc } from './text.js';
 import { t, tn } from './i18n.js';
+import { playFatigueStep, playFatigueClear } from './audio.js';
 
 export function createUI(config, handlers) {
   const $ = (id) => document.getElementById(id);
 
   const els = {
-    fatigue: $('stat-fatigue'),
+    fatigueBar: $('fatigue-bar'),
+    fatigueBoxes: $('fatigue-boxes'),
     party: $('party-units'),
     enter: $('btn-enter'),
     confirm: $('confirm'),
@@ -20,7 +22,6 @@ export function createUI(config, handlers) {
     dialogTitle: $('dialog-title'),
     dialogBody: $('dialog-body'),
     dialogActions: $('dialog-actions'),
-    gold: $('stat-gold'),
     supplies: $('stat-supplies'),
     turn: $('stat-turn'),
     seed: $('seed-value'),
@@ -141,13 +142,108 @@ export function createUI(config, handlers) {
     if (item) item.classList.toggle('open');
   });
 
+  // ----- fatigue bar (top centre) --------------------------------------
+  // One box per step of config.fatigue.byStep, showing the fatigue % that step
+  // brings. A box is faint until the party has taken that step and solid after.
+  // The box that just filled shakes once (with a blip, a semitone higher than
+  // the box before it) and then breathes in a slow sine until the next step.
+  // A reset empties the row right to left, with the blips walking back down.
+  let boxes = [];
+  let shownSteps = -1;   // what the bar is currently showing (-1 = nothing yet)
+  let barGame = null;    // which run the bar belongs to (a new run never animates)
+  let barTimers = [];
+
+  function cancelBarTimers() {
+    for (const id of barTimers) clearTimeout(id);
+    barTimers = [];
+  }
+
+  function buildFatigueBar() {
+    const fb = config.fatigueBar;
+    const byStep = config.fatigue.byStep || {};
+    const keys = Object.keys(byStep).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+    const maxStep = keys.length ? keys[keys.length - 1] : 0;
+    // The percentage each step lands on, steps 1..maxStep (the table interpolates
+    // and clamps, so the early steps missing from it come out as the first value).
+    const pcts = [];
+    for (let step = 1; step <= maxStep; step++) pcts.push(lerpTable(byStep, step));
+    // Colour: the 0% boxes are green; the rest spread from yellow to red over the
+    // range of non-zero percentages actually present.
+    const risky = pcts.filter((p) => p > 0);
+    const lo = risky.length ? Math.min(...risky) : 0;
+    const hi = risky.length ? Math.max(...risky) : 1;
+    const hueFor = (pct) => {
+      if (pct <= 0) return fb.hueSafe;
+      const k = hi > lo ? (pct - lo) / (hi - lo) : 0;
+      return Math.round(fb.hueLow + (fb.hueHigh - fb.hueLow) * k);
+    };
+    els.fatigueBar.style.setProperty('--empty-opacity', String(fb.emptyOpacity));
+    els.fatigueBar.style.setProperty('--filled-opacity', String(fb.filledOpacity));
+    els.fatigueBar.style.setProperty('--wiggle-ms', `${fb.wiggleMs}ms`);
+    els.fatigueBar.style.setProperty('--pulse-ms', `${fb.pulseMs}ms`);
+    els.fatigueBar.style.setProperty('--pulse-scale', String(fb.pulseScale));
+    els.fatigueBoxes.innerHTML = pcts.map((pct, i) =>
+      `<div class="fbox" style="--hue:${hueFor(pct)};--size:${fb.boxSize}px" title="${escapeAttr(t('fatiguebar.box', { step: i + 1, pct: Math.round(pct) }))}">
+         <div class="fbox-face">${Math.round(pct)}%</div>
+       </div>`).join('');
+    boxes = Array.from(els.fatigueBoxes.querySelectorAll('.fbox'));
+    cancelBarTimers();
+    shownSteps = -1;   // force the next update to redraw the filled state
+  }
+  buildFatigueBar();
+
+  function clearBarAnimations() {
+    for (const b of boxes) b.classList.remove('pulse', 'wiggle');
+  }
+
+  // Fill up to `upTo` boxes. `animate` plays the shake, the sound and the pulse
+  // on the last one; without it the bar just snaps to the state (new run, rebuild).
+  function fillBar(upTo, animate) {
+    cancelBarTimers();
+    clearBarAnimations();
+    boxes.forEach((b, i) => b.classList.toggle('filled', i < upTo));
+    if (!animate || upTo <= 0) return;
+    const box = boxes[upTo - 1];
+    box.classList.add('wiggle');
+    playFatigueStep(upTo - 1, boxes.length);
+    barTimers.push(setTimeout(() => {
+      box.classList.remove('wiggle');
+      box.classList.add('pulse');
+    }, config.fatigueBar.wiggleMs));
+  }
+
+  // A reset: the boxes go faint again one by one, right to left, the blips
+  // walking back down the ladder.
+  function clearBar(from) {
+    cancelBarTimers();
+    clearBarAnimations();
+    const stagger = config.audio.clearStaggerMs;
+    for (let i = from - 1; i >= 0; i--) {
+      const delayMs = (from - 1 - i) * stagger;
+      const box = boxes[i];
+      barTimers.push(setTimeout(() => box.classList.remove('filled'), delayMs));
+      playFatigueClear(i, boxes.length, delayMs / 1000);
+    }
+  }
+
+  function syncFatigueBar(game) {
+    const steps = game.state.fatigueSteps;
+    const fresh = game !== barGame;      // a new run: no sound, no animation
+    barGame = game;
+    if (!fresh && steps === shownSteps) return;
+    const prev = shownSteps;
+    shownSteps = steps;
+    const upTo = Math.min(steps, boxes.length);
+    if (fresh || prev < 0) { fillBar(upTo, false); return; }
+    if (steps > prev) fillBar(upTo, true);
+    else clearBar(Math.min(prev, boxes.length));
+  }
+
   // ----- public API --------------------------------------------------
   function update(game) {
     const s = game.state;
     currentSeed = game.seed;
-    // Current fatigue = the chance rolled when you arrive on your next tile.
-    els.fatigue.textContent = `${s.fatigue}%`;
-    els.fatigue.classList.toggle('warn', s.fatigue >= 25);
+    syncFatigueBar(game);
     const action = game.enterAction();
     els.enter.disabled = !action.enabled;
     els.enter.textContent = action.label;
@@ -156,7 +252,6 @@ export function createUI(config, handlers) {
     els.party.innerHTML = s.party.map((u) => unitCard(u, config)).join('');
     // Keep an open dialog in sync (e.g. shop prices after a purchase).
     if (dialogRefresh) dialogRefresh(game);
-    els.gold.textContent = String(s.gold);
     els.supplies.textContent = `${s.supplies} / ${s.maxSupplies}`;
     els.supplies.classList.toggle('warn', s.supplies <= 3 && s.status === 'playing');
     els.turn.textContent = String(s.turn);
@@ -335,7 +430,7 @@ export function createUI(config, handlers) {
     bannerTimer = setTimeout(() => els.banner.classList.add('hidden'), ms);
   }
 
-  return { update, renderLog, setHover, showEnd, hideEnd, openDialog, closeDialog, dialogOpen, flashDialog, confirm, chooseUnit, showBanner, buildLegend, updateBlur };
+  return { update, renderLog, setHover, showEnd, hideEnd, openDialog, closeDialog, dialogOpen, flashDialog, confirm, chooseUnit, showBanner, buildLegend, buildFatigueBar, updateBlur };
 }
 
 // Log parameters are stored language-neutral and resolved at render time:
@@ -384,6 +479,9 @@ function hex(n) {
 }
 function escapeHtml(s) {
   return s.replace(/[&<>]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[ch]));
+}
+function escapeAttr(s) {
+  return String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 }
 function flash(button, text) {
   const old = button.textContent;

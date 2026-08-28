@@ -28,12 +28,19 @@ export const UNITS = {
     damageMax: 8,
     // Bell curve control: the roll is the average of this many uniform rolls.
     // 1 = flat (every value equally likely), 2 = triangle, 3+ = increasingly bell shaped.
-    bellDice: 3,
+    bellDice: 2,
     // Damage multiplier: powerBase ^ ((attacker power - defender power) / powerStep).
-    // Continuous: 3 points of difference are worth one full 1.1x, and every single
+    // Continuous: 3 points of difference are worth one full 1.15x, and every single
     // point in between moves the number a little. Only the final damage is rounded.
-    powerBase: 1.1,
+    powerBase: 1.15,
     powerStep: 3,
+    // Danger preview - the chevrons above a revealed fight. NOT the combat maths: this
+    // is only what the player is shown before deciding to walk in. The rank is
+    //   base ^ ((total enemy power - total living party power) / powerStep)
+    //   * (enemy count / living party count)
+    // rounded to a whole number of chevrons. Even numbers on both sides give 1 chevron.
+    // maxChevrons only caps how many are DRAWN, so the stack stays readable on screen.
+    danger: { base: 1.2, powerStep: 3, maxChevrons: 8 },
     // Player units hit harder the closer they are to death ("playing carefully"):
     // damage *= 1 + desperation * (1 - hp / maxHp). 0 = off, 0.5 = up to +50% at 1 HP.
     desperation: 0.5,
@@ -66,7 +73,7 @@ export const UNITS = {
     // large equal-power choir. A unit's own "power" overrides the variant's "power",
     // which is the value the unlisted (chaff) units use.
     // Measured (600 simulated fights per point): a full-HP party beats these when each
-    // of its units is around 31 power - about twice what an outer-ring group asks for.
+    // of its units is around 28 power - about twice what an outer-ring group asks for.
     bosses: [
       { title: 'Forge Tyrant', power: 11, units: [
         { name: 'Forge Tyrant', hp: 110, power: 26 }, { name: 'Tyrant\'s Shadow', hp: 55, power: 17 },
@@ -90,8 +97,8 @@ export const UNITS = {
     // same scale - a step ABOVE the toughest regular groups of the outer rings, and far
     // below a boss. Same shapes as the bosses (leaders + chaff, or an equal-power swarm)
     // at smaller numbers, so a Colony reads as a set piece rather than a bigger patrol.
-    // Measured: a full-HP party beats these at around 18 power per unit, against 16 for
-    // an outer-ring group and 31 for a boss.
+    // Measured: a full-HP party beats these at around 16 power per unit, against 14 for
+    // an outer-ring group and 28 for a boss.
     colonies: [
       { title: 'Colony Warden', power: 8, units: [
         { name: 'Colony Warden', hp: 80, power: 18 },

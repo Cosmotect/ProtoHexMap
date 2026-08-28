@@ -23,7 +23,6 @@ export const CONFIG = {
 
   // ----- Run rules ---------------------------------------------------
   run: {
-    startGold: 50,
     // Supplies are the currency: camps (rest.cost), shop options (shop.*Cost); treasure gives treasure.supplies.
     // This is also the maximum: gains never exceed it.
     startSupplies: 60,
@@ -72,6 +71,40 @@ export const CONFIG = {
     hopMs: 380,               // player hop from tile to tile
     revealMs: 450,            // fog lifting from a tile
     forcedBannerMs: 500,      // "stumbled into..." banner shown before a forced encounter's UI
+  },
+
+  // ----- Sound (src/audio.js) ----------------------------------------
+  // Every sound is generated in the browser, so these are the knobs of a
+  // tiny synthesiser rather than a list of files.
+  audio: {
+    enabled: true,
+    volume: 0.35,             // master volume, 0..1
+    wave: 'sine',             // 'sine' (softest), 'triangle', 'square', 'sawtooth'
+    baseFreq: 392,            // pitch of the FIRST fatigue box, in Hz (392 = G4)
+    stepSemitones: 1.5,       // how much higher each following box sounds (12 = a full octave)
+    blipGain: 0.5,            // loudness of one blip before the master volume
+    attackMs: 8,              // fade-in: anything above ~4 removes the click at the start
+    decayMs: 150,             // fade-out
+    glide: 0.94,              // the tone slides to this fraction of its pitch while fading (a soft "tock")
+    filterRatio: 3.5,         // low-pass cutoff as a multiple of the pitch: lower = duller, gentler
+    pitchJitter: 0.012,       // +-1.2% random pitch per play, so repeats never sound identical
+    gainJitter: 0.09,         // +-9% random volume per play
+    clearStaggerMs: 55,       // delay between the boxes emptying, right to left
+    clearDrop: 3,             // semitones below the filling ladder, for the reset sound
+    clearGain: 0.55,          // the reset is quieter than the steps
+  },
+
+  // ----- Fatigue bar (the boxes at the top of the screen) -------------
+  fatigueBar: {
+    wiggleMs: 260,            // the tiny shake a box does the moment it fills
+    pulseMs: 1500,            // one full breath of the sine pulse on the newest filled box
+    pulseScale: 0.09,         // how far that breath grows the box (0.09 = +-9%)
+    emptyOpacity: 0.22,       // how faint an unreached box is
+    filledOpacity: 1,         // how solid a reached box is
+    boxSize: 30,              // px, before the UI scale
+    hueSafe: 135,             // colour of the 0% boxes (135 = green)
+    hueLow: 52,               // colour of the smallest non-zero percentage (52 = yellow)
+    hueHigh: 2,               // colour of the largest percentage (2 = red)
   },
 
   // ----- Colours -----------------------------------------------------

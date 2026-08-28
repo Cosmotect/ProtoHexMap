@@ -32,10 +32,7 @@ export const en = {
   'menu.route': 'route to the Seed {n} {n:step|steps}',
 
   // ----- status bar / party ----------------------------------------------
-  'status.fatigue': 'Fatigue',
-  'status.fatigue.title': 'Chance of a forced encounter when you arrive on your next tile (if it has a battle or event)',
   'status.turn': 'Turn',
-  'status.gold': 'Gold',
   'status.supplies': 'Supplies',
   'status.enter': 'Enter',
   'status.enter.title': 'Enter the encounter on the tile you stand on (E)',
@@ -43,6 +40,10 @@ export const en = {
   'status.camp': 'Make camp ({cost} supplies)',
   'status.camp.title': 'Spend supplies to make camp here: heals every living unit by {healPct} of its max HP and resets fatigue (E)',
   'status.camp.short': 'Not enough supplies ({have}/{cost}).',
+  // ----- fatigue bar (top centre) ----------------------------------------
+  'fatiguebar.title': 'Fatigue: one box per step since the last reset. A box lights up when you take that step; its number is the chance of being dragged into an encounter on the step after it.',
+  'fatiguebar.box': 'Step {step}: {pct}% chance of a forced encounter',
+
   'party.title': 'Party',
   'party.power': 'power {n}',
   'party.hp': '{hp} / {max} HP',
@@ -421,7 +422,7 @@ export const en = {
   'npe.party.title': 'Your party',
   'npe.party.text': '<p>You travel as one token, but you are {unitCount}: each unit has its own <b>HP</b> and <b>power</b>. Power decides how hard a unit hits in a fight, and how hard it gets hit.</p><p>A unit at 0 HP is <b>disabled</b>: it takes no part in anything until it is restored, and restoration is only possible at a place that appears rarely. If every unit is disabled, the run is over.</p>',
   'npe.fatigue.title': 'Fatigue',
-  'npe.fatigue.text': '<p>Every step since your last reset counts. {from} fatigue rises: it is the chance that arriving on a tile with {forceable} drags you straight into it.</p><p>The bar at the bottom shows fatigue, the turn, gold and supplies. Hover any tile and a popup shows your step count, the chance of being forced, and the fatigue after that step.</p>',
+  'npe.fatigue.text': '<p>Every step since your last reset counts. {from} fatigue rises: it is the chance that arriving on a tile with {forceable} drags you straight into it.</p><p>The row of boxes at the top of the screen is that count: one box per step, each showing the chance it brings. A box lights up as you take its step. Hover any tile and a popup shows the same numbers for the step you are about to take.</p>',
   'npe.fatigue.fromStep': 'From step <b>{n}</b> onward',
   'npe.fatigue.soon': 'Soon',
   'npe.tired.title': 'Getting tired',
@@ -435,7 +436,7 @@ export const en = {
   'npe.report.title': 'Reading a battle report',
   'npe.report.text': '<p>Green lines are your blows, red ones the enemies\'. Each hit is rolled between {damageMin} and {damageMax} and scaled by the difference in power between attacker and defender.</p><p>After a win, pick who learned the most: that unit gains +{victoryPower} power.</p>',
   'npe.rested.title': 'Rested',
-  'npe.rested.text': '<p>The party is healed and fatigue is back to zero. Camps are your main way to recover between fights, so budget supplies for them.</p>',
+  'npe.rested.text': '<p>The party is healed and fatigue is back to zero: the boxes at the top empty out from the right. Camps are your main way to recover between fights, so budget supplies for them.</p>',
   'npe.stasis.title': 'A Stasis Colony has fallen',
   'npe.stasis.text': '<p>That is the end of the guide. The whole interface is yours now: the menu in the top right has the seed, camera and map controls, and the legend in the bottom right explains every symbol.</p><p>Somewhere on the far rings sits the <b>Stasis Seed</b>; destroy it to complete the run. Its lines creep towards {colonyCount} future Colonies - each active Colony curses the Seed fight with its debuff and withers the land. Clearing a Colony lifts its curse and grants {rewardPicks} power raises.</p>',
   'npe.climb.title': 'Crossing {terrain}',

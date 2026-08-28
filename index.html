@@ -47,6 +47,12 @@
         </div>
       </div>
 
+      <!-- Fatigue bar (top centre): one box per step, each showing the fatigue %
+           that step brings. Boxes fill up as the party walks and empty on a reset. -->
+      <div class="panel top-center fatigue-bar" id="fatigue-bar" data-i18n-title="fatiguebar.title">
+        <div id="fatigue-boxes" class="fatigue-boxes"></div>
+      </div>
+
       <div class="panel left-mid party" id="party">
         <div class="party-title" data-i18n="party.title">Party</div>
         <div id="party-units"></div>
@@ -69,15 +75,14 @@
         </div>
       </div>
 
-      <!-- Status bar: fatigue and turn on the left, the Enter button in the middle, gold and supplies on the right -->
+      <!-- Status bar: the turn on the left, the Enter button in the middle, supplies on the right.
+           (Fatigue lives in its own bar at the top of the screen.) -->
       <div class="panel bottom-center statusbar" id="statusbar">
         <div class="stats">
-          <div class="stat"><span class="label" data-i18n="status.fatigue" data-i18n-title="status.fatigue.title">Fatigue</span><span id="stat-fatigue" class="value">-</span></div>
           <div class="stat"><span class="label" data-i18n="status.turn">Turn</span><span id="stat-turn" class="value">-</span></div>
         </div>
         <button id="btn-enter" class="enter" disabled>Enter</button>
         <div class="stats">
-          <div class="stat"><span class="label" data-i18n="status.gold">Gold</span><span id="stat-gold" class="value">-</span></div>
           <div class="stat"><span class="label" data-i18n="status.supplies">Supplies</span><span id="stat-supplies" class="value">-</span></div>
         </div>
       </div>

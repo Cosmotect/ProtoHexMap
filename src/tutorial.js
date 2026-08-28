@@ -17,6 +17,7 @@ const ARRIVE_MS = 1500;      // a revealed HUD piece glides from the screen cent
 // HUD pieces, in the order they get revealed.
 const PIECES = {
   statusbar: '#statusbar',
+  fatiguebar: '#fatigue-bar',
   party: '#party',
   log: '.bottom-left',
   legend: '.bottom-right',
@@ -233,16 +234,22 @@ export function createTutorial({ config, ui, renderer }) {
       if (turn === 3) {
         const risky = firstRiskyStep(config);
         const forceable = joinList(config.fatigue.forceable.map((k) => `<b>${encounterLabel(k).toLowerCase()}</b>`), 'or');
+        // The bar is the thing being explained, so it arrives with the card.
+        const boxes = Object.keys(config.fatigue.byStep).map(Number).filter(Number.isFinite);
         say('fatigue', 'npe.fatigue',
-          { from: risky ? t('npe.fatigue.fromStep', { n: risky }) : t('npe.fatigue.soon'), forceable },
-          { target: { el: '#stat-fatigue' }, onShow: () => reveal('statusbar') });
+          {
+            from: risky ? t('npe.fatigue.fromStep', { n: risky }) : t('npe.fatigue.soon'),
+            forceable,
+            boxes: boxes.length ? Math.max(...boxes) : 0,
+          },
+          { target: { el: '#fatigue-bar' }, onShow: () => { reveal('fatiguebar'); reveal('statusbar'); } });
       }
       if (s.fatigue > 0) {
         // The guide keeps the restoration place vague on purpose, so it is left out of this list.
         const resets = Object.entries(config.fatigue.resetOn)
           .filter(([k, r]) => r === 'always' && k !== 'acolyte')
           .map(([k]) => (k === 'camp' ? t('reset.camp') : encounterLabel(k).toLowerCase()));
-        say('tired', 'npe.tired', { fatigue: s.fatigue, resets: joinList(resets) }, { target: { el: '#stat-fatigue' } });
+        say('tired', 'npe.tired', { fatigue: s.fatigue, resets: joinList(resets) }, { target: { el: '#fatigue-bar' } });
       }
     }
 
@@ -276,7 +283,7 @@ export function createTutorial({ config, ui, renderer }) {
     }
 
     if (type === 'camp') {
-      say('camped', 'npe.rested', {}, { target: { el: '#stat-fatigue' } });
+      say('camped', 'npe.rested', {}, { target: { el: '#fatigue-bar' } });
     }
 
     if (type === 'encounter' && payload.type === 'stasisColony' && s.lastBattle?.won) {

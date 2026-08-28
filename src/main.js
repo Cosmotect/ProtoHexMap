@@ -10,9 +10,13 @@ import { createSettings, deepClone } from './settings.js';
 import { createCombatCinematic } from './local/transition.js';
 import { t, tn, initLanguage, applyStaticTexts, onLanguageChange } from './i18n.js';
 import { tc } from './text.js';
+import { initAudio } from './audio.js';
 
 initLanguage();
 applyStaticTexts();
+// Sound (the fatigue bar's blips). Stays silent until the player's first click:
+// browsers do not let a page make noise before that.
+initAudio(CONFIG);
 
 // ----- UI scale (Settings > General) --------------------------------------
 // A browser preference like the language: stored in localStorage, applied as a
@@ -53,11 +57,17 @@ const settings = createSettings({
   getCameraMode: () => renderer.cameraMode,
   getUiScale: loadUiScale,
   onSetUiScale: (v) => applyUiScale(v),
-  onChange: () => { ui.buildLegend(); if (game) ui.update(game); },
+  onChange: (path) => {
+    ui.buildLegend();
+    // The bar's shape comes from the fatigue table and its look from fatigueBar,
+    // so both need a rebuild rather than a refresh.
+    if (typeof path !== 'string' || path === '*' || path.startsWith('fatigue.') || path.startsWith('fatigueBar.')) ui.buildFatigueBar();
+    if (game) ui.update(game);
+  },
   onClose: () => ui.updateBlur(),
 });
 // A language change re-renders everything that shows text.
-onLanguageChange(() => { applyStaticTexts(); ui.buildLegend(); if (game) { ui.update(game); ui.renderLog(game); } });
+onLanguageChange(() => { applyStaticTexts(); ui.buildLegend(); ui.buildFatigueBar(); if (game) { ui.update(game); ui.renderLog(game); } });
 
 renderer = new MapRenderer(container, CONFIG);
 window.__renderer = renderer; // for debugging / automated tests

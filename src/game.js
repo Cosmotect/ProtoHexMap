@@ -51,7 +51,6 @@ export class Game {
       status: 'playing',      // 'playing' | 'won' | 'lost'
       // The party: a fresh copy of the config units so HP can change per run.
       party: config.party.units.map((u) => ({ ...u, alive: true, isPlayer: true })),
-      gold: run.startGold,
       supplies,
       maxSupplies: supplies,
       turn: 0,
@@ -196,24 +195,34 @@ export class Game {
 
   livingUnits() { return this.state.party.filter((u) => u.alive); }
 
-  // Danger rank of a battle tile: floor((enemy power - living party power) / 2), never
-  // below 0. Shown as chevrons above the marker. On Stasis tiles the active debuffs
-  // are counted in when they change either side's total power (party power loss,
-  // extra enemies); the max-HP debuff does not move power, so it is not shown here.
+  // Danger rank of a battle tile, shown as chevrons above the marker (config.battle.danger):
+  //   base ^ ((total enemy power - total living party power) / powerStep)
+  //   * (enemy count / living party count)
+  // rounded. Both halves matter: the first says how much harder each enemy hits, the
+  // second how many more of them there are - and being outnumbered is what actually
+  // kills a party. Equal power and equal numbers = 1 chevron.
+  // On Stasis tiles the active debuffs are counted in where they move power or numbers
+  // (party power loss, extra enemies); the max-HP debuff moves neither, so it does not
+  // show here. maxChevrons caps only the drawing, not the maths.
   dangerRank(hex) {
     if (!hex.enemies) return 0;
     const living = this.livingUnits();
-    let enemy = hex.enemies.reduce((a, e) => a + e.power, 0);
-    let party = living.reduce((a, u) => a + u.power, 0);
+    if (!living.length) return 0;
+    let enemyPower = hex.enemies.reduce((a, e) => a + e.power, 0);
+    let enemyCount = hex.enemies.length;
+    let partyPower = living.reduce((a, u) => a + u.power, 0);
     const cfgDebuffs = this.config.stasis.debuffs;
     for (const id of this.activeDebuffsFor(hex)) {
-      if (id === 'power') party -= cfgDebuffs.power.amount * living.length;
+      if (id === 'power') partyPower -= cfgDebuffs.power.amount * living.length;
       else if (id === 'extraEnemies') {
-        const extraPower = regularUnitPower(this.config.battle, hex.ring);
-        enemy += cfgDebuffs.extraEnemies.count * extraPower;
+        const n = cfgDebuffs.extraEnemies.count;
+        enemyPower += n * regularUnitPower(this.config.battle, hex.ring);
+        enemyCount += n;
       }
     }
-    return Math.max(0, Math.floor((enemy - party) / 2));
+    const d = this.config.battle.danger;
+    const rank = Math.pow(d.base, (enemyPower - partyPower) / d.powerStep) * (enemyCount / living.length);
+    return Math.max(0, Math.min(d.maxChevrons ?? 8, Math.round(rank)));
   }
   deadUnits() { return this.state.party.filter((u) => !u.alive); }
 
@@ -379,10 +388,6 @@ export class Game {
     if (this.isForceable(hex.encounter) && rollChance > 0 && this.rng.chance(rollChance / 100)) {
       this.addLog('log.forced', { label: { key: `visual.${hex.encounter}.label` }, chance: rollChance });
       this.emit('forced', { hex, type: hex.encounter, label, chance: rollChance });
-      // The orchestrator (main.js) may install combatIntro to play the dive into
-      // the local map first; it calls the passed continuation when the camera has
-      // arrived. Returns true when it took over.
-      if (this.combatIntro && this.combatIntro(hex, () => this.enter(true))) return;
       this.enter(true);
       return;
     }
