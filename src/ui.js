@@ -86,7 +86,7 @@ export function createUI(config, handlers) {
     if (e.key === 'n' || e.key === 'N') handlers.onNewMap();
     if (e.key === 'r' || e.key === 'R') handlers.onRestart();
     if (e.key === 'e' || e.key === 'E') handlers.onEnter();
-    if (e.key === 'Escape') { closeMenu(); handlers.onEscape && handlers.onEscape(); }
+    if (e.key === 'Escape') { closeMenu(); closeRoster(); handlers.onEscape && handlers.onEscape(); }
   });
 
   let currentSeed = 0;
@@ -244,11 +244,21 @@ export function createUI(config, handlers) {
     const s = game.state;
     currentSeed = game.seed;
     syncFatigueBar(game);
-    const action = game.enterAction();
-    els.enter.disabled = !action.enabled;
-    els.enter.textContent = action.label;
-    els.enter.title = action.reason || (action.kind === 'camp' ? tc('status.camp.title', config) : t('status.enter.title'));
-    els.enter.classList.toggle('camp', action.kind === 'camp');
+    if (startScreenMode) {
+      // The start screen: the Enter button's slot holds "Begin journey".
+      els.enter.disabled = false;
+      els.enter.textContent = t('start.begin');
+      els.enter.title = t('start.begin.title');
+      els.enter.classList.remove('camp');
+      els.enter.classList.add('begin');
+    } else {
+      els.enter.classList.remove('begin');
+      const action = game.enterAction();
+      els.enter.disabled = !action.enabled;
+      els.enter.textContent = action.label;
+      els.enter.title = action.reason || (action.kind === 'camp' ? tc('status.camp.title', config) : t('status.enter.title'));
+      els.enter.classList.toggle('camp', action.kind === 'camp');
+    }
     els.party.innerHTML = s.party.map((u) => unitCard(u, config)).join('');
     // Keep an open dialog in sync (e.g. shop prices after a purchase).
     if (dialogRefresh) dialogRefresh(game);
@@ -430,7 +440,59 @@ export function createUI(config, handlers) {
     bannerTimer = setTimeout(() => els.banner.classList.add('hidden'), ms);
   }
 
-  return { update, renderLog, setHover, showEnd, hideEnd, openDialog, closeDialog, dialogOpen, flashDialog, confirm, chooseUnit, showBanner, buildLegend, buildFatigueBar, updateBlur };
+  // ----- the start screen (party around the campfire) ----------------------
+  // While it is on, the Enter button reads "Begin journey" and clicking a unit
+  // in the party panel opens the roster grid.
+  let startScreenMode = false;
+  let onPartyUnitClick = null;
+  function setStartScreen(v, opts = {}) {
+    startScreenMode = !!v;
+    onPartyUnitClick = v ? (opts.onUnitClick ?? null) : null;
+    document.body.classList.toggle('start-screen', startScreenMode);
+    if (!v) closeRoster();
+  }
+  els.party.addEventListener('click', (e) => {
+    if (!startScreenMode || !onPartyUnitClick) return;
+    const card = e.target.closest('.unit');
+    if (!card) return;
+    onPartyUnitClick([...els.party.children].indexOf(card));
+  });
+
+  // ----- the roster grid (fighting-game style character select) ------------
+  const rosterEl = $('roster');
+  let rosterPick = null;
+  $('btn-roster-cancel').addEventListener('click', () => closeRoster());
+  function openRoster({ slotIndex, party, roster, onPick }) {
+    const current = party[slotIndex];
+    $('roster-sub').textContent = t('roster.replace', { name: tn(current.name) });
+    const inParty = new Set(party.map((u) => u.name));
+    $('roster-grid').innerHTML = roster.map((def, i) => {
+      const taken = inParty.has(def.name);
+      return `<div class="roster-card ${taken ? 'taken' : ''}" data-i="${i}">
+        <div class="rc-portrait">${def.icon}</div>
+        <div class="rc-name">${escapeHtml(tn(def.name))}</div>
+        <div class="rc-stats"><span class="rc-hp">${t('roster.hp', { n: def.hp })}</span><span class="rc-power">${t('party.power', { n: def.power })}</span></div>
+        ${taken ? `<div class="rc-tag">${t('roster.inParty')}</div>` : ''}
+      </div>`;
+    }).join('');
+    rosterPick = { roster, onPick };
+    rosterEl.classList.remove('hidden');
+  }
+  $('roster-grid').addEventListener('click', (e) => {
+    const card = e.target.closest('.roster-card');
+    if (!card || card.classList.contains('taken') || !rosterPick) return;
+    const def = rosterPick.roster[Number(card.dataset.i)];
+    const onPick = rosterPick.onPick;
+    closeRoster();
+    if (def && onPick) onPick(def);
+  });
+  function closeRoster() {
+    rosterEl.classList.add('hidden');
+    rosterPick = null;
+  }
+  function rosterOpen() { return !rosterEl.classList.contains('hidden'); }
+
+  return { update, renderLog, setHover, showEnd, hideEnd, openDialog, closeDialog, dialogOpen, flashDialog, confirm, chooseUnit, showBanner, buildLegend, buildFatigueBar, updateBlur, setStartScreen, openRoster, closeRoster, rosterOpen };
 }
 
 // Log parameters are stored language-neutral and resolved at render time:

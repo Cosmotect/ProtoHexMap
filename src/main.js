@@ -84,6 +84,63 @@ const cinematic = createCombatCinematic({ renderer, config: CONFIG, container })
 window.__cinematic = cinematic; // for debugging / automated tests
 const COMBAT_TYPES = new Set(['battle', 'stasisSeed', 'stasisColony']);
 
+// ----- the start flow -------------------------------------------------------
+// The game boots straight into the local map of the starting tile: the party
+// sits around a campfire (the "start screen"), masked by the black Everlands
+// splash while everything loads. The player can swap party members through the
+// roster grid; "Begin journey" (in the Enter button's slot) flies the camera out
+// to the world map and the run officially begins.
+let startScreen = false;
+
+function initSplash() {
+  const el = document.getElementById('splash');
+  if (!el) return;
+  // Test / guide entrances skip the ceremony.
+  if (params.get('nostart') || params.get('npe')) { el.remove(); return; }
+  setTimeout(() => {
+    el.style.transitionDuration = `${CONFIG.start.splashFadeMs}ms`;
+    el.classList.add('fade');
+    el.addEventListener('transitionend', () => el.remove(), { once: true });
+    setTimeout(() => el.remove(), CONFIG.start.splashFadeMs + 500); // fallback
+  }, CONFIG.start.splashMs);
+}
+
+function enterStartScreen() {
+  startScreen = true;
+  cinematic.startScreen({
+    worldHex: game.map.start,
+    baseColor: renderer.targetColorFor(game.map.start).getHex(),
+    party: game.state.party,
+    seed: game.seed,
+  });
+  const open = (i) => openRosterFor(i);
+  cinematic.localView.enablePicking(open);
+  ui.setStartScreen(true, { onUnitClick: open });
+  ui.update(game);
+}
+
+function openRosterFor(slotIndex) {
+  if (!startScreen || ui.rosterOpen()) return;
+  ui.openRoster({
+    slotIndex,
+    party: game.state.party,
+    roster: CONFIG.party.roster ?? [],
+    onPick: (def) => {
+      game.setPartyUnit(slotIndex, def);
+      cinematic.localView.refreshParty(game.state.party);
+    },
+  });
+}
+
+function beginJourney() {
+  if (!startScreen) return;
+  startScreen = false;
+  ui.setStartScreen(false);
+  cinematic.localView.disablePicking();
+  cinematic.flyOut({ onDone: () => ui.update(game) });
+  ui.update(game);
+}
+
 // Starts the dive; `resume` runs the actual encounter once the camera lands.
 function startCombatDive(hex, resume) {
   const enemies = (hex.enemies ?? []).map((e) => ({ ...e }));
@@ -110,7 +167,8 @@ ui = createUI(CONFIG, {
   onDialogClosed: () => {
     const finishEnd = () => { if (pendingEnd && game.state.status !== 'playing' && !tutorial.isBlocking()) { pendingEnd = false; ui.showEnd(game); } };
     // The results window just closed inside the arena: fly back out first.
-    if (cinematic.isActive() && !ui.dialogOpen()) { cinematic.flyOut({ onDone: finishEnd }); return; }
+    // (Not on the start screen - there the arena stays until Begin journey.)
+    if (cinematic.isActive() && !startScreen && !ui.dialogOpen()) { cinematic.flyOut({ onDone: finishEnd }); return; }
     finishEnd();
   },
   onNewMap: () => startRun(resolveSeed()),
@@ -118,6 +176,10 @@ ui = createUI(CONFIG, {
   onToggleCamera: () => { if (!cinematic.isActive()) renderer.toggleCameraMode(); },
   onRevealAll: () => game.revealAll(),
   onEnter: () => {
+    if (startScreen) {
+      if (!ui.rosterOpen() && !settings.isOpen()) beginJourney();
+      return;
+    }
     if (renderer.busy || ui.dialogOpen() || tutorial.isBlocking() || cinematic.isActive()) return;
     const action = game.enterAction();
     if (action.kind === 'encounter' && COMBAT_TYPES.has(action.type)) {
@@ -135,6 +197,8 @@ tutorial.setOnIdle(() => { if (pendingEnd && game && game.state.status !== 'play
 
 function startRun(seed, opts = {}) {
   pendingEnd = false;
+  startScreen = false;
+  ui.setStartScreen(false);
   cinematic.abort();
   ui.closeDialog();
   tutorial.finish('restart');
@@ -184,6 +248,7 @@ function startRun(seed, opts = {}) {
   ui.update(game);
   ui.renderLog(game);
   if (opts.npe) tutorial.start();
+  else if (!params.get('nostart')) enterStartScreen();
 }
 
 // ----- encounter dialogs (top centre) -----------------------------------
@@ -372,3 +437,5 @@ container.addEventListener('pointerdown', () => { if (ui.dialogOpen()) ui.flashD
 if (params.get('camera') === 'ortho') renderer.toggleCameraMode();
 if (params.get('npe')) startRun(resolveSeed(NPE_SEED), { npe: true });
 else startRun(resolveSeed(params.get('seed')));
+initSplash();
+window.__startScreen = () => startScreen; // for debugging / automated tests

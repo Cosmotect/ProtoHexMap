@@ -512,3 +512,80 @@ button.small { padding: 2px 8px; font-size: 12px; }
   background: radial-gradient(circle at 50% 50%, transparent 42%, rgba(6, 8, 14, 0.85) 100%);
   opacity: 0;
 }
+
+/* ----- startup splash ------------------------------------------------- */
+#splash {
+  position: fixed;
+  inset: 0;
+  z-index: 200;                /* above everything, including the HUD */
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 1;
+  transition: opacity 0.9s ease;
+}
+#splash.fade { opacity: 0; pointer-events: none; }
+.splash-title {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: clamp(48px, 9vw, 128px);
+  letter-spacing: 0.22em;
+  padding-left: 0.22em;        /* optically recentre the letter-spaced text */
+  color: #e8ecf5;
+  text-shadow: 0 0 42px rgba(159, 217, 255, 0.35);
+}
+
+/* ----- start screen --------------------------------------------------- */
+#btn-enter.begin { background: rgba(69, 150, 120, 0.55); }
+#btn-enter.begin:hover { background: rgba(85, 175, 140, 0.75); }
+
+/* ----- roster (fighting-game style character select) ------------------- */
+.roster { z-index: 58; }
+.roster-box { width: min(1040px, 94vw); max-height: 88vh; overflow-y: auto; }
+.roster-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 12px; }
+.roster-head h2 { margin: 0; }
+.roster-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 10px;
+}
+.roster-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  cursor: pointer;
+  transition: background 0.12s ease, transform 0.12s ease, border-color 0.12s ease;
+}
+.roster-card:hover { background: rgba(255, 255, 255, 0.14); border-color: var(--accent); transform: translateY(-2px); }
+.roster-card.taken { opacity: 0.45; cursor: default; }
+.roster-card.taken:hover { background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.14); transform: none; }
+.rc-portrait {
+  width: 74px; height: 74px; border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 44px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+.rc-name { font-weight: 600; font-size: 14px; margin-top: 2px; text-align: center; }
+.rc-stats { display: flex; gap: 10px; font-family: var(--mono); font-size: 12px; }
+.rc-hp { color: #8fd47a; }
+.rc-power { color: var(--accent); }
+.rc-tag {
+  position: absolute; top: 6px; right: 6px;
+  font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--muted);
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 5px;
+  padding: 2px 5px;
+}
+/* Clicking a unit in the party panel works on the start screen */
+#party-units .unit { cursor: default; }
+.start-screen #party-units .unit { cursor: pointer; }

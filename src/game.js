@@ -226,6 +226,17 @@ export class Game {
   }
   deadUnits() { return this.state.party.filter((u) => !u.alive); }
 
+  // Start-screen roster swap: replaces a party slot with a roster character.
+  // Only possible before the first step of the run.
+  setPartyUnit(index, def) {
+    const s = this.state;
+    if (s.turn !== 0 || s.status !== 'playing' || !s.party[index] || !def) return false;
+    s.party[index] = { name: def.name, icon: def.icon, hp: def.hp, maxHp: def.hp, power: def.power, alive: true, isPlayer: true };
+    this.addLog('log.joined', { name: { name: def.name } });
+    this.emit('change');
+    return true;
+  }
+
   // ----- actions ------------------------------------------------------
   moveTo(hex) {
     if (!this.canMoveTo(hex)) return false;

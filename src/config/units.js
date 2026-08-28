@@ -20,6 +20,21 @@ export const UNITS = {
       { name: 'Mystic', icon: '🔮', hp: 22, maxHp: 22, power: 3 },
     ],
     hpSegment: 10,            // one bar segment per this many HP
+    // Everyone the player can take along, shown in the start-screen roster grid
+    // (the first three are the default party). Stats on the x3 power scale;
+    // hp doubles as maxHp when a character joins.
+    roster: [
+      { name: 'Vanguard', icon: '🛡️', hp: 40, power: 3 },
+      { name: 'Archer', icon: '🏹', hp: 28, power: 3 },
+      { name: 'Mystic', icon: '🔮', hp: 22, power: 3 },
+      { name: 'Warden', icon: '⚔️', hp: 36, power: 3 },
+      { name: 'Stonestep', icon: '🗿', hp: 52, power: 0 },
+      { name: 'Emberwright', icon: '🔥', hp: 24, power: 6 },
+      { name: 'Lampbearer', icon: '🏮', hp: 30, power: 3 },
+      { name: 'Skywatcher', icon: '🪶', hp: 20, power: 6 },
+      { name: 'Tinker', icon: '🔧', hp: 28, power: 3 },
+      { name: 'Duskblade', icon: '🗡️', hp: 16, power: 9 },
+    ],
   },
 
   // ----- Battle simulation --------------------------------------------

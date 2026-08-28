@@ -32,6 +32,15 @@ export const CONFIG = {
     // Win condition: destroy the Stasis Seed (see config/encounters.js, "stasis").
   },
 
+  // ----- Start flow -----------------------------------------------------
+  // The game boots straight into the local map of the starting tile (the party
+  // around a campfire), masked by a black "Everlands" splash. "Begin journey"
+  // then flies the camera out to the world map and the run officially starts.
+  start: {
+    splashMs: 2000,           // how long the splash covers the screen before fading
+    splashFadeMs: 900,        // the fade itself
+  },
+
   // ----- Local map (the encounter arena, see src/local/) ---------------
   // A separate hex grid the camera dives into when a combat encounter starts.
   // It always uses the OPPOSITE hex orientation to the world map, so one world

@@ -253,6 +253,42 @@ Three separate pools implement it (`src/config/units.js`): `battle.enemies.bands
 * **Camera**: perspective by default (tilt 52 degrees, fov 42), follows the player with a
   glide; orthographic / isometric alternative on C. Map-style controls: left-drag pan,
   right-drag orbit, wheel zoom, arrow keys pan.
+* **The LOCAL map** (`src/local/`, since 2026-08-27): combat encounters (battle, Stasis
+  Seed, Stasis Colony) play out on a separate arena grid instead of a bare window.
+  * The local grid is a hex map of `local.radius` (6) rings using the OPPOSITE hex
+    orientation to the world map (world flat-top by default -> local pointy-top), so one
+    world tile visually breaks into a sub-grid of local tiles. Local tiles are shades of
+    the world tile's final colour. Local tiles have NO gameplay logic yet.
+  * **The dive**: pressing Enter on a combat tile (or being forced in by fatigue) flies
+    the camera into that tile: FOV stretches, the screen shakes, cloud layers rush past,
+    a blur + white flash peak mid-flight - and at that peak (`local.swapPoint`) the world
+    scene is swapped for the local scene. The flight is wall-clock timed
+    (`local.flyInMs` 1500 / `flyOutMs` 1300). Party and enemy tokens stand on random
+    distinct local tiles; the fight itself still resolves through the same simulation,
+    and the results window opens over the arena. Closing it flies the camera back out
+    and restores the world camera exactly.
+  * **Arena camera**: rotation only - no panning, no zooming (`local.camera`).
+  * **Recipes (planned)**: encounters will get handcrafted arena recipes assigned at
+    spawn (tile types, elevations, set dressing, lighting). The hook exists now:
+    `applyRecipe` in `src/local/localmap.js` runs during the fly-in, right before the
+    scene swap; `startCombatDive` in main.js already forwards `hex.recipe`.
+  * **Sandboxing**: the local system lives in `src/local/` (localmap.js data,
+    localview.js scene, transition.js flight) and touches the world only through one
+    hook, `MapRenderer.overrideFrame`, plus `Game.combatIntro` (installed by main.js so
+    forced fights take the same dive). Nothing in `src/local/` reads or writes game
+    rules or world meshes.
+* **The START FLOW** (since 2026-08-28): the game boots into a fullscreen black splash
+  with "Everlands" across it (`config.start.splashMs` 2000, then a fade) that masks the
+  load; behind it the game loads STRAIGHT into the local map of the starting tile - the
+  "start screen": the party sits on tiles around a flickering campfire. Clicking a party
+  unit (its 3D token, or its row in the party panel) opens the **roster**: a
+  fighting-game style grid of portraits (icon, name, HP, power) built from
+  `config.party.roster` (10 characters; current members are greyed out with an "in
+  party" tag). Clicking an entry swaps that party slot (`game.setPartyUnit`, only at
+  turn 0) and reseats the tokens. "Begin journey" sits exactly where the Enter button
+  lives on the world map; pressing it plays the same zoom-out-through-the-clouds
+  flight, and the run officially begins. `?nostart=1` (tests) and `?npe=1` skip the
+  ceremony.
 
 ## How the code is split (so changes land in the right file)
 
@@ -283,6 +319,19 @@ Outcome choice per type is an open question (see below); the hook does not care.
 
 ## Decisions log
 
+* 2026-08-28 (b) **The start flow**: black Everlands splash masking the load, boot
+  straight into the campfire start screen on the local map of the start tile, a
+  fighting-game roster grid (7 new selectable characters: Warden, Stonestep,
+  Emberwright, Lampbearer, Skywatcher, Tinker, Duskblade) and "Begin journey" in the
+  Enter button's slot, leaving through the usual zoom-out. Roster swaps only exist at
+  turn 0.
+* 2026-08-27 (c) **The local map**: combat now dives into an arena grid (`src/local/`,
+  radius 6, opposite hex orientation) through a cloud cinematic with a mid-flight scene
+  swap; results window over the arena; camera flies back out on Continue. World map
+  orientation default flipped to FLAT-top so its tiles visually split into pointy-top
+  local grids (`?orient=pointy` compares). Arena camera: rotation only. Recipe hook
+  prepared for future handcrafted arenas. (This entry was restored on 2026-08-28: a
+  parallel session had based its DESIGN.md edit on an older copy and dropped it.)
 * 2026-08-28 Fatigue moved out of the status bar into its own **fatigue bar** at the top
   centre: a row of boxes, one per step, that fills as the party walks and empties on a
   reset. Reason: a single "18%" number told the player nothing about how close the next

@@ -36,10 +36,13 @@ export class LocalMapView {
   //   enemies   = enemy units [{ name, hp, power }]
   //   seed      = number, so the same fight always lays out the same arena
   //   recipe    = future handcrafted arena description (see localmap.js)
-  build({ worldHex, baseColor, party, enemies, seed, recipe = null }) {
+  // layout: 'battle' (default) scatters both sides on random tiles;
+  //         'camp' seats the party around a campfire (the start screen).
+  build({ worldHex, baseColor, party, enemies, seed, recipe = null, layout = 'battle' }) {
     this.dispose();
     const cfg = this.config.local;
     const rng = createRng((seed ?? 1) ^ ((worldHex?.q ?? 0) * 73856093) ^ ((worldHex?.r ?? 0) * 19349663));
+    this.rng = rng;
 
     this.map = generateLocalMap(this.config, recipe);
     this.scene = new THREE.Scene();
@@ -89,9 +92,127 @@ export class LocalMapView {
       tile.top = Math.max(0.05, h);
     }
 
-    this.placeUnits(party ?? [], enemies ?? [], rng);
+    if (layout === 'camp') {
+      this.buildCampfire();
+      this.placeCampParty(party ?? []);
+    } else {
+      this.placeUnits(party ?? [], enemies ?? [], rng);
+    }
     this.buildCamera();
     return this.map;
+  }
+
+  // ----- the campfire (start screen) ------------------------------------
+  // A few logs, a flickering flame and a warm light on the centre tile.
+  buildCampfire() {
+    const centre = this.map.hexes.get('0,0');
+    const g = new THREE.Group();
+    const logMat = new THREE.MeshStandardMaterial({ color: 0x5a4028, roughness: 0.9 });
+    for (let i = 0; i < 3; i++) {
+      const log = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.5, 6), logMat);
+      log.rotation.z = Math.PI / 2;
+      log.rotation.y = (i / 3) * Math.PI;
+      log.position.y = 0.05;
+      log.castShadow = true;
+      g.add(log);
+    }
+    const flame = new THREE.Mesh(
+      new THREE.ConeGeometry(0.14, 0.42, 8),
+      new THREE.MeshStandardMaterial({ color: 0xff8c33, emissive: 0xff6a00, emissiveIntensity: 1.6, roughness: 0.4 })
+    );
+    flame.position.y = 0.3;
+    g.add(flame);
+    const core = new THREE.Mesh(
+      new THREE.ConeGeometry(0.07, 0.24, 8),
+      new THREE.MeshBasicMaterial({ color: 0xffd97a })
+    );
+    core.position.y = 0.26;
+    g.add(core);
+    const light = new THREE.PointLight(0xffa04d, 14, 9, 2);
+    light.position.y = 0.8;
+    g.add(light);
+    g.position.set(centre.x, centre.top, -centre.y);
+    this.scene.add(g);
+    this.campfire = { group: g, flame, core, light };
+  }
+
+  // Seats the living party on alternating tiles of the first ring, facing the fire.
+  placeCampParty(party) {
+    const seats = ['1,0', '-1,1', '0,-1', '1,-1', '-1,0', '0,1'];
+    this.campSeats = seats;
+    party.forEach((u, i) => this.addPartyToken(u, i, seats[i % seats.length]));
+  }
+
+  // Removes and re-creates the party tokens (after a roster swap).
+  refreshParty(party) {
+    for (const m of [...this.tokens]) {
+      if (m.userData.partyIndex == null) continue;
+      this.scene.remove(m);
+      if (m.userData.ring) this.scene.remove(m.userData.ring);
+      this.tokens.splice(this.tokens.indexOf(m), 1);
+    }
+    const seats = this.campSeats ?? [];
+    party.forEach((u, i) => this.addPartyToken(u, i, seats[i % seats.length]));
+  }
+
+  addPartyToken(unit, index, tileKey) {
+    const c = this.config.colors;
+    const body = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.2, 0.3, 6, 12),
+      new THREE.MeshStandardMaterial({ color: c.player, roughness: 0.4, emissive: 0x332a10 })
+    );
+    body.geometry.translate(0, 0.4, 0);
+    body.userData.partyIndex = index;
+    this.attachToken(tileKey, body, c.playerGlow, (this.rng?.random() ?? Math.random()) * Math.PI * 2);
+  }
+
+  attachToken(tileKey, mesh, lightColor, phase) {
+    const tile = this.map.hexes.get(tileKey);
+    if (!tile) return;
+    mesh.position.set(tile.x, tile.top, -tile.y);
+    mesh.castShadow = true;
+    mesh.userData.baseY = tile.top;
+    mesh.userData.phase = phase;
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(0.26, 0.38, 24).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: lightColor, transparent: true, opacity: 0.85, side: THREE.DoubleSide })
+    );
+    ring.position.set(tile.x, tile.top + 0.02, -tile.y);
+    mesh.userData.ring = ring;
+    this.scene.add(mesh, ring);
+    this.tokens.push(mesh);
+  }
+
+  // ----- clicking unit tokens (the start screen roster) -------------------
+  // Rotation stays on drag; a short, still press on a party token counts as a click.
+  enablePicking(onPick) {
+    this.disablePicking();
+    const ray = new THREE.Raycaster();
+    const el = this.domElement;
+    let down = null;
+    const onDown = (e) => { down = { x: e.clientX, y: e.clientY, time: performance.now() }; };
+    const onUp = (e) => {
+      if (!down) return;
+      const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
+      const quick = performance.now() - down.time < 600;
+      down = null;
+      if (moved > 6 || !quick || !this.camera) return;
+      const rect = el.getBoundingClientRect();
+      const p = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+      ray.setFromCamera(p, this.camera);
+      const targets = this.tokens.filter((m) => m.userData.partyIndex != null);
+      const hit = ray.intersectObjects(targets, false)[0];
+      if (hit) onPick(hit.object.userData.partyIndex);
+    };
+    el.addEventListener('pointerdown', onDown);
+    el.addEventListener('pointerup', onUp);
+    this.pickingHandlers = { onDown, onUp };
+  }
+  disablePicking() {
+    if (!this.pickingHandlers) return;
+    this.domElement.removeEventListener('pointerdown', this.pickingHandlers.onDown);
+    this.domElement.removeEventListener('pointerup', this.pickingHandlers.onUp);
+    this.pickingHandlers = null;
   }
 
   // For now units land on random distinct tiles - the encounter itself is still
@@ -102,31 +223,7 @@ export class LocalMapView {
     partyKeys.forEach((k) => used.add(k));
     const enemyKeys = pickRandomTiles(this.map, enemies.length, () => rng.random(), used);
 
-    const addToken = (tileKey, mesh, lightColor) => {
-      const tile = this.map.hexes.get(tileKey);
-      if (!tile) return;
-      mesh.position.set(tile.x, tile.top, -tile.y);
-      mesh.castShadow = true;
-      mesh.userData.baseY = tile.top;
-      mesh.userData.phase = rng.random() * Math.PI * 2;
-      const ring = new THREE.Mesh(
-        new THREE.RingGeometry(0.26, 0.38, 24).rotateX(-Math.PI / 2),
-        new THREE.MeshBasicMaterial({ color: lightColor, transparent: true, opacity: 0.85, side: THREE.DoubleSide })
-      );
-      ring.position.set(tile.x, tile.top + 0.02, -tile.y);
-      this.scene.add(mesh, ring);
-      this.tokens.push(mesh);
-    };
-
-    const c = this.config.colors;
-    party.forEach((u, i) => {
-      const body = new THREE.Mesh(
-        new THREE.CapsuleGeometry(0.2, 0.3, 6, 12),
-        new THREE.MeshStandardMaterial({ color: c.player, roughness: 0.4, emissive: 0x332a10 })
-      );
-      body.geometry.translate(0, 0.4, 0);
-      addToken(partyKeys[i], body, c.playerGlow);
-    });
+    party.forEach((u, i) => this.addPartyToken(u, i, partyKeys[i]));
     const enemyColor = this.config.encounters.visuals.battle?.color ?? 0xe2474b;
     enemies.forEach((u, i) => {
       const body = new THREE.Mesh(
@@ -134,7 +231,7 @@ export class LocalMapView {
         new THREE.MeshStandardMaterial({ color: enemyColor, emissive: 0x330b0b, roughness: 0.45 })
       );
       body.geometry.translate(0, 0.45, 0);
-      addToken(enemyKeys[i], body, enemyColor);
+      this.attachToken(enemyKeys[i], body, enemyColor, rng.random() * Math.PI * 2);
     });
   }
 
@@ -198,6 +295,13 @@ export class LocalMapView {
       m.position.y = m.userData.baseY + Math.sin(this.elapsed / 620 + m.userData.phase) * 0.05;
       m.rotation.y += dt * 0.0006;
     }
+    if (this.campfire) {
+      // The flame breathes and the light jitters like a real fire.
+      const f = 1 + Math.sin(this.elapsed / 130) * 0.12 + Math.sin(this.elapsed / 47) * 0.07;
+      this.campfire.flame.scale.set(f, 1.6 - f * 0.5, f);
+      this.campfire.core.scale.setScalar(0.8 + f * 0.25);
+      this.campfire.light.intensity = 11 + Math.random() * 5;
+    }
   }
 
   render() {
@@ -206,6 +310,7 @@ export class LocalMapView {
 
   dispose() {
     this.deactivate();
+    this.disablePicking();
     if (this.scene) {
       this.scene.traverse((o) => {
         if (o.geometry) o.geometry.dispose();
@@ -215,5 +320,7 @@ export class LocalMapView {
     this.scene = null;
     this.map = null;
     this.tokens = [];
+    this.campfire = null;
+    this.campSeats = null;
   }
 }

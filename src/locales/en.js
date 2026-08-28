@@ -36,6 +36,15 @@ export const en = {
   'status.supplies': 'Supplies',
   'status.enter': 'Enter',
   'status.enter.title': 'Enter the encounter on the tile you stand on (E)',
+  // ----- start screen (splash, campfire, roster) ---------------------------
+  'start.begin': 'Begin journey',
+  'start.begin.title': 'Leave the campfire and set out into the worldflake (E)',
+  'roster.title': 'Choose a companion',
+  'roster.replace': 'Takes the place of {name}',
+  'roster.inParty': 'In party',
+  'roster.cancel': 'Keep the party as it is',
+  'roster.hp': '{n} HP',
+  'log.joined': '{name} joins the party at the fire.',
   'status.enter.encounter': 'Enter: {label}',
   'status.camp': 'Make camp ({cost} supplies)',
   'status.camp.title': 'Spend supplies to make camp here: heals every living unit by {healPct} of its max HP and resets fatigue (E)',
@@ -140,6 +149,12 @@ export const en = {
 
   // ----- names ---------------------------------------------------------------
   'name.Vanguard': 'Vanguard',
+  'name.Stonestep': 'Stonestep',
+  'name.Emberwright': 'Emberwright',
+  'name.Lampbearer': 'Lampbearer',
+  'name.Skywatcher': 'Skywatcher',
+  'name.Tinker': 'Tinker',
+  'name.Duskblade': 'Duskblade',
   'name.Archer': 'Archer',
   'name.Mystic': 'Mystic',
   'name.Raider': 'Raider',

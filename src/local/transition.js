@@ -83,6 +83,32 @@ export function createCombatCinematic({ renderer, config, container }) {
     return true;
   }
 
+  // ----- the START SCREEN: begin already inside the local map ----------------
+  // Used on startup: no fly-in, no clouds - the splash masks the load and the
+  // game opens on the arena (the party around a campfire). "Begin journey" then
+  // leaves through the ordinary flyOut, which needs the same `flight` bookkeeping
+  // a fly-in would have left behind.
+  function startScreen(opts) {
+    if (isActive()) return false;
+    const saved = saveWorldCamera();
+    if (saved.wasOrtho) renderer.setupCamera('perspective', saved.target.clone());
+    renderer.controls.enabled = false;
+    localView.build({ ...opts, enemies: [], layout: 'camp' });
+    const rec = renderer.tiles.get(opts.worldHex.key);
+    flight = {
+      saved,
+      hexPos: new THREE.Vector3(opts.worldHex.x, (rec ? rec.height : 0.35) + 1.6, -opts.worldHex.y),
+      camStart: null,
+      targetStart: null,
+      fovStart: saved.fov ?? config.camera.fov,
+      swapped: true,
+    };
+    mode = 'local';
+    renderer.overrideFrame = frame;
+    localView.activate();
+    return true;
+  }
+
   // ----- fly OUT: local -> world -------------------------------------------
   function flyOut({ onDone } = {}) {
     if (mode !== 'local') return false;
@@ -217,7 +243,7 @@ export function createCombatCinematic({ renderer, config, container }) {
     localView.resize(w / h);
   });
 
-  return { flyIn, flyOut, abort, isActive, mode: () => mode, localView };
+  return { flyIn, flyOut, startScreen, abort, isActive, mode: () => mode, localView };
 }
 
 // ----- the fullscreen cloud overlay -------------------------------------------

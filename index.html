@@ -124,6 +124,18 @@
         <div class="row"><button id="btn-tutorial-skip" class="small" data-i18n="npe.skip" data-i18n-title="npe.skip.title">Skip guide</button><span class="row-spacer"></span><button id="btn-tutorial-go" class="hidden">Go</button><button id="btn-tutorial-ok" data-i18n="npe.ok">Got it</button></div>
       </div>
 
+      <!-- Start-screen roster: a fighting-game style grid of selectable companions -->
+      <div id="roster" class="modal roster hidden">
+        <div class="modal-box roster-box">
+          <div class="roster-head">
+            <h2 id="roster-title" data-i18n="roster.title">Choose a companion</h2>
+            <span id="roster-sub" class="muted"></span>
+          </div>
+          <div id="roster-grid" class="roster-grid"></div>
+          <div class="row"><button id="btn-roster-cancel" class="small" data-i18n="roster.cancel">Keep the party as it is</button></div>
+        </div>
+      </div>
+
       <div id="overlay" class="modal hidden">
         <div class="modal-box">
           <h2 id="overlay-title">Run over</h2>
@@ -137,6 +149,10 @@
       </div>
 
     </div>
+
+    <!-- Startup splash: covers the screen while the game loads into the start
+         screen, then fades away (src/main.js drives the timing). -->
+    <div id="splash"><div class="splash-title">Everlands</div></div>
 
     <script type="module" src="/src/main.js"></script>
   </body>

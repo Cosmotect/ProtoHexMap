@@ -22,7 +22,8 @@ try {
   process.exit(1);
 }
 
-const URL = process.env.URL || 'http://localhost:4173/?seed=777';
+// nostart=1 skips the start screen (splash + campfire): these sections test the world flow.
+const URL = process.env.URL || 'http://localhost:4173/?seed=777&nostart=1';
 const OUT = process.env.OUT || path.join(__dirname, 'shots');
 fs.mkdirSync(OUT, { recursive: true });
 
@@ -250,9 +251,9 @@ fs.mkdirSync(OUT, { recursive: true });
     const p = await screenPos(probe[0], probe[1]);
     await page.mouse.move(p.x, p.y); await page.waitForTimeout(250);
     const tip = await page.evaluate(() => { const t = document.getElementById('fatigue-tip'); return t.classList.contains('hidden') ? null : t.textContent; });
-    const hud = await page.evaluate(() => document.getElementById('stat-fatigue').textContent);
+    // (The single HUD fatigue number is gone - the fatigue bar replaced it - so the
+    // popup is checked on its own.)
     if (!tip) problems.push('fatigue popup did not appear on hover');
-    else if (!tip.includes(hud)) problems.push(`popup (${tip}) does not show the HUD fatigue value (${hud})`);
     const nextOk = await page.evaluate(() => { const t = document.getElementById('fatigue-tip').textContent; return t.includes(`after this step: ${window.game.fatigueAfterNextStep()}%`); });
     if (!nextOk) problems.push('popup does not show the next-step fatigue value');
     await page.screenshot({ path: path.join(OUT, '02b-fatigue-tip.png') });
@@ -418,6 +419,41 @@ fs.mkdirSync(OUT, { recursive: true });
     const after = await page.evaluate(() => ({ dialog: !document.getElementById('dialog').classList.contains('hidden'), title: document.getElementById('tutorial-title').textContent, mode: window.__cinematic.mode(), lastBattle: !!window.game.state.lastBattle, posEnc: window.game.state.position.encounter, turn: window.game.state.turn }));
     if (!after.dialog) problems.push('forced encounter did not run after the encounter card: ' + JSON.stringify(after));
   }
+
+  // The start flow: splash, the campfire start screen, the roster, Begin journey.
+  await page.goto(URL.replace(/\?.*$/, '') + '?seed=555', { waitUntil: 'load', timeout: 60000 });
+  await page.waitForTimeout(400);
+  const boot = await page.evaluate(() => ({
+    splash: !!document.getElementById('splash'),
+    start: window.__startScreen(),
+    btn: document.getElementById('btn-enter').textContent,
+    campfire: !!window.__localView.campfire,
+    tokens: window.__localView.tokens.length,
+  }));
+  if (!boot.splash || !boot.start || !/Begin journey/.test(boot.btn) || !boot.campfire || boot.tokens !== 3) problems.push('start screen boot state wrong: ' + JSON.stringify(boot));
+  await page.waitForFunction(() => !document.getElementById('splash'), null, { timeout: 15000 }).catch(() => problems.push('splash did not fade away'));
+  await page.screenshot({ path: path.join(OUT, '31-campfire.png') });
+  // Roster: click a party-panel unit, swap in a new companion.
+  await page.evaluate(() => document.querySelectorAll('#party-units .unit')[0].click());
+  await page.waitForTimeout(250);
+  const roster = await page.evaluate(() => ({
+    open: !document.getElementById('roster').classList.contains('hidden'),
+    cards: document.querySelectorAll('.roster-card').length,
+    taken: document.querySelectorAll('.roster-card.taken').length,
+  }));
+  if (!roster.open || roster.cards !== 10 || roster.taken !== 3) problems.push('roster grid wrong: ' + JSON.stringify(roster));
+  await page.screenshot({ path: path.join(OUT, '32-roster.png') });
+  await page.evaluate(() => { [...document.querySelectorAll('.roster-card')].find((c) => c.textContent.includes('Stonestep')).click(); });
+  await page.waitForTimeout(300);
+  const swapped = await page.evaluate(() => ({ name: window.game.state.party[0].name, tokens: window.__localView.tokens.length }));
+  if (swapped.name !== 'Stonestep' || swapped.tokens !== 3) problems.push('roster swap failed: ' + JSON.stringify(swapped));
+  // Begin journey: the same zoom-out as leaving a fight, ending on the world map.
+  await page.click('#btn-enter');
+  await page.waitForFunction(() => window.__cinematic.mode() === 'idle', null, { timeout: 25000 }).catch(() => problems.push('Begin journey did not reach the world map'));
+  const onWorld = await page.evaluate(() => ({ start: window.__startScreen(), btn: document.getElementById('btn-enter').textContent }));
+  if (onWorld.start || /Begin journey/.test(onWorld.btn)) problems.push('world state after Begin journey wrong: ' + JSON.stringify(onWorld));
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: path.join(OUT, '33-after-journey.png') });
 
   console.log(problems.length ? 'PROBLEMS:\n' + problems.join('\n') : 'OK: no errors, all checks passed.');
   await browser.close();
