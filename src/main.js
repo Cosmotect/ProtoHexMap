@@ -131,6 +131,7 @@ function enterStartScreen() {
     baseColor: renderer.targetColorFor(game.map.start).getHex(),
     party: game.state.party,
     seed: game.seed,
+    neighbors: worldNeighborsFor(game.map.start),
   });
   const open = (i) => openRosterFor(i);
   cinematic.localView.enablePicking(open);
@@ -167,6 +168,40 @@ function beginJourney() {
 let battle = null;      // the running combat engine, if any
 let battleCtx = null;   // the context game.prepareCombat handed over
 
+// The six world tiles around `hex`, for the arena's backdrop and colour pull:
+// world-plane offset, final rendered colour, and height difference. Ether
+// neighbours and the map edge stay holes - the void shows through.
+function worldNeighborsFor(hex) {
+  const out = [];
+  const curRec = renderer.tiles.get(hex.key);
+  const curH = curRec ? curRec.height : 0.35;
+  for (const [dq, dr] of [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]]) {
+    const nb = game.map.hexes.get(`${hex.q + dq},${hex.r + dr}`);
+    if (!nb || nb.type === 'ether') continue;
+    const rec = renderer.tiles.get(nb.key);
+    out.push({
+      dx: nb.x - hex.x,
+      dy: nb.y - hex.y,
+      color: renderer.targetColorFor(nb).getHex(),
+      dh: (rec ? rec.height : CONFIG.colors.fogTileHeight) - curH,
+    });
+  }
+  return out;
+}
+
+// Wounds appear in the party panel AS they happen, not only after the fight.
+// (Deaths are only made official in finishCombat; here it is just the HP.)
+function syncPartyPanel() {
+  if (!battle) return;
+  let changed = false;
+  for (const u of battle.state.units) {
+    if (u.partyIndex == null) continue;
+    const p = game.state.party[u.partyIndex];
+    if (p && p.hp !== u.hp) { p.hp = u.hp; changed = true; }
+  }
+  if (changed) ui.update(game);
+}
+
 function beginInteractiveBattle(ctx) {
   const view = cinematic.localView;
   // Plain copies: the engine keeps its own instances; wounds are written back at the end.
@@ -185,7 +220,7 @@ function beginInteractiveBattle(ctx) {
     partyKeys: placement.partyKeys,
     enemyKeys: placement.enemyKeys,
     forced: ctx.forced,
-    onChange: () => { view.syncBattle(); ui.updateBattle(); },
+    onChange: () => { view.syncBattle(); ui.updateBattle(); syncPartyPanel(); },
     onFloater: (k, text, color) => view.addFloater(k, text, color),
     onLog: () => {},   // the floaters carry the story; a combat log can come later
     onAnim: (anim, done) => view.runMoveAnim(anim, done),
@@ -230,6 +265,7 @@ function startCombatDive(hex, resume) {
     enemies,
     seed: game.seed,
     recipe: hex.recipe ?? null,   // future: handcrafted arena recipes live on the hex
+    neighbors: worldNeighborsFor(hex),
     onArrived: () => {
       // The wither may have eaten the encounter while we were in the air.
       if (COMBAT_TYPES.has(hex.encounter)) resume();
@@ -299,6 +335,7 @@ function startRun(seed, opts = {}) {
       enemies: ctx.enemies.map((e) => ({ ...e })),
       seed: game.seed,
       recipe: ctx.hex.recipe ?? null,
+      neighbors: worldNeighborsFor(ctx.hex),
       onArrived: () => beginInteractiveBattle(ctx),
     });
   };

@@ -61,7 +61,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       maxHp: def.maxHp ?? def.hp, hp: def.hp,
       abilityIds: [...cs.abilities],
       pos, isEnemy, idx: i, partyIndex: def.partyIndex ?? null,
-      usedMove: false, done: false, tagTicked: false,
+      startPos: pos, moveLocked: false, done: false, tagTicked: false,
       stunned: false, shield: false, critBuff: false, haste: 0, summoned: false,
     };
   }
@@ -360,13 +360,15 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   }
 
   // ----- movement (hex-box 12) -------------------------------------------
-  function reach(u) {
+  // `fromK` lets the player phase measure range from the tile a unit STARTED
+  // the round on (free repositioning); enemies always measure from where they are.
+  function reach(u, fromK = u.pos) {
     const hard = new Set(), soft = new Set();
     for (const o of sb.units) { if (o.hp <= 0 || o === u) continue; ((!u.flying && o.isEnemy !== u.isEnemy) ? hard : soft).add(o.pos); }
     for (const k in sb.tags) { if (sb.tags[k].hp > 0) (u.flying ? soft : hard).add(k); }
     const spd = effSpeed(u);
-    const d = { [u.pos]: 0 }, prev = {};
-    const pq = [[0, u.pos]];
+    const d = { [fromK]: 0 }, prev = {};
+    const pq = [[0, fromK]];
     while (pq.length) {
       pq.sort((a, b) => a[0] - b[0]); const [dd, k] = pq.shift();
       if (dd > d[k]) continue;
@@ -420,7 +422,9 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // Hands the walk to the view: it animates and reports each tile entered.
   function animateMove(u, path, done) {
     if (!path || path.length < 2) { if (path && path.length) u.pos = path[path.length - 1]; done && done(); return; }
-    if (u.haste) u.haste = 0;
+    // Haste burns on a real move - but only for enemies: the player repositions
+    // freely, so their haste holds until the phase ends.
+    if (u.isEnemy && u.haste) u.haste = 0;
     sb.busy = true;
     const anim = {
       u, path: u.flying ? [path[0], path[path.length - 1]] : path, fly: u.flying,
@@ -466,36 +470,56 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     return map;
   }
 
-  // ----- turn flow (hex-box 11) ------------------------------------------
+  // ----- turn flow (hex-box 11, reworked player phase) ---------------------
+  // The player phase is ONE simultaneous turn: any unit can be selected and
+  // repositioned FREELY within its range (always measured from the tile it
+  // started the round on, so a move can be taken back) until an ability is
+  // cast. A cast commits the turn so far: the caster is finished, and every
+  // unit standing away from its starting tile is locked in place. The phase
+  // ends when every living unit has cast - or on End turn, which ends it for
+  // the whole party at once.
   function startPlayerPhase() {
     blog('- ROUND ' + sb.round + ' -');
     sb.phase = 'player'; sb.selAb = null; sb.aimMap = null; sb.activeUid = null;
-    for (const u of sb.units) if (!u.isEnemy && u.hp > 0) { u.done = false; u.usedMove = false; u.tagTicked = false; }
+    for (const u of sb.units) if (!u.isEnemy && u.hp > 0) {
+      u.done = false; u.moveLocked = false; u.startPos = u.pos; u.tagTicked = false;
+    }
     for (const u of sb.units) if (!u.isEnemy && u.hp > 0) { u.tagTicked = true; tagTick(u); }
     if (checkEnd()) return;
     for (const u of sb.units) if (!u.isEnemy && u.hp > 0 && u.stunned) {
       u.stunned = false; u.done = true; floater(u.pos, 'STUNNED', '#c9a8ff');
     }
     const first = sb.units.find((u) => !u.isEnemy && u.hp > 0 && !u.done);
-    if (first) activate(first); else { emit(); startEnemyPhase(); }
+    if (first) select(first); else { emit(); startEnemyPhase(); }
   }
-  function activate(u) {
+  function refreshReach() {
+    const c = curP();
+    sb.reach = (c && !c.done && !c.moveLocked) ? reach(c, c.startPos) : null;
+  }
+  function select(u) {
     if (sb.over) return;
     sb.activeUid = u.uid; sb.selAb = null; sb.aimMap = null;
-    if (!u.tagTicked) {
-      u.tagTicked = true;
-      tagTick(u);
-      if (checkEnd()) return;
-      if (u.hp <= 0) { finishUnit(u); return; }
-    }
-    sb.reach = u.usedMove ? null : reach(u);
+    refreshReach();
     emit();
   }
-  function finishUnit(u) {
-    u.done = true; sb.selAb = null; sb.aimMap = null; sb.reach = null;
+  // Runs after a unit's cast resolves: lock strayed units, finish the caster,
+  // hand selection over - or end the phase if everyone has now acted.
+  function afterCast(c) {
+    c.done = true;
+    for (const u of sb.units) if (!u.isEnemy && u.hp > 0 && u.pos !== u.startPos) u.moveLocked = true;
+    sb.selAb = null; sb.aimMap = null; sb.reach = null;
     if (sb.over) return;
-    const nxt = sb.units.find((x) => !x.isEnemy && x.hp > 0 && !x.done);
-    if (nxt) activate(nxt);
+    const next = sb.units.find((x) => !x.isEnemy && x.hp > 0 && !x.done);
+    if (next) select(next);
+    else { sb.activeUid = null; emit(); startEnemyPhase(); }
+  }
+  // A unit that can no longer act (killed or stunned by a trap mid-walk).
+  function retireUnit(u) {
+    if (u.stunned) u.stunned = false;
+    u.done = true;
+    if (sb.over) return;
+    const next = sb.units.find((x) => !x.isEnemy && x.hp > 0 && !x.done);
+    if (next) select(next);
     else { sb.activeUid = null; emit(); startEnemyPhase(); }
   }
   function startEnemyPhase() {
@@ -645,7 +669,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     const c = curP(); if (!c) return;
     if (!inMap(k)) return;
     const uu = unitAt(k);
-    if (!sb.selAb && uu && !uu.isEnemy && uu.uid !== c.uid && !uu.done) { activate(uu); return; }
+    if (!sb.selAb && uu && !uu.isEnemy && uu.uid !== c.uid && !uu.done) { select(uu); return; }
     if (sb.selAb) {
       const ab = abById(sb.selAb);
       const target = ab && sb.aimMap ? sb.aimMap[k] : null;
@@ -657,24 +681,26 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
         setTimeout(() => {
           sb.busy = false;
           if (checkEnd()) return;
-          finishUnit(c);   // casting always ends the unit's activation
+          afterCast(c);   // casting finishes the unit and locks strayed positions
         }, 480);
       } else { sb.selAb = null; sb.aimMap = null; emit(); }
       return;
     }
-    if (!c.usedMove) {
-      const res = sb.reach ?? reach(c);
+    // Free repositioning: range is measured from the round's starting tile, so
+    // clicking again simply picks a different spot (the old move is taken back).
+    if (!c.done && !c.moveLocked) {
+      const res = sb.reach ?? reach(c, c.startPos);
       if (k !== c.pos && canStop(res, k)) {
-        const path = pathTo(res, c.pos, k);
+        const path = pathTo(res, c.startPos, k);
         if (!path) return;
-        c.usedMove = true;
         sb.reach = null;
         animateMove(c, path, () => {
           sb.busy = false;
           sArrive(liveSt(), c); flushDeaths(liveSt());
           if (checkEnd()) return;
+          if (c.hp <= 0 || c.stunned) { retireUnit(c); return; }
+          refreshReach();
           emit();
-          if (c.hp <= 0 || c.stunned) finishUnit(c);
         });
         emit();
       }
@@ -691,9 +717,13 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     }
     emit();
   }
+  // Ends the WHOLE party's turn at once.
   function endTurn() {
-    const c = curP();
-    if (c && sb.phase === 'player' && !sb.busy && !sb.over) finishUnit(c);
+    if (sb.phase !== 'player' || sb.busy || sb.over) return;
+    for (const u of sb.units) if (!u.isEnemy && u.hp > 0) u.done = true;
+    sb.activeUid = null; sb.selAb = null; sb.aimMap = null; sb.reach = null;
+    emit();
+    startEnemyPhase();
   }
 
   // Test / debug helper: decide the battle instantly.
@@ -715,7 +745,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
 
   return {
     state: sb,
-    clickTile, selectAbility, endTurn, activate: (uid) => { const u = sb.units.find((x) => x.uid === uid && !x.isEnemy && x.hp > 0 && !x.done); if (u && sb.phase === 'player' && !sb.busy) activate(u); },
+    clickTile, selectAbility, endTurn, activate: (uid) => { const u = sb.units.find((x) => x.uid === uid && !x.isEnemy && x.hp > 0 && !x.done); if (u && sb.phase === 'player' && !sb.busy) select(u); },
     abilityById: abById,
     curPlayer: curP,
     reachFor: () => sb.reach,

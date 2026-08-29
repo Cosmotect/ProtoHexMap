@@ -85,8 +85,8 @@ Handy URL switches (add them to the address):
 | `?npe=1` | Start the guided new player experience (fixed map, interface revealed piece by piece). |
 | `?nostart=1` | Skip the Everlands splash and the campfire start screen (used by the tests). |
 
-Keyboard: **E** enter the encounter / make camp (in a fight: end the turn), **M** menu,
-**C** camera toggle, **N** new map, **R** restart, arrow keys pan.
+Keyboard: **E** enter the encounter / make camp (in a fight: end the whole turn), **M** menu,
+**N** new map, **R** restart, arrow keys pan.
 Mouse: left-drag pan, right-drag rotate/tilt, wheel zoom, left-click a glowing tile to move.
 In a fight: click a lit tile to move, an ability button to aim, a lit tile again to cast.
 

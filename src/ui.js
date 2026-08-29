@@ -469,8 +469,8 @@ export function createUI(config, handlers) {
     els.battleRound.textContent = sb.ambush ? t('battle.ui.ambush') : t('battle.ui.round', { n: sb.round });
     const c = battleRef.curPlayer();
     if (sb.phase === 'player' && c) {
-      const moved = c.usedMove ? t('battle.ui.moved') : t('battle.ui.canMove');
-      els.battleActive.innerHTML = `<b>${c.icon ?? ''} ${escapeHtml(tn(c.name))}</b> <span class="hp">${t('battle.ui.hp', { hp: c.hp, max: c.maxHp })}</span> <span class="muted">${escapeHtml(moved)}</span>`;
+      const hint = c.moveLocked ? t('battle.ui.locked') : t('battle.ui.canMove');
+      els.battleActive.innerHTML = `<b>${c.icon ?? ''} ${escapeHtml(tn(c.name))}</b> <span class="hp">${t('battle.ui.hp', { hp: c.hp, max: c.maxHp })}</span> <span class="muted">${escapeHtml(hint)}</span>`;
       els.battleAbilities.innerHTML = c.abilityIds.map((id) => {
         const ab = battleRef.abilityById(id);
         if (!ab) return '';

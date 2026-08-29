@@ -50,7 +50,11 @@ export class LocalMapView {
   //   recipe    = future handcrafted arena description (see localmap.js)
   // layout: 'battle' (default) scatters both sides on random tiles;
   //         'camp' seats the party around a campfire (the start screen).
-  build({ worldHex, baseColor, party, enemies, seed, recipe = null, layout = 'battle' }) {
+  // neighbors: the 6 surrounding WORLD tiles as [{ dx, dy, color, dh }] - world-plane
+  // offset from the entered tile, final colour, and height difference. They become
+  // huge uninteractive backdrop hexes around the arena, and pull the colour of
+  // edge-facing arena tiles towards themselves (the sense of place).
+  build({ worldHex, baseColor, party, enemies, seed, recipe = null, layout = 'battle', neighbors = [] }) {
     this.dispose();
     const cfg = this.config.local;
     const rng = createRng((seed ?? 1) ^ ((worldHex?.q ?? 0) * 73856093) ^ ((worldHex?.r ?? 0) * 19349663));
@@ -97,9 +101,28 @@ export class LocalMapView {
     geo.translate(0, 0.5, 0);
     if (this.map.orientation === 'flat') geo.rotateY(Math.PI / 6);
     const base = new THREE.Color(baseColor ?? 0x7a8a6a);
+    // Neighbouring world tiles, prepared once: unit direction + colour object.
+    const nbs = (neighbors ?? []).map((nb) => {
+      const len = Math.hypot(nb.dx, nb.dy) || 1;
+      return { ...nb, ux: nb.dx / len, uy: nb.dy / len, color3: new THREE.Color(nb.color) };
+    });
+    // How far out a tile sits towards a given edge, 0 at the centre, ~1 at the rim.
+    const rim = 1.5 * cfg.radius * cfg.hexSize;
+
     this.tileMeshes = [];
     for (const tile of this.map.hexes.values()) {
-      const mat = new THREE.MeshStandardMaterial({ color: base.clone().multiplyScalar(0.9 + rng.random() * 0.2), roughness: 0.85 });
+      // Base shade of the entered world tile, pulled towards each neighbouring
+      // world tile the closer this arena tile gets to the edge facing it. The
+      // jitter keeps the gradient ragged instead of a clean airbrushed fade.
+      const col = base.clone().multiplyScalar(0.9 + rng.random() * 0.2);
+      for (const nb of nbs) {
+        const proj = (tile.x * nb.ux + tile.y * nb.uy) / rim;
+        if (proj <= 0.15) continue;
+        const t01 = Math.min(1, (proj - 0.15) / 0.85);
+        const jitter = 0.65 + rng.random() * 0.7;
+        col.lerp(nb.color3, Math.min(0.6, t01 * t01 * 0.5 * jitter));
+      }
+      const mat = new THREE.MeshStandardMaterial({ color: col, roughness: 0.85 });
       const mesh = new THREE.Mesh(geo, mat);
       const h = cfg.tileHeight + (tile.elevation ?? 0) * (cfg.elevationStep ?? 0.35);
       mesh.scale.y = Math.max(0.05, h);
@@ -110,8 +133,19 @@ export class LocalMapView {
       this.scene.add(mesh);
       tile.mesh = mesh;
       tile.top = Math.max(0.05, h);
+      tile.lift = 0;
       this.tileMeshes.push(mesh);
     }
+    this.buildNeighborBackdrop(nbs);
+
+    // Highlight rings (movement / cast ranges): the same hex-outline approach as
+    // the world map - a bright ring over a dark backing ring, pulsing, going
+    // solid white on the hovered tile while that tile rises slightly.
+    const ringStart = this.map.orientation === 'flat' ? 0 : Math.PI / 6;
+    this.hlRingGeo = new THREE.RingGeometry(tileRadius * 0.78, tileRadius * 0.93, 6, 1, ringStart);
+    this.hlRingGeo.rotateX(-Math.PI / 2);
+    this.hlRingBackGeo = new THREE.RingGeometry(tileRadius * 0.72, tileRadius * 0.97, 6, 1, ringStart);
+    this.hlRingBackGeo.rotateX(-Math.PI / 2);
 
     if (layout === 'camp') {
       this.buildCampfire();
@@ -121,6 +155,30 @@ export class LocalMapView {
     }
     this.buildCamera();
     return this.map;
+  }
+
+  // The six surrounding world tiles as giant background hexes past the arena
+  // rim. Purely scenery: not pickable, not in tileMeshes, no gameplay.
+  buildNeighborBackdrop(nbs) {
+    if (!nbs || !nbs.length) return;
+    const cfg = this.config.local;
+    const aR = SQRT3 * (cfg.radius + 0.5) * cfg.hexSize;      // circumradius of the arena outline
+    const centerDist = 3 * (cfg.radius + 0.5) * cfg.hexSize;  // one world-tile step at arena scale
+    const geo = new THREE.CylinderGeometry(aR * 0.97, aR * 0.97, 1, 6, 1);
+    geo.translate(0, 0.5, 0);
+    // Neighbour hexes carry the WORLD orientation - the opposite of the arena tiles.
+    if (this.map.orientation !== 'flat') geo.rotateY(Math.PI / 6);
+    for (const nb of nbs) {
+      const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: nb.color3.clone(), roughness: 1 }));
+      // Top edge: a bit below the arena floor, shifted by the real world height
+      // difference and clamped - a mountain reads as a wall, water as a drop,
+      // and nothing towers over the fight. Distance fog does the rest.
+      const top = Math.max(-2.4, Math.min(1.4, -0.7 + (nb.dh ?? 0) * 2.2));
+      mesh.scale.y = 30;
+      mesh.position.set(nb.ux * centerDist, top - 30, -nb.uy * centerDist);
+      mesh.receiveShadow = true;
+      this.scene.add(mesh);
+    }
   }
 
   // ----- the campfire (start screen) ------------------------------------
@@ -386,15 +444,25 @@ export class LocalMapView {
       const hit = ray.intersectObjects(this.tileMeshes ?? [], false)[0];
       if (hit) onTile(hit.object.userData.key);
     };
+    // Hover: remembered here, resolved once per frame in update() (raycasts on
+    // every mousemove would hammer slow machines).
+    const onMove = (e) => {
+      const rect = el.getBoundingClientRect();
+      this.pointer = { x: ((e.clientX - rect.left) / rect.width) * 2 - 1, y: -((e.clientY - rect.top) / rect.height) * 2 + 1 };
+      this.hoverDirty = true;
+    };
     el.addEventListener('pointerdown', onDown);
     el.addEventListener('pointerup', onUp);
-    this.tileHandlers = { onDown, onUp };
+    el.addEventListener('pointermove', onMove);
+    this.tileHandlers = { onDown, onUp, onMove };
   }
   disableTilePicking() {
     if (!this.tileHandlers) return;
     this.domElement.removeEventListener('pointerdown', this.tileHandlers.onDown);
     this.domElement.removeEventListener('pointerup', this.tileHandlers.onUp);
+    this.domElement.removeEventListener('pointermove', this.tileHandlers.onMove);
     this.tileHandlers = null;
+    this.hoverKey = null;
   }
 
   // Redraws everything the engine may have changed: token positions, deaths,
@@ -459,34 +527,43 @@ export class LocalMapView {
     if (tok.userData.ring) tok.userData.ring.position.set(tile.x, tile.top + 0.02, -tile.y);
   }
 
-  // Reach (walkable tiles) and aim (castable tiles) as translucent hex plates.
+  // Reach (walkable tiles) and aim (castable tiles) as hex OUTLINE rings, the
+  // world map's language: bright ring + dark backing so it reads on any colour,
+  // pulsing; the hovered one goes solid white and its tile rises (see update()).
   syncHighlights(battle) {
     for (const m of this.highlights) this.scene.remove(m);
     this.highlights = [];
+    this.hlTiles = new Map();   // key -> { ring, color, phase, tile }
     const sb = battle.state;
     if (sb.over || sb.phase !== 'player') return;
-    const add = (k, color, opacity) => {
+    const add = (k, color) => {
       const tile = this.map.hexes.get(k);
       if (!tile) return;
-      if (!this.hlGeo) {
-        this.hlGeo = new THREE.CylinderGeometry(this.config.local.hexSize * 0.86, this.config.local.hexSize * 0.86, 0.04, 6, 1);
-        if (this.map.orientation === 'flat') this.hlGeo.rotateY(Math.PI / 6);
-      }
-      const m = new THREE.Mesh(this.hlGeo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false }));
-      m.position.set(tile.x, tile.top + 0.03, -tile.y);
-      this.scene.add(m);
-      this.highlights.push(m);
+      const ring = new THREE.Mesh(
+        this.hlRingGeo,
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8, depthWrite: false, side: THREE.DoubleSide })
+      );
+      const back = new THREE.Mesh(
+        this.hlRingBackGeo,
+        new THREE.MeshBasicMaterial({ color: 0x0b0e16, transparent: true, opacity: 0.55, depthWrite: false, side: THREE.DoubleSide })
+      );
+      back.position.y = -0.004;
+      ring.add(back);
+      ring.position.set(tile.x, tile.top + 0.02, -tile.y);
+      this.scene.add(ring);
+      this.highlights.push(ring);
+      this.hlTiles.set(k, { ring, color: new THREE.Color(color), phase: Math.random() * Math.PI * 2, tile });
     };
     if (sb.selAb && sb.aimMap) {
       const ab = battle.abilityById(sb.selAb);
       const color = new THREE.Color(ab?.color ?? '#ffd166').getHex();
-      for (const k of Object.keys(sb.aimMap)) add(k, color, 0.38);
+      for (const k of Object.keys(sb.aimMap)) add(k, color);
     } else if (sb.reach) {
       const { d, occ } = sb.reach;
       const cur = battle.curPlayer();
       for (const k of Object.keys(d)) {
         if (occ.has(k) || (cur && k === cur.pos)) continue;
-        add(k, 0xffd166, 0.25);
+        add(k, this.config.colors.reachableRing);
       }
     }
   }
@@ -497,6 +574,9 @@ export class LocalMapView {
   runMoveAnim(anim, done) {
     const tok = this.battleTokens.get(anim.u.uid);
     if (!tok) { for (let i = 1; i < anim.path.length; i++) if (anim.enter(anim.path[i])) break; done(); return; }
+    // A re-position (free player movement) walks from the round's STARTING tile:
+    // snap the token back there first, reading as "the old move is taken back".
+    if (tok.userData.tileKey !== anim.path[0]) this.teleportToken(tok, anim.path[0]);
     tok.userData.walking = true;
     this.walk = {
       tok, anim, done,
@@ -570,6 +650,8 @@ export class LocalMapView {
     this.disableTilePicking();
     for (const m of this.highlights ?? []) this.scene?.remove(m);
     this.highlights = [];
+    this.hlTiles = new Map();
+    if (this.map) for (const tile of this.map.hexes.values()) { tile.lift = 0; if (tile.mesh) tile.mesh.position.y = 0; }
     for (const s of (this.tagSprites ?? new Map()).values()) this.scene?.remove(s);
     this.tagSprites = new Map();
     if (this.walk) { this.walk.tok.userData.walking = false; this.walk = null; }
@@ -665,6 +747,32 @@ export class LocalMapView {
         ring.scale.setScalar(s);
         ring.material.opacity = active ? 0.95 : 0.5;
       }
+      // Hover over highlighted tiles: resolve the pick once per frame, then let
+      // the hovered tile rise and its ring go solid white (world-map feedback).
+      if (this.hoverDirty && this.camera && this.pointer) {
+        this.hoverDirty = false;
+        this.hoverRay = this.hoverRay ?? new THREE.Raycaster();
+        this.hoverRay.setFromCamera(new THREE.Vector2(this.pointer.x, this.pointer.y), this.camera);
+        const hit = this.hoverRay.intersectObjects(this.tileMeshes ?? [], false)[0];
+        this.hoverKey = hit ? hit.object.userData.key : null;
+      }
+      const c = this.config.colors;
+      for (const tile of this.map.hexes.values()) {
+        const hl = this.hlTiles ? this.hlTiles.get(tile.key) : null;
+        const isHover = !!hl && tile.key === this.hoverKey;
+        const target = isHover ? 0.12 : 0;
+        tile.lift = (tile.lift ?? 0) + (target - (tile.lift ?? 0)) * Math.min(1, dt / 60);
+        if (tile.lift < 0.0005 && !hl) {
+          if (tile.mesh.position.y !== 0) tile.mesh.position.y = 0;
+          continue;
+        }
+        tile.mesh.position.y = tile.lift;
+        if (hl) {
+          hl.ring.position.y = tile.top + 0.02 + tile.lift;
+          hl.ring.material.color.set(isHover ? c.hoverRing : hl.color);
+          hl.ring.material.opacity = isHover ? 1 : 0.45 + 0.35 * (0.5 + 0.5 * Math.sin(this.elapsed / 260 + hl.phase));
+        }
+      }
     }
     if (this.campfire) {
       // The flame breathes and the light jitters like a real fire.
@@ -684,7 +792,8 @@ export class LocalMapView {
     this.disablePicking();
     this.endBattle();
     this.tileMeshes = [];
-    if (this.hlGeo) { this.hlGeo.dispose(); this.hlGeo = null; }
+    if (this.hlRingGeo) { this.hlRingGeo.dispose(); this.hlRingGeo = null; }
+    if (this.hlRingBackGeo) { this.hlRingBackGeo.dispose(); this.hlRingBackGeo = null; }
     if (this.scene) {
       this.scene.traverse((o) => {
         if (o.geometry) o.geometry.dispose();

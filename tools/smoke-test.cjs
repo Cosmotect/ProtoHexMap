@@ -348,7 +348,9 @@ fs.mkdirSync(OUT, { recursive: true });
   await page.click('#btn-tutorial-ok');
   for (let i = 0; i < 2; i++) {
     await waitIdle();
-    const n = await page.evaluate(() => { const h = window.game.reachable()[0]; return [h.q, h.r]; });
+    // Step onto encounter-FREE tiles: an encounter would hold the arrival behind
+    // its own card and derail the step count (the map depends on the world config).
+    const n = await page.evaluate(() => { const r = window.game.reachable(); const h = r.find((x) => !x.encounter) ?? r[0]; return [h.q, h.r]; });
     const p = await screenPos(n[0], n[1]);
     await page.mouse.move(p.x, p.y); await page.waitForTimeout(60); await page.mouse.down(); await page.mouse.up();
     await page.waitForTimeout(300);

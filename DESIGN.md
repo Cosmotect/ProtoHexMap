@@ -296,11 +296,30 @@ Three separate pools implement it (`src/config/units.js`): `battle.enemies.bands
     and the config slice `src/config/abilities.js` (COMBAT_CONFIG.combat rules, the
     ABILITIES / COMBAT_TAGS tables, UNIT_COMBAT per-name stats with a `default`
     fallback; deliberately NOT in the settings window).
-  * **Rules kept from hex-box**: players activate their units in any order; moving is
-    once per activation, casting ends the activation; enemies act by initiative;
-    uphill steps cost 2 movement, flyers glide; high ground +1 damage, low ground -1
-    (2+ levels); shield blocks one hit or push; stun skips the turn; pushes crash into
-    walls (2 dmg), fall 2+ levels (2 dmg + stun), crush whoever they land on.
+  * **Rules kept from hex-box**: enemies act by initiative; uphill steps cost 2
+    movement, flyers glide; high ground +1 damage, low ground -1 (2+ levels); shield
+    blocks one hit or push; stun skips the turn; pushes crash into walls (2 dmg),
+    fall 2+ levels (2 dmg + stun), crush whoever they land on.
+  * **Player phase (Everlands rework, 2026-08-29)**: ONE simultaneous turn instead of
+    hex-box's per-unit activations. Any unit can be selected and repositioned FREELY
+    within its range - the range is always measured from the tile it started the
+    round on, so a move can simply be taken back by clicking elsewhere (the token
+    snaps home and walks anew). Casting an ability commits the turn so far: the
+    caster is finished and every unit standing away from its starting tile locks in
+    place (units still at home keep their freedom). The phase ends by itself the
+    moment every living unit has cast; the End turn button (or E) ends it early for
+    the WHOLE party at once. Player haste survives repositioning (it only burns on
+    enemy moves).
+  * **Presentation (2026-08-29)**: the six surrounding WORLD tiles stand around the
+    arena as giant uninteractive backdrop hexes - real world-map colours, height
+    differences clamped so a mountain reads as a wall and water as a drop, distance
+    fog doing the rest; ether neighbours and the map edge stay void. Arena edge
+    tiles pull their colour towards the neighbour they face (squared falloff from
+    the centre, per-tile jitter so the gradient stays ragged). Movement and cast
+    ranges draw as the world map's hex-outline rings (bright ring over a dark
+    backing, pulsing); the hovered ring goes solid white and its tile rises. Party
+    panel HP updates live as hits land (deaths still only become official in
+    finishCombat).
   * **Everlands additions**: a unit's world-map POWER adds ability damage
     (`round(power / powerPerDamage)`, powerPerDamage 3), and a fatigue-FORCED fight
     opens with an AMBUSH: one extra enemy phase before round 1 (no tag ticks, no round
@@ -382,6 +401,18 @@ the UI that shows the possible outcomes, and a way to **pick** or **roll** the r
 Outcome choice per type is an open question (see below); the hook does not care.
 
 ## Decisions log
+
+* 2026-08-29 (b) **Combat UX pass** (first play feedback): the player phase became one
+  simultaneous turn - free repositioning measured from each unit's round-start tile
+  (moves can be taken back), a cast locks every strayed unit in place, the phase
+  auto-ends when everyone has cast, and End turn ends the WHOLE party's turn (it
+  used to finish one unit). Range/cast highlights switched from translucent plates
+  to the world map's hex-outline rings with hover (white ring + tile rise) - the
+  plates were too hard to read. The six neighbouring world tiles now surround the
+  arena as giant backdrop hexes and tint the arena's edge tiles towards themselves
+  (jittered gradient), anchoring the arena in its place on the world map. Party
+  panel HP now tracks battle damage live. hex-box is no longer read; the combat
+  logic evolves here.
 
 * 2026-08-29 The orthographic / top-down camera was deleted (config keys, the projection
   branch in setupCamera, the C shortcut, the Settings toggle, the ?camera=ortho switch and
