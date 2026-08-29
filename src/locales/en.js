@@ -145,6 +145,8 @@ export const en = {
   'visual.stasisColony.info': 'Erupts where a stasis line arrives ({colonyCount} per map). Guarded by a brood of its own (power {colonyPowerMin} to {colonyPowerMax}) - harder than any wandering group, short of the Seed itself; while it stands, its debuff also afflicts the Seed fight and it withers the land around it. Clearing one lifts its debuff and grants {rewardPicks} power raises. Fatigue can force you into it.',
   'visual.acolyte.label': 'Acolyte of the Great Forge',
   'visual.acolyte.info': 'Restores one disabled unit at {revivePct} health. At least {acolyteMin} per map. Not consumed if nobody is disabled.',
+  'visual.goal.label': 'Waypoint',
+  'visual.goal.info': 'Reach this marker to complete the training map.',
   'reset.note.shop': 'only if you buy a rest there (not every shop sells one)',
   'reset.note.event': 'only after specific events',
   'reset.camp': 'making camp',
@@ -192,6 +194,9 @@ export const en = {
 
   // ----- log lines -------------------------------------------------------------
   'log.newRun': 'New run. Seed {seed}. The Stasis Seed lurks {steps} {steps:step|steps} away; its lines creep towards {n} future {n:Colony|Colonies}.',
+  'log.scenarioStart': 'Training: {name}.',
+  'log.scenarioDone': 'The waypoint is reached.',
+  'scenario.tutorial1.name': 'The Road',
   'log.disabledBy': '{reason}: {names} disabled.',
   'log.climb': 'The climb',
   'log.moved': 'Turn {turn}: moved to {where}. Fatigue {fatigue}%.',
@@ -249,6 +254,7 @@ export const en = {
   'end.lost.title': 'Run over',
   'end.fell': 'The whole party fell in battle after {turn} moves.',
   'end.seed': 'You destroyed the Stasis Seed after {turn} moves and {enc} encounters, clearing {colonies} {colonies:Colony|Colonies} on the way.',
+  'end.scenario': 'The waypoint was reached on turn {turn}. The training map is complete.',
   'end.inspectNote': 'You can look around the final map; restart or start a new one from the menu at any time.',
   'end.inspect': 'Inspect the map',
   'end.inspect.title': 'Close this and look at the final board',

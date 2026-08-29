@@ -243,6 +243,35 @@ the AUTO-simulation and must be re-measured against interactive play.
 * **Balance is RAW**: ability numbers are first guesses; the difficulty ladder was
   tuned for the auto-simulation and needs re-measuring against interactive play.
 
+## Scenarios - hand-authored maps (the tutorial series, src/scenarios/)
+
+The tutorial does not use the generator: it teaches through LEVEL GEOMETRY, so its
+maps are authored by hand as SCENARIOS - plain data objects that fix everything the
+world normally rolls. `Game` takes the scenario as a third constructor argument;
+everything downstream (renderer, HUD, combat) sees an ordinary, just small, map.
+
+* **Format** (`src/scenarios/scenario.js` documents it; `tutorial1.js` is the first
+  map): explicit tile table (type / biome / revealed), encounters with exact enemy
+  groups, shop stock, fixed event ids and treasure amounts, an optional fixed party
+  and supplies, scripted `ambushes` (a forced fight fires at an exact step count on
+  an empty tile - fatigue stops rolling dice entirely in scenario mode), a `goal`
+  (reach a tile marked with the hidden `goal` waypoint marker) and an optional
+  `configPatch` (per-run CONFIG overrides, applied and undone by main.js).
+  `buildScenarioMap` returns the same shape `generateMap` does. A scenario without a
+  scripted Stasis simply has none (guards in advanceStasis / the renderer).
+* **Entry**: `?scenario=<id>` (registry in `src/scenarios/index.js`), fixed seed,
+  no splash / campfire / roster - a scenario drops straight onto its map. Restart
+  keeps the scenario; New map leaves it. Reaching the goal ends the run as a
+  scenario victory (`end.scenario`); the `next` field will chain the maps.
+* **Why**: fully deterministic, so every tutorial map gets an end-to-end
+  walkthrough in the smoke test and cannot break silently (the old seeded NPE
+  broke whenever worldgen changed).
+* **Planned next** (approved plan): map 1 "The Road" (corridor: move, fog, first
+  fight, camp) - layout shipped, slim guide cards pending; map 2 "The Fork"
+  (choice of routes, terrain costs, scripted ambush, shop, high-ground arena
+  recipe); map 3 "The Withering" (a compressed scripted Stasis with a mini-Seed);
+  then the menu entry replaces the old seeded NPE, which gets removed.
+
 ## How the code is split
 
 `game.js` owns truth (state, rules) and emits events: `reveal`, `move`, `encounter`,

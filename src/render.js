@@ -585,7 +585,7 @@ export class MapRenderer {
   // are only drawn over tiles the player has already revealed.
   rebuildStasisLines(game) {
     if (this.stasisGroup) { this.scene.remove(this.stasisGroup); this.stasisGroup = null; }
-    if (!game || !game.stasis) return;
+    if (!game || !game.stasis || !game.stasis.seed) return;   // scenario maps may have no Stasis
     this.stasisGroup = new THREE.Group();
     this.stasisLineMat.color.set(this.config.colors.stasisLine);
     const seed = game.stasis.seed;

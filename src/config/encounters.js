@@ -31,6 +31,9 @@ export const ENCOUNTERS = {
       stasisSeed: { color: 0x9b1c31, shape: 'cone' },
       stasisColony: { color: 0x6e2c8f, shape: 'cone' },
       acolyte: { color: 0xfff3b0, shape: 'icosahedron' },
+      // The waypoint that completes a scenario (tutorial) map. Never generated on
+      // normal maps, so it is hidden from the legend.
+      goal: { color: 0x9fd9ff, shape: 'cone', hidden: true },
     },
   },
 

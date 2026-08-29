@@ -139,6 +139,7 @@ export function createUI(config, handlers) {
     legendItems.push({ swatch: `<span class="swatch" style="background:${hex(b.color)}"></span>`, label: `${t(`biome.${name}`)}${note}`, info: tc(`biome.${name}.info`, config) });
   }
   for (const [type, v] of Object.entries(config.encounters.visuals)) {
+    if (v.hidden) continue;   // scenario-only markers (the tutorial waypoint) stay out of the legend
     legendItems.push({ swatch: `<span class="swatch marker" style="background:${hex(v.color)}"></span>`, label: encounterLabel(type), info: encounterInfo(type, config) });
   }
   legendItems.push({ swatch: `<span class="swatch" style="background:${hex(config.colors.fogTile)}"></span>`, label: t('legend.unexplored'), info: t('legend.unexplored.info') });

@@ -267,8 +267,14 @@ fs.mkdirSync(OUT, { recursive: true });
     if (withered.some((h) => h.type === 'water')) out.push('withered water did not dry into ground');
     if (withered.some((h) => h.hpCost !== (g.config.tileTypes[h.type].hpCost ?? 0) + cfgW.hpCost)) out.push('withered tiles did not take the biome hpCost');
     // Ether tiles must be holes: present in the game data, absent from the renderer.
+    // Ether tiles wear a fog plate while hidden; once REVEALED (and the reveal
+    // animation has finished) the plate hides and the void shows through.
     const ether = [...g.map.hexes.values()].filter((h) => h.type === 'ether');
-    if (ether.some((h) => window.__renderer.tiles.has(h.key))) out.push('ether tiles have meshes - they should be holes');
+    if (ether.some((h) => {
+      const rec = window.__renderer.tiles.get(h.key);
+      const animating = rec && rec.colorTween && !rec.colorTween.done;
+      return h.revealed && rec && !animating && rec.mesh.visible;
+    })) out.push('a revealed ether tile still shows a mesh - it should be a hole');
     // Active colonies push their debuff onto the seed fight.
     const debuffs = g.activeDebuffsFor(g.map.seed);
     const active = st.colonies.filter((c) => c.active && !c.cleared).length;
@@ -528,6 +534,81 @@ fs.mkdirSync(OUT, { recursive: true });
   if (onWorld.start || /Begin journey/.test(onWorld.btn)) problems.push('world state after Begin journey wrong: ' + JSON.stringify(onWorld));
   await page.waitForTimeout(400);
   await page.screenshot({ path: path.join(OUT, '33-after-journey.png') });
+
+  // ----- SCENARIO ENGINE: the hand-authored tutorial map, walked end to end ----
+  // Everything on it is scripted, so the whole walkthrough is deterministic:
+  // follow the corridor, win the bridge fight, collect the cache, camp, reach
+  // the waypoint - the run must end in a scenario victory.
+  await page.goto(URL.replace(/\?.*$/, '') + '?scenario=tutorial1', { waitUntil: 'load', timeout: 60000 });
+  await page.waitForTimeout(1200);
+  const scn = await page.evaluate(() => ({
+    id: window.game.scenario?.id,
+    tiles: window.game.map.hexes.size,
+    start: window.game.state.position.key,
+    startScreen: window.__startScreen(),
+    splash: !!document.getElementById('splash'),
+    bridge: (window.game.map.hexes.get('4,-2')?.enemies ?? []).map((e) => e.name).join(','),
+    cache: window.game.map.hexes.get('6,-3')?.encounter,
+    goal: window.game.map.hexes.get('9,-4')?.encounter,
+    supplies: window.game.state.supplies,
+    max: window.game.state.maxSupplies,
+    stasisLines: !!window.__renderer.stasisGroup,
+    legendHasGoal: document.getElementById('legend-items').textContent.includes('Waypoint'),
+  }));
+  if (scn.id !== 'tutorial1' || scn.tiles !== 12 || scn.start !== '0,0') problems.push('scenario map wrong: ' + JSON.stringify(scn));
+  if (scn.startScreen || scn.splash) problems.push('scenario boot should skip the splash and campfire: ' + JSON.stringify(scn));
+  if (scn.bridge !== 'Husk' || scn.cache !== 'treasure' || scn.goal !== 'goal') problems.push('scenario encounters wrong: ' + JSON.stringify(scn));
+  if (scn.supplies !== 10 || scn.max !== 60) problems.push('scenario supplies wrong: ' + JSON.stringify(scn));
+  if (scn.stasisLines) problems.push('a scenario without a Stasis still drew stasis lines');
+  if (scn.legendHasGoal) problems.push('the hidden waypoint marker leaked into the legend');
+  await page.screenshot({ path: path.join(OUT, '60-scenario-start.png') });
+  let camped = false;
+  for (let i = 0; i < 24; i++) {
+    const st = await page.evaluate(() => {
+      const g = window.game;
+      if (g.state.status !== 'playing') return { done: g.state.status };
+      const pos = g.state.position;
+      if (pos.encounter && pos.encounter !== 'goal') return { enter: pos.encounter };
+      const [gq, gr] = g.scenario.goal.tile.split(',').map(Number);
+      const d = (h) => (Math.abs(h.q - gq) + Math.abs(h.r - gr) + Math.abs(h.q + h.r - gq - gr)) / 2;
+      // Visit encounters on the way (the cache), otherwise walk towards the goal.
+      const enc = (h) => (h.encounter && h.encounter !== 'goal' ? 1 : 0);
+      const r = g.reachable().slice().sort((a, b) => enc(b) - enc(a) || d(a) - d(b));
+      if (!r.length) return { stuck: true };
+      g.moveTo(r[0]);
+      return { moved: r[0].key };
+    });
+    if (st.done || st.stuck) break;
+    if (st.enter === 'battle') {
+      // The bridge fight: enter, then win it from the console like the other blocks.
+      await page.evaluate(() => window.game.enter(false));
+      await settleBattleIfAny();
+    } else if (st.enter === 'treasure') {
+      await page.evaluate(() => window.game.enter(false));
+      await page.waitForTimeout(250);
+      await dismissDialog();
+      // The cache exists to afford a camp: make one on the widening right here.
+      const campOk = await page.evaluate(() => {
+        const g = window.game;
+        if (g.state.supplies < g.config.rest.cost) return { fail: 'cannot afford camp', s: g.state.supplies };
+        return { camped: g.makeCamp ? g.makeCamp() : g.enter(false), s: g.state.supplies };
+      });
+      if (campOk.fail) problems.push('scenario cache did not pay for the camp: ' + JSON.stringify(campOk));
+      camped = true;
+      await page.waitForTimeout(250);
+      await dismissDialog();
+    }
+    await page.waitForTimeout(200);
+  }
+  const scnEnd = await page.evaluate(() => ({
+    status: window.game.state.status,
+    reason: String(window.game.state.endReason),
+    hurt: window.game.state.party.some((u) => u.hp < u.maxHp),
+  }));
+  if (scnEnd.status !== 'won' || !/end.scenario/.test(scnEnd.reason)) problems.push('scenario walkthrough did not end in a victory: ' + JSON.stringify(scnEnd));
+  if (!camped) problems.push('scenario walkthrough never reached the treasure/camp beat');
+  await page.waitForTimeout(800);
+  await page.screenshot({ path: path.join(OUT, '61-scenario-won.png') });
 
   console.log(problems.length ? 'PROBLEMS:\n' + problems.join('\n') : 'OK: no errors, all checks passed.');
   await browser.close();

@@ -2,6 +2,7 @@
 // The renderer and the HUD subscribe to "events" and redraw themselves.
 import { createRng } from './rng.js';
 import { generateMap, setType, setBiome } from './map.js';
+import { buildScenarioMap, cloneEnemies } from './scenarios/scenario.js';
 import { hexKey, neighbors, hexesInRange, hexDistance } from './hex.js';
 import { simulateBattle, makeEnemies, makeRegulars, renameDuplicates, regularUnitPower } from './battle.js';
 import { EVENTS, LORE_IDS } from './events.js';
@@ -13,15 +14,20 @@ const FLAVOUR_POOL = { battle: 4, treasure: 4, shop: 13, acolyte: 3, camp: 3 };
 
 
 export class Game {
-  constructor(config, seed) {
+  // `scenario` switches the run into SCENARIO MODE (src/scenarios/): the map is
+  // built from the scenario's data instead of the generator, and every roll the
+  // script covers (forced fights, event picks, enemy groups) is read from it.
+  constructor(config, seed, scenario = null) {
     this.config = config;
     this.seed = seed;
+    this.scenario = scenario;
+    this.scenarioState = { ambushesDone: new Set() };   // runtime; scenario data stays untouched
     this.rng = createRng(seed);
-    this.map = generateMap(config, this.rng);
+    this.map = scenario ? buildScenarioMap(config, scenario) : generateMap(config, this.rng);
     // Enemy groups are rolled up front for every battle tile, so the danger of a revealed
-    // battle can be shown before the party enters it.
+    // battle can be shown before the party enters it. (Scenario battles come authored.)
     for (const h of this.map.hexes.values()) {
-      if (h.encounter === 'battle' || h.encounter === 'stasisSeed') {
+      if ((h.encounter === 'battle' || h.encounter === 'stasisSeed') && !h.enemies) {
         h.enemies = makeEnemies(this.rng, config.battle, h.ring, h.isSeed ? 'boss' : 'regular');
       }
     }
@@ -29,10 +35,12 @@ export class Game {
     // The Stasis: one line per future Colony grows from the Seed every turn; the
     // Colony spawns when its line arrives. Each Colony rolls its debuff up front
     // (seeded), duplicates allowed - they stack on the Seed fight.
+    // (A scenario without a scripted Stasis has map.seed = null and no colonies;
+    // advanceStasis then does nothing.)
     const debuffIds = Object.keys(config.stasis.debuffs);
     this.stasis = {
       seed: this.map.seed,
-      colonies: this.map.colonies.map((hex) => ({
+      colonies: (this.map.colonies ?? []).map((hex) => ({
         hex,
         distance: hexDistance(this.map.seed.q, this.map.seed.r, hex.q, hex.r),
         progress: 0,
@@ -45,17 +53,18 @@ export class Game {
 
     const run = config.run;
     const pathLength = this.map.shortestPath.length - 1; // steps, not tiles
-    const supplies = run.startSupplies;
+    const supplies = scenario?.supplies ?? run.startSupplies;
 
     this.state = {
       status: 'playing',      // 'playing' | 'won' | 'lost'
       // The party: a fresh copy of the config units so HP can change per run.
       // The starting party is the first `party.size` entries of the roster, so a
       // character's stats are defined once (config/units.js, party.roster).
-      party: (config.party.roster ?? []).slice(0, config.party.size ?? 3)
+      // A scenario may fix its own party instead.
+      party: (scenario?.party ?? (config.party.roster ?? []).slice(0, config.party.size ?? 3))
         .map((u) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.hp, power: u.power, alive: true, isPlayer: true })),
       supplies,
-      maxSupplies: supplies,
+      maxSupplies: scenario?.maxSupplies ?? supplies,
       turn: 0,
       position: this.map.start,   // the hex the player stands on
       shortestPathLength: pathLength,
@@ -77,14 +86,15 @@ export class Game {
     // show what it sells before the party walks back to it. Done last, so the rolls do
     // not shift any of the map / enemy / Colony rolls above.
     for (const h of this.map.hexes.values()) {
-      if (h.encounter === 'shop') h.shop = this.rollShopStock();
+      if (h.encounter === 'shop' && !h.shop) h.shop = this.rollShopStock();
     }
 
     this.map.start.visited = true;
     this.reveal(this.map.start.q, this.map.start.r, run.revealStartRadius, true);
-    if (run.seedAlwaysVisible) this.map.seed.revealed = true;
+    if (run.seedAlwaysVisible && this.map.seed) this.map.seed.revealed = true;
 
-    this.addLog('log.newRun', { seed, n: this.map.colonies.length, steps: pathLength });
+    if (scenario) this.addLog('log.scenarioStart', { name: { key: `scenario.${scenario.id}.name` } });
+    else this.addLog('log.newRun', { seed, n: this.map.colonies.length, steps: pathLength });
   }
 
   // ----- events -------------------------------------------------------
@@ -310,6 +320,8 @@ export class Game {
   // the land withers around the Seed and every active Colony.
   advanceStasis() {
     if (this.state.status !== 'playing') return;
+    // No Stasis on this map (a scenario without a scripted one): nothing to advance.
+    if (!this.stasis.seed && !this.stasis.colonies.length) return;
     const st = this.config.stasis;
 
     // 1. Lines grow towards the future Colonies.
@@ -322,7 +334,7 @@ export class Game {
     // 2. Withering: every source gains 1/witherEvery charge per turn and spends
     //    whole charges on turning nearby tiles into wither.
     const sources = [];
-    if (this.stasis.seed.encounter === 'stasisSeed') sources.push(this.stasis.seed);
+    if (this.stasis.seed && this.stasis.seed.encounter === 'stasisSeed') sources.push(this.stasis.seed);
     for (const c of this.stasis.colonies) if (c.active && !c.cleared) sources.push(c.hex);
     const withered = [];
     for (const src of sources) {
@@ -396,7 +408,24 @@ export class Game {
 
   // What happens when stepping on a hex: the party is NOT pulled into the encounter
   // automatically, unless fatigue rolls against them.
+  // In SCENARIO mode there are no random forces at all: the only forced fights
+  // are the scripted ambushes, which fire at their exact step on an empty tile.
   onEnter(hex, rollChance) {
+    if (this.scenario) {
+      const amb = this.nextScenarioAmbush(hex);
+      if (amb) {
+        hex.encounter = 'battle';
+        hex.enemies = cloneEnemies(amb.enemies);
+        if (amb.title) hex.enemies.title = amb.title;
+        const label = this.labelFor('battle');
+        this.addLog('log.forced', { label: { key: 'visual.battle.label' }, chance: 100 });
+        this.emit('forced', { hex, type: 'battle', label, chance: 100 });
+        this.enter(true);
+        return;
+      }
+      if (hex.encounter) this.addLog('log.encounterHere', { label: { key: `visual.${hex.encounter}.label` } });
+      return;
+    }
     if (!hex.encounter) return;
     const label = this.labelFor(hex.encounter);
     if (this.isForceable(hex.encounter) && rollChance > 0 && this.rng.chance(rollChance / 100)) {
@@ -406,6 +435,17 @@ export class Game {
       return;
     }
     this.addLog('log.encounterHere', { label: { key: `visual.${hex.encounter}.label` } });
+  }
+
+  // The scripted ambush due right now, if any: the party has taken enough steps
+  // since the last fatigue reset and stands on an empty tile.
+  nextScenarioAmbush(hex) {
+    if (!this.scenario?.ambushes || hex.encounter) return null;
+    const i = this.scenario.ambushes.findIndex(
+      (a, idx) => !this.scenarioState.ambushesDone.has(idx) && this.state.fatigueSteps >= a.afterSteps);
+    if (i < 0) return null;
+    this.scenarioState.ambushesDone.add(i);
+    return this.scenario.ambushes[i];
   }
 
   // The Enter button. "forced" = triggered by fatigue (enemies act first in battles).
@@ -426,13 +466,16 @@ export class Game {
         return this.startCombat(hex, forced);
       case 'treasure': {
         this.consume(hex, type, forced);
-        this.offerSupplies(this.config.treasure.supplies, 'treasure.title', 'treasure.text', 'treasure');
+        // A scenario may fix the exact amount a cache holds.
+        this.offerSupplies(hex.scenarioSupplies ?? this.config.treasure.supplies, 'treasure.title', 'treasure.text', 'treasure');
         return true;
       }
       case 'event': {
         const weights = {};
         EVENTS.forEach((e, i) => { weights[i] = e.weight ?? 1; });
-        const ev = EVENTS[Number(this.rng.weighted(weights))];
+        // A scenario names the tile's event; everything else rolls by weight.
+        const ev = (this.scenario && hex.scenarioEvent && EVENTS.find((e) => e.id === hex.scenarioEvent))
+          || EVENTS[Number(this.rng.weighted(weights))];
         this.addLog('log.event', { title: { key: `event.${ev.id}.title` } });
         this.consume(hex, type, forced);
         this.applyEvent(ev, forced);
@@ -1019,6 +1062,14 @@ export class Game {
   checkEndOfRun() {
     const s = this.state;
     if (s.status !== 'playing') return;
+    // Scenario goal: standing on the goal tile completes the map.
+    if (this.scenario?.goal?.type === 'reach' && s.position.key === this.scenario.goal.tile) {
+      s.status = 'won';
+      s.endReason = ['end.scenario', { turn: s.turn }];
+      this.addLog('log.scenarioDone');
+      this.emit('end', { status: s.status });
+      return;
+    }
     if (this.reachable().length === 0) {
       s.status = 'lost';
       s.endReason = ['log.stuck', { turn: s.turn }];

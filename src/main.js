@@ -6,6 +6,7 @@ import { MapRenderer } from './render.js';
 import { createUI } from './ui.js';
 import { resolveSeed } from './rng.js';
 import { createTutorial, NPE_SEED } from './tutorial.js';
+import { scenarioById } from './scenarios/index.js';
 import { createSettings, deepClone } from './settings.js';
 import { createCombatCinematic } from './local/transition.js';
 import { createBattle } from './local/battle/engine.js';
@@ -121,8 +122,8 @@ let startScreen = false;
 function initSplash() {
   const el = document.getElementById('splash');
   if (!el) return;
-  // Test / guide entrances skip the ceremony.
-  if (params.get('nostart') || params.get('npe')) { el.remove(); return; }
+  // Test / guide / scenario entrances skip the ceremony.
+  if (params.get('nostart') || params.get('npe') || params.get('scenario')) { el.remove(); return; }
   setTimeout(() => {
     el.style.transitionDuration = `${CONFIG.start.splashFadeMs}ms`;
     el.classList.add('fade');
@@ -299,8 +300,8 @@ ui = createUI(CONFIG, {
     if (cinematic.isActive() && !startScreen && !ui.dialogOpen()) { cinematic.flyOut({ onDone: finishEnd }); return; }
     finishEnd();
   },
-  onNewMap: () => startRun(resolveSeed()),
-  onRestart: () => startRun(game.seed),
+  onNewMap: () => startRun(resolveSeed()),   // "New map" always leaves scenario mode
+  onRestart: () => startRun(game.seed, { scenario: activeScenario }),
   onRevealAll: () => game.revealAll(),
   // Debug: instantly win the fight running on the local map (does nothing outside one).
   onWinBattle: () => { if (battle) battle.debugResolve(true); },
@@ -324,6 +325,30 @@ const tutorial = createTutorial({ config: CONFIG, ui, renderer });
 // The end screen waits for the guide's last card.
 tutorial.setOnIdle(() => { if (pendingEnd && game && game.state.status !== 'playing' && !ui.dialogOpen()) { pendingEnd = false; ui.showEnd(game); } });
 
+// ----- scenario mode (src/scenarios/): hand-authored maps, the tutorial -----
+// A scenario's configPatch temporarily rewrites CONFIG values for its run (a
+// tighter fatigue table, say). The old values come back when a run without
+// that patch starts, and the config-driven HUD pieces rebuild both ways.
+let activeScenario = null;
+let scenarioPatched = null;   // [{ obj, key, old }] to undo
+function applyScenarioPatch(scenario) {
+  if (scenarioPatched) { for (const p of scenarioPatched) p.obj[p.key] = p.old; scenarioPatched = null; }
+  if (scenario?.configPatch) {
+    scenarioPatched = [];
+    for (const [path, value] of Object.entries(scenario.configPatch)) {
+      const parts = path.split('.');
+      let obj = CONFIG;
+      for (let i = 0; i < parts.length - 1 && obj; i++) obj = obj[parts[i]];
+      if (!obj) continue;
+      const key = parts[parts.length - 1];
+      scenarioPatched.push({ obj, key, old: obj[key] });
+      obj[key] = value;
+    }
+  }
+  ui.buildFatigueBar();
+  ui.buildLegend();
+}
+
 function startRun(seed, opts = {}) {
   pendingEnd = false;
   startScreen = false;
@@ -332,7 +357,9 @@ function startRun(seed, opts = {}) {
   cinematic.abort();
   ui.closeDialog();
   tutorial.finish('restart');
-  game = new Game(CONFIG, seed);
+  activeScenario = opts.scenario ?? null;
+  applyScenarioPatch(activeScenario);
+  game = new Game(CONFIG, seed, activeScenario);
   window.game = game; // handy for poking at the state in the browser console
   // Forced fights (fatigue) take the same dive as the Enter button.
   game.combatIntro = (hex, resume) => (cinematic.isActive() ? false : startCombatDive(hex, resume));
@@ -396,7 +423,9 @@ function startRun(seed, opts = {}) {
   ui.update(game);
   ui.renderLog(game);
   if (opts.npe) tutorial.start();
-  else if (!params.get('nostart')) enterStartScreen();
+  // A scenario drops straight onto its map: no campfire, no roster - the real
+  // run teaches those. Normal runs keep the start-screen ceremony.
+  else if (!activeScenario && !params.get('nostart')) enterStartScreen();
 }
 
 // ----- encounter dialogs (top centre) -----------------------------------
@@ -582,7 +611,10 @@ renderer.onHexHover = (hex) => ui.setHover(hex, game);
 // Clicking anywhere on the world (not just a tile) while a window is open flashes the window.
 container.addEventListener('pointerdown', () => { if (ui.dialogOpen()) ui.flashDialog(); });
 
-if (params.get('npe')) startRun(resolveSeed(NPE_SEED), { npe: true });
+// ?scenario=<id> boots straight into a hand-authored map (the tutorial series).
+const bootScenario = params.get('scenario') ? scenarioById(params.get('scenario')) : null;
+if (bootScenario) startRun(1, { scenario: bootScenario });   // fixed seed: scenarios are deterministic
+else if (params.get('npe')) startRun(resolveSeed(NPE_SEED), { npe: true });
 else startRun(resolveSeed(params.get('seed')));
 initSplash();
 window.__startScreen = () => startScreen; // for debugging / automated tests
