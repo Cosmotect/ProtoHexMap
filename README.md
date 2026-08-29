@@ -1,75 +1,34 @@
 # Hex World Map - prototype
 
-A browser prototype of the world map (level select) for a roguelike in the spirit of
-Slay the Spire and Into the Breach: a hex grid under fog of war, a party of three moving
-one step at a time, fatigue that can force encounters on you, supplies as the currency,
-battles played out on a local arena map (tactics-style: move, aim, cast, high ground,
-pushes), and the Stasis: a Seed hidden in the outer rings (destroy it to win) whose
-lines grow towards four future Colonies, withering the land as they spread.
-The rules are in DESIGN.md.
+A browser prototype of the world map (level select) for a roguelike: a hex grid under
+fog of war, a party of three moving one step at a time, fatigue that can force
+encounters on you, supplies as the currency, battles played out on a local arena map
+(move, aim, cast, high ground, pushes), and the Stasis - a Seed hidden in the outer
+rings (destroy it to win) whose lines grow towards four future Colonies, withering the
+land as they spread. Game rules and design decisions are in DESIGN.md.
 
-Built with **Three.js** (3D in the browser) and **Vite** (the tool that runs and packages it).
+Built with **Three.js** (3D in the browser) and **Vite** (dev server + bundler).
 Plain JavaScript, no framework.
 
 ---
 
-## 0. Design guideline: the difficulty scale
+## 1. Requirements
 
-> If we consider the entire range of combat difficulties in the game as a 0-100 rating,
-> the regular combat encounters should occupy the space from 0 to 60, Stasis Colonies
-> would rate between 50 and 70, and bosses would rate between 80 and 100.
+* **Node.js** (LTS) from https://nodejs.org - installing it also installs npm.
 
-Every change to enemy pools, power numbers or damage maths is judged against this scale.
-The three pools live in `src/config/units.js`: `battle.enemies.bands` (regular groups, by
-ring), `battle.colonies` (Stasis Colonies) and `battle.bosses` (the Stasis Seed).
-
-The way it is measured: **P50**, the power per party unit at which a full-HP party of
-three wins half the time. As of 2026-08-28 an outer-ring regular group sits at P50 14,
-a Stasis Colony at 16 (slightly harder) and the Stasis Seed at 28 (considerably harder).
-
----
-
-## 1. The moving parts, explained for an Unreal / Godot person
-
-| Thing | What it is | Closest thing you know |
-|---|---|---|
-| **Node.js** | A program that runs JavaScript outside the browser. We only need it to run the tools below. | The engine binary itself (you never touch it directly) |
-| **npm** | Package manager that comes with Node. Downloads libraries into a `node_modules` folder. | Godot Asset Library / Unreal Marketplace, but from the command line |
-| **Vite** | Dev server + packager. `npm run dev` = press Play with live reload. `npm run build` = Export project. | Pressing F5 in Godot, and "Export" |
-| **Three.js** | A library that talks to WebGL for us: scene, meshes, materials, lights, cameras. | Godot's scene tree with Node3D, MeshInstance3D, Camera3D |
-| **`index.html`** | The one page the browser opens. Holds the HUD elements. | The main scene |
-| **`src/*.js`** | The scripts. One file per responsibility (see section 4). | Your `.gd` scripts |
-
-You will edit JavaScript in a text editor (VS Code is the usual choice) and look at the
-result in a browser tab. There is no editor viewport; the browser tab IS the viewport.
-
----
-
-## 2. One-time setup on your machine (about 10 minutes)
-
-1. **Install Node.js** (LTS version) from https://nodejs.org. On Windows use the installer,
-   on macOS the installer or `brew install node`. This also installs npm.
-2. **Install VS Code** from https://code.visualstudio.com (any editor works, this one has
-   the best JavaScript support out of the box).
-3. **Install Git** from https://git-scm.com (on macOS it may already be there: run `git --version`).
-4. Optional but recommended VS Code extensions: "ESLint", "Prettier", "Live Server" is NOT
-   needed (Vite does that).
-
-Check it worked: open a terminal (VS Code: `Terminal > New Terminal`) and run
+Check in a terminal:
 
 ```
-node --version     # should print v20 or v22 something
+node --version
 npm --version
-git --version
 ```
 
 ---
 
-## 3. Running the prototype locally
+## 2. Running locally
 
 ```
-cd hex-world-map      # go into the project folder
-npm install           # downloads Three.js and Vite into node_modules (only the first time)
+npm install           # downloads Three.js and Vite into node_modules (first time only)
 npm run dev           # starts the dev server
 ```
 
@@ -81,172 +40,96 @@ Handy URL switches (add them to the address):
 | URL | Effect |
 |---|---|
 | `?seed=1234` | Same map every time. The seed is also shown in the HUD and saved in the address bar. |
-| `?orient=flat` | Flat-top hexes instead of pointy-top. |
+| `?orient=pointy` | Pointy-top world hexes instead of the default flat-top. |
 | `?npe=1` | Start the guided new player experience (fixed map, interface revealed piece by piece). |
-| `?nostart=1` | Skip the Everlands splash and the campfire start screen (used by the tests). |
+| `?nostart=1` | Skip the Everlands splash and the campfire start screen (used by the automated test). |
 
-Keyboard: **E** enter the encounter / make camp (in a fight: end the whole turn), **M** menu,
-**N** new map, **R** restart, arrow keys pan.
-Mouse: left-drag pan, right-drag rotate/tilt, wheel zoom, left-click a glowing tile to move.
-In a fight: click a lit tile to move, an ability button to aim, a lit tile again to cast.
+Keyboard: **E** enter the encounter / make camp (in a fight: end the whole turn),
+**M** menu, **N** new map, **R** restart, arrow keys pan.
+
+Mouse on the world map: left-drag pan, right-drag rotate/tilt, wheel zoom, left-click
+a glowing tile to move. In a fight: click a lit tile to move, an ability button to
+aim, a lit tile again to cast.
 
 ---
 
-## 4. Project tour
+## 3. Project tour
 
 ```
 hex-world-map/
   index.html                 the page + HUD markup
   package.json               project name, scripts, dependencies
-  vite.config.js             normal build settings (for Cloudflare Pages)
+  vite.config.js             build settings
   vite.singlefile.config.js  alternative build that packs everything into one .html
   src/
-    config.js    design knobs: run rules, camera, colours + glue for the three files below
-    config/world.js       map size, terrain
-    config/encounters.js  encounter odds, rest / shop / treasure / events, fatigue
-    config/units.js       the party and the enemy groups
+    config.js    design knobs: run rules, camera, backgrounds, colours + glue for config/*
+    config/world.js       map size, tile types, biomes, generation noise
+    config/encounters.js  encounter placement, the Stasis, rest / shop / treasure / events, fatigue
+    config/units.js       the party roster and the enemy groups
     config/abilities.js   combat rules, abilities, tile tags, per-unit combat stats
-    main.js      entry point, wires the three parts below together
+    main.js      entry point, wires the parts together (incl. the combat bridge)
     game.js      rules and state: movement, fog, fatigue, party, encounters, win / lose (no graphics)
     battle.js    enemy group generation + the legacy auto-resolve (fallback when no arena)
     events.js    flavour texts for Event encounters
     tutorial.js  the new player experience (guided first run)
     text.js      texts generated from config numbers (legend entries, guide cards)
     i18n.js      language switching and the t() / tn() translation helpers
-    locales/en.js   every user-facing string, one flat table per language (English only for now)
+    locales/     every user-facing string, one flat table per language (en.js is the
+                 reference; only languages registered in i18n.js are selectable)
     settings.js  the in-app settings window (config values editable at runtime, saved in the browser)
     map.js       map generation from a seed, guaranteed path to the Seed and Colony sites
     noise.js     seeded multi-octave Perlin noise (elevation, ether holes, biomes)
     hex.js       hex grid maths (axial coordinates, neighbours, distance)
     rng.js       seeded random numbers (same seed = same map)
-    render.js    the Three.js scene: tiles, fog, markers, player token, camera, mouse picking
+    render.js    the world-map Three.js scene: tiles, fog, markers, player token, camera, picking
     local/localmap.js     LOCAL map data (the encounter arena grid), elevation wave, recipe hook
     local/localview.js    the arena's own Three.js scene, tokens, highlights, rotate-only camera
     local/transition.js   the cloud-dive cinematic between the world and the arena
-    local/battle/bhex.js     combat hex math (ported from the hex-box prototype)
-    local/battle/engine.js   the INTERACTIVE combat rules: turns, abilities, pushes, enemy AI
-    ui.js        the HUD: the top bar (supplies, fatigue, turn), party panel, log, legend, menu, encounter windows, roster
-    audio.js     the sounds, synthesised in the browser (no files): the fatigue bar's blips
-    tween.js     tiny animation helper (like Godot's Tween)
+    local/battle/bhex.js     combat hex math (string keys, zone rotation)
+    local/battle/engine.js   the interactive combat rules: turns, abilities, pushes, enemy AI
+    ui.js        the HUD: top bar, party panel, log, legend, menu, encounter windows, roster, battle bar
+    audio.js     the sounds, synthesised in the browser (no audio files)
+    tween.js     tiny animation helper
     style.css    HUD styling
-  public/                    static files copied into the build untouched (images, sounds); empty for now
   tools/
-    make-artifact.mjs   converts the single-file build into the format Claude artifacts expect
-    smoke-test.cjs      automated browser test (optional, needs Playwright)
-  DESIGN.md    rules, decisions, open questions, roadmap. Read this first in every new session.
+    smoke-test.cjs      automated headless-browser test (needs Playwright; see the file header)
+    make-artifact.mjs   converts the single-file build into a self-contained shareable page
+  DESIGN.md    rules, decisions, open questions, roadmap. Read this first.
 ```
 
-Rule of thumb: if you want to change a **number**, open Menu > Settings in the running game
-(saved in your browser, overrides the files) or edit `config.js` / `config/*.js` for everyone. If you
-want to change a **rule**, it is in `game.js`, `battle.js` or `map.js`. If you want to change how
-something **looks**, it is in `render.js` (3D) or `style.css` (HUD). Texts: `events.js` (stories),
-`locales/*.js` (every sentence the player reads, per language).
+Rule of thumb: to change a **number**, open Menu > Settings in the running game (saved
+in your browser, overrides the files) or edit `config.js` / `config/*.js` for everyone.
+To change a **rule**, look in `game.js`, `battle.js`, `map.js` or
+`local/battle/engine.js`. To change how something **looks**, it is `render.js` /
+`local/localview.js` (3D) or `style.css` (HUD). Texts: `events.js` (stories),
+`locales/*.js` (every sentence the player reads).
 
 ---
 
-## 5. Building and publishing
+## 4. Troubleshooting
 
-### Build
-
-```
-npm run build
-```
-
-creates a `dist/` folder with plain static files (an `index.html` and an `assets/` folder).
-That folder is the whole game. Any static web host can serve it.
-
-### Publish on Cloudflare Pages (same service your colleague uses for hex-box.pages.dev)
-
-There are two ways. Both are free for this kind of project.
-
-**Option A: connect a GitHub repository (best for iterating with a team).**
-Every push to the repository becomes a new deployment automatically, and every branch gets
-its own preview link.
-
-1. Put the project on GitHub (see section 6 for the git commands).
-2. In the Cloudflare dashboard go to *Workers & Pages > Create > Pages > Connect to Git*
-   and pick the repository.
-3. Build settings: framework preset **Vite** (or "None"), build command `npm run build`,
-   build output directory `dist`.
-4. Save and deploy. You get a `something.pages.dev` address; you can rename the project
-   to pick the subdomain.
-
-**Option B: upload the `dist` folder by hand (fastest first time).**
-In the Cloudflare dashboard: *Workers & Pages > Create > Pages > Upload assets*, give the
-project a name, drag the `dist` folder in. Or from the terminal:
-
-```
-npx wrangler login
-npx wrangler pages deploy dist --project-name hex-world-map
-```
-
-(`wrangler` is Cloudflare's command line tool; `npx` downloads it on demand.)
-
-Note: the exact names of the dashboard menus change from time to time, so treat the steps
-above as a guide rather than gospel. The build command / output directory are the parts
-that matter.
-
-### Single-file build (for sharing by chat or as a Claude artifact)
-
-```
-npm run build:single
-```
-
-creates `dist-single/index.html`, one file with everything inside (about 0.6 MB). Double-click
-it and it runs, no server needed. `node tools/make-artifact.mjs` additionally writes
-`dist-single/artifact.html`, the variant Claude can publish as a hosted artifact.
-
----
-
-## 6. Git in six commands
-
-Git keeps every version of every file, so nothing is ever really lost.
-
-```
-git init                          # once: turn this folder into a repository
-git add .                         # stage everything (node_modules is ignored via .gitignore)
-git commit -m "First prototype"   # save a snapshot with a message
-```
-
-To put it on GitHub: create an empty repository on github.com, then
-
-```
-git remote add origin https://github.com/YOUR-NAME/hex-world-map.git
-git branch -M main
-git push -u origin main
-```
-
-After that, the everyday loop is `git add . `, `git commit -m "what changed"`, `git push`.
-
----
-
-## 7. Troubleshooting
-
-* **`npm` is not recognised** - Node.js is not installed or the terminal was opened before
-  the installation finished. Close and reopen the terminal.
-* **The dev server says "ready" but the browser says "unable to connect"** - Vite may be
-  listening on the IPv6 loopback (`[::1]`) and on nothing else. Confirm it in a second
-  terminal:
+* **`npm` is not recognised** - Node.js is not installed or the terminal was opened
+  before the installation finished. Close and reopen the terminal.
+* **The dev server says "ready" but the browser says "unable to connect"** - Vite may
+  be listening on the IPv6 loopback (`[::1]`) and on nothing else. Confirm it in a
+  second terminal:
 
   ```
   netstat -ano | findstr :5173
   ```
 
-  If the only line reads `TCP [::1]:5173 ... LISTENING`, that is the problem: nothing is
-  home at `127.0.0.1`. Harmless on most machines, fatal on one where IPv6 is blocked -
-  VPN clients commonly install a blanket IPv6 block as leak protection, and that rule
-  catches `::1` too, even though it never leaves the PC. This is why `vite.config.js`
-  sets `server.host: '127.0.0.1'`; do not remove that line. For a one-off override
-  without editing the config: `npm run dev -- --host 127.0.0.1`.
-* **Double-clicking `index.html` shows naked text and every panel at once** - you opened
-  the wrong file. The `index.html` in the project root (about 4 kB) is only a skeleton
-  that points at `src/`; it comes alive solely under `npm run dev`. The file you can
-  double-click is `dist-single/index.html` (about 580 kB), where everything is baked in.
-  It is a frozen export: editing anything in `src/` does not change it until you rebuild
-  with `npm run build:single`.
-* **Blank dark page, no hexes** - open the browser console (F12 > Console) and copy the red
-  text into the chat with Claude. Usually a typo in a `.js` file.
-* **The page does not reload after saving** - check the terminal running `npm run dev`, it
-  prints errors there when a file cannot be parsed.
-* **Everything is very slow** - your browser may be using software rendering. Check
+  If the only line reads `TCP [::1]:5173 ... LISTENING`, that is the problem: nothing
+  is home at `127.0.0.1`. Harmless on most machines, fatal on one where IPv6 is
+  blocked - VPN clients commonly install a blanket IPv6 block as leak protection, and
+  that rule catches `::1` too. This is why `vite.config.js` sets
+  `server.host: '127.0.0.1'`; do not remove that line. One-off override:
+  `npm run dev -- --host 127.0.0.1`.
+* **Double-clicking `index.html` shows naked text and every panel at once** - the
+  `index.html` in the project root is only a skeleton that points at `src/`; it comes
+  alive solely under `npm run dev`.
+* **Blank dark page, no hexes** - open the browser console (F12 > Console); the red
+  error text names the broken file. Usually a typo in a `.js` file.
+* **The page does not reload after saving** - check the terminal running
+  `npm run dev`; it prints errors there when a file cannot be parsed.
+* **Everything is very slow** - the browser may be using software rendering. Check
   `chrome://gpu`, and try another browser.
