@@ -99,7 +99,14 @@ let holdDialogsUntil = 0;
 // map: pressing Enter dives the camera into the tile through the clouds, the
 // world scene swaps for the arena mid-flight, the fight resolves there, and
 // closing the results window flies the camera back out.
-const cinematic = createCombatCinematic({ renderer, config: CONFIG, container });
+const cinematic = createCombatCinematic({
+  renderer, config: CONFIG, container,
+  // body.local-mode is "we're showing the arena, not the world map" - true for
+  // the campfire start screen and for every kind of local-map encounter, not
+  // just interactive battles (those layer body.battle-mode on top of this).
+  // The world-map-only HUD (fatigue bar, party panel) hides on it; see style.css.
+  onModeChange: (isLocal) => document.body.classList.toggle('local-mode', isLocal),
+});
 window.__cinematic = cinematic; // for debugging / automated tests
 const COMBAT_TYPES = new Set(['battle', 'stasisSeed', 'stasisColony']);
 

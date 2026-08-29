@@ -631,6 +631,15 @@ button.small { padding: 2px 8px; font-size: 12px; }
 #party-units .unit { cursor: default; }
 .start-screen #party-units .unit { cursor: pointer; }
 
+/* ----- Local map (the 3D arena): world-map HUD stays off ------------------ */
+/* Supplies/fatigue/turn and the party panel only mean anything on the world
+   map; body.local-mode covers the campfire start screen and every kind of
+   local-map encounter (not just battles). Each unit's health shows instead
+   as a bar hovering over its own token, drawn straight into the 3D scene -
+   see makeHealthBar / updateHealthBar in local/localview.js. */
+.local-mode #fatigue-bar { display: none; }
+.local-mode #party { display: none; }
+
 /* ----- The battle bar (interactive combat on the local map) --------------- */
 /* Replaces the status bar while a fight runs; body.battle-mode flips them. */
 .battle-mode #statusbar { display: none; }

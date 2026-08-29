@@ -152,6 +152,7 @@ export const CONFIG = {
     stasisLine: 0x9a5cff,     // the lines growing from the Seed to its Colonies
     visitedTint: 0.82,        // multiplier applied to the colour of tiles you already stepped on
     reachableRing: 0xffd166,
+    abilityAimRing: 0xff4d4d,  // tile highlight while picking a target for a unit's ability
     hoverRing: 0xffffff,
     player: 0xfff1c1,
     playerGlow: 0xffd166,

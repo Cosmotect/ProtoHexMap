@@ -287,6 +287,10 @@ export class LocalMapView {
     // can be told apart at a glance. A Sprite always faces the camera, so it
     // stays readable however the shot is rotated.
     if (unit?.icon) body.add(this.makePortrait(unit.icon));
+    const bar = this.makeHealthBar();
+    body.add(bar);
+    body.userData.healthBar = bar;
+    this.updateHealthBar(bar, unit?.hp, unit?.maxHp);
     this.attachToken(tileKey, body, c.playerGlow, (this.rng?.random() ?? Math.random()) * Math.PI * 2);
   }
 
@@ -322,6 +326,59 @@ export class LocalMapView {
     sprite.position.set(0, 1.0, 0);
     sprite.renderOrder = 10;   // always drawn on top, never buried in a tile
     return sprite;
+  }
+
+  // A small health bar hovering just under a unit's portrait, in the same
+  // billboard cluster above its token (party AND enemies alike). Unlike the
+  // portrait it is NOT shared/cached - every unit has its own HP - but the
+  // canvas is only redrawn when the value actually changes, not every frame.
+  makeHealthBar() {
+    const w = 96, h = 20;
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+    sprite.scale.set(0.46, 0.46 * (h / w), 1);
+    sprite.position.set(0, 0.72, 0);   // just below the portrait plate (at y 1.0)
+    sprite.renderOrder = 10;
+    sprite.userData.canvas = cv;
+    sprite.userData.ctx = cv.getContext('2d');
+    sprite.userData.tex = tex;
+    sprite.userData.hp = undefined;
+    sprite.userData.maxHp = undefined;
+    return sprite;
+  }
+
+  // Redraws a health bar sprite for the given hp/maxHp - a no-op if neither
+  // changed since the last call. Colour steps from green through amber to red
+  // as the fraction empties, on a dark track (readable on any tile colour).
+  updateHealthBar(bar, hp, maxHp) {
+    if (!bar) return;
+    const clampedHp = Math.max(0, hp ?? 0);
+    const safeMax = Math.max(0, maxHp ?? 0);
+    if (bar.userData.hp === clampedHp && bar.userData.maxHp === safeMax) return;
+    bar.userData.hp = clampedHp;
+    bar.userData.maxHp = safeMax;
+    const cv = bar.userData.canvas;
+    const g = bar.userData.ctx;
+    const w = cv.width, h = cv.height;
+    g.clearRect(0, 0, w, h);
+    g.fillStyle = 'rgba(10, 14, 24, 0.72)';
+    roundRect(g, 1, 1, w - 2, h - 2, 6);
+    g.fill();
+    const pad = 3;
+    const innerW = w - pad * 2, innerH = h - pad * 2;
+    const frac = safeMax > 0 ? Math.max(0, Math.min(1, clampedHp / safeMax)) : 0;
+    g.fillStyle = 'rgba(255, 255, 255, 0.14)';
+    roundRect(g, pad, pad, innerW, innerH, 3);
+    g.fill();
+    if (frac > 0) {
+      g.fillStyle = frac > 0.5 ? '#8fe05f' : frac > 0.25 ? '#ffd166' : '#ff4d4d';
+      roundRect(g, pad, pad, Math.max(2, innerW * frac), innerH, 3);
+      g.fill();
+    }
+    bar.userData.tex.needsUpdate = true;
   }
 
   attachToken(tileKey, mesh, lightColor, phase) {
@@ -392,6 +449,10 @@ export class LocalMapView {
       body.geometry.translate(0, 0.45, 0);
       // Enemies have no emoji; their portrait plate shows the name's initial.
       body.add(this.makePortrait((u.name ?? '?').charAt(0)));
+      const bar = this.makeHealthBar();
+      body.add(bar);
+      body.userData.healthBar = bar;
+      this.updateHealthBar(bar, u?.hp, u?.maxHp);
       this.attachToken(enemyKeys[i], body, enemyColor, rng.random() * Math.PI * 2);
     });
     return { partyKeys, enemyKeys };
@@ -509,6 +570,7 @@ export class LocalMapView {
       const dead = u.hp <= 0;
       tok.visible = !dead;
       if (tok.userData.ring) tok.userData.ring.visible = !dead;
+      if (tok.userData.healthBar) this.updateHealthBar(tok.userData.healthBar, u.hp, u.maxHp);
       if (dead) continue;
       if (!tok.userData.walking && tok.userData.tileKey !== u.pos) this.teleportToken(tok, u.pos);
       else {
@@ -574,9 +636,10 @@ export class LocalMapView {
       this.hlTiles.set(k, { ring, color: new THREE.Color(color), phase: Math.random() * Math.PI * 2, tile });
     };
     if (sb.selAb && sb.aimMap) {
-      const ab = battle.abilityById(sb.selAb);
-      const color = new THREE.Color(ab?.color ?? '#ffd166').getHex();
-      for (const k of Object.keys(sb.aimMap)) add(k, color);
+      // Ability targeting always highlights red, regardless of the ability's
+      // own theme colour (used elsewhere for its icon) - gold stays reserved
+      // for plain movement below.
+      for (const k of Object.keys(sb.aimMap)) add(k, this.config.colors.abilityAimRing);
     } else if (sb.reach) {
       const { d, occ } = sb.reach;
       const cur = battle.curPlayer();

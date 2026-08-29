@@ -20,13 +20,25 @@ const easeInCubic = (t) => t * t * t;
 const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
 const smooth = (t) => t * t * (3 - 2 * t);
 
-export function createCombatCinematic({ renderer, config, container }) {
+export function createCombatCinematic({ renderer, config, container, onModeChange }) {
   const localView = new LocalMapView(renderer.renderer, renderer.renderer.domElement, config);
   const fx = buildFxOverlay(container, config);
   let mode = 'idle';          // 'idle' | 'in' | 'local' | 'out'
   let t0 = 0;
   let flight = null;          // { saved, hexPos, onSwap, onDone, swapped }
   window.__localView = localView;   // for debugging / automated tests
+
+  // Every place that used to write `mode = '...'` now goes through here, so
+  // callers get exactly one notification when we actually arrive on / leave
+  // the local map (the arena), covering the campfire start screen AND any
+  // encounter alike - not just interactive battles (see body.local-mode in
+  // main.js). 'in' and 'out' are still mid-flight over the world, not local.
+  function setMode(next) {
+    const wasLocal = mode === 'local';
+    mode = next;
+    const isLocal = mode === 'local';
+    if (isLocal !== wasLocal) onModeChange?.(isLocal);
+  }
 
   function isActive() { return mode !== 'idle'; }
 
@@ -71,7 +83,7 @@ export function createCombatCinematic({ renderer, config, container }) {
       onArrived: opts.onArrived,
       swapped: false,
     };
-    mode = 'in';
+    setMode('in');
     t0 = performance.now();
     fx.show();
     renderer.overrideFrame = frame;
@@ -97,7 +109,7 @@ export function createCombatCinematic({ renderer, config, container }) {
       fovStart: saved.fov ?? config.camera.fov,
       swapped: true,
     };
-    mode = 'local';
+    setMode('local');
     renderer.overrideFrame = frame;
     localView.activate();
     return true;
@@ -118,7 +130,7 @@ export function createCombatCinematic({ renderer, config, container }) {
     localView.deactivate();
     flight.onDone = onDone;
     flight.swapped = false;
-    mode = 'out';
+    setMode('out');
     t0 = performance.now();
     fx.show();
     return true;
@@ -133,7 +145,7 @@ export function createCombatCinematic({ renderer, config, container }) {
     restoreWorldCamera(flight.saved);
     localView.dispose();
     flight = null;
-    mode = 'idle';
+    setMode('idle');
   }
 
   // ----- the per-frame timeline ---------------------------------------------
@@ -184,7 +196,7 @@ export function createCombatCinematic({ renderer, config, container }) {
         localView.render();
       }
       if (t >= 1) {
-        mode = 'local';
+        setMode('local');
         fx.hide();
         renderer.renderer.domElement.style.filter = '';
         localView.activate();
@@ -222,7 +234,7 @@ export function createCombatCinematic({ renderer, config, container }) {
       localView.dispose();
       const done = flight.onDone;
       flight = null;
-      mode = 'idle';
+      setMode('idle');
       if (done) done();
     }
     return true;
