@@ -101,6 +101,11 @@ export class LocalMapView {
     geo.translate(0, 0.5, 0);
     if (this.map.orientation === 'flat') geo.rotateY(Math.PI / 6);
     const base = new THREE.Color(baseColor ?? 0x7a8a6a);
+    // The BASELINE tile height comes from the entered world tile's TYPE: an arena
+    // on a hill starts taller than one on plain ground, before the elevation wave
+    // is added on top. The same formula sets the backdrop hexes' tops, so a
+    // same-type neighbour sits flush with the arena's wave-less level.
+    this.baseTileHeight = this.baselineFor(this.config.tileTypes?.[worldHex?.type]?.height);
     // Neighbouring world tiles, prepared once: unit direction + colour object.
     const nbs = (neighbors ?? []).map((nb) => {
       const len = Math.hypot(nb.dx, nb.dy) || 1;
@@ -108,6 +113,9 @@ export class LocalMapView {
     });
     // How far out a tile sits towards a given edge, 0 at the centre, ~1 at the rim.
     const rim = 1.5 * cfg.radius * cfg.hexSize;
+    // Only the IMMEDIATE neighbours pull the arena's edge colours; the outer
+    // backdrop rings are scenery too far away to bleed in.
+    const edgeNbs = nbs.filter((nb) => (nb.ring ?? 1) === 1);
 
     this.tileMeshes = [];
     for (const tile of this.map.hexes.values()) {
@@ -115,7 +123,7 @@ export class LocalMapView {
       // world tile the closer this arena tile gets to the edge facing it. The
       // jitter keeps the gradient ragged instead of a clean airbrushed fade.
       const col = base.clone().multiplyScalar(0.9 + rng.random() * 0.2);
-      for (const nb of nbs) {
+      for (const nb of edgeNbs) {
         const proj = (tile.x * nb.ux + tile.y * nb.uy) / rim;
         if (proj <= 0.15) continue;
         const t01 = Math.min(1, (proj - 0.15) / 0.85);
@@ -124,7 +132,7 @@ export class LocalMapView {
       }
       const mat = new THREE.MeshStandardMaterial({ color: col, roughness: 0.85 });
       const mesh = new THREE.Mesh(geo, mat);
-      const h = cfg.tileHeight + (tile.elevation ?? 0) * (cfg.elevationStep ?? 0.35);
+      const h = this.baseTileHeight + (tile.elevation ?? 0) * (cfg.elevationStep ?? 0.35);
       mesh.scale.y = Math.max(0.05, h);
       mesh.position.set(tile.x, 0, -tile.y);
       mesh.castShadow = true;
@@ -157,25 +165,36 @@ export class LocalMapView {
     return this.map;
   }
 
-  // The six surrounding world tiles as giant background hexes past the arena
-  // rim. Purely scenery: not pickable, not in tileMeshes, no gameplay.
+  // The world-map TYPE height turned into a local baseline tile height: the
+  // shared formula for the arena's own tiles AND the backdrop hexes' tops.
+  baselineFor(typeHeight) {
+    const cfg = this.config.local;
+    const h = typeHeight ?? this.config.tileTypes?.ground?.height ?? 0.3;
+    return Math.max(cfg.tileHeight, h * (cfg.typeHeightScale ?? 2));
+  }
+
+  // The surrounding world tiles (three rings of them) as giant background hexes
+  // past the arena rim. Purely scenery: not pickable, not in tileMeshes, no
+  // gameplay. Their bottoms sit on the arena's floor level (y = 0) and their
+  // tops use the same type-baseline formula as the arena tiles, so a mountain
+  // neighbour towers over a plains arena and water reads as a drop.
   buildNeighborBackdrop(nbs) {
     if (!nbs || !nbs.length) return;
     const cfg = this.config.local;
     const aR = SQRT3 * (cfg.radius + 0.5) * cfg.hexSize;      // circumradius of the arena outline
     const centerDist = 3 * (cfg.radius + 0.5) * cfg.hexSize;  // one world-tile step at arena scale
+    // World-plane offsets are scaled uniformly, so all rings land where the world
+    // map would put them (world neighbour spacing -> centerDist).
+    const spacing = SQRT3 * (this.config.map?.hexSize ?? 1);
+    const F = centerDist / spacing;
     const geo = new THREE.CylinderGeometry(aR * 0.97, aR * 0.97, 1, 6, 1);
     geo.translate(0, 0.5, 0);
     // Neighbour hexes carry the WORLD orientation - the opposite of the arena tiles.
     if (this.map.orientation !== 'flat') geo.rotateY(Math.PI / 6);
     for (const nb of nbs) {
       const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: nb.color3.clone(), roughness: 1 }));
-      // Top edge: a bit below the arena floor, shifted by the real world height
-      // difference and clamped - a mountain reads as a wall, water as a drop,
-      // and nothing towers over the fight. Distance fog does the rest.
-      const top = Math.max(-2.4, Math.min(1.4, -0.7 + (nb.dh ?? 0) * 2.2));
-      mesh.scale.y = 30;
-      mesh.position.set(nb.ux * centerDist, top - 30, -nb.uy * centerDist);
+      mesh.scale.y = Math.max(0.05, this.baselineFor(nb.height));
+      mesh.position.set(nb.dx * F, 0, -nb.dy * F);
       mesh.receiveShadow = true;
       this.scene.add(mesh);
     }
@@ -478,7 +497,7 @@ export class LocalMapView {
       const lvl = sb.heights[tile.key] ?? 0;
       if (lvl === (tile.elevation ?? 0)) continue;
       tile.elevation = lvl;
-      const h = Math.max(0.05, cfg.tileHeight + lvl * (cfg.elevationStep ?? 0.35));
+      const h = Math.max(0.05, (this.baseTileHeight ?? cfg.tileHeight) + lvl * (cfg.elevationStep ?? 0.35));
       tile.mesh.scale.y = h;
       tile.top = h;
     }
@@ -679,7 +698,9 @@ export class LocalMapView {
       : this.config.local.camera;
     const tilt = deg(cam.tiltDegrees);
     const az = isCamp ? deg(cam.azimuthDegrees ?? 0) : 0;
-    const height = isCamp ? (cam.targetHeight ?? 0) : 0;
+    // Aim at the tiles' baseline top (the arena floor now rises with the world
+    // tile's type), plus the composed offset on the start screen.
+    const height = (this.baseTileHeight ?? 0) + (isCamp ? (cam.targetHeight ?? 0) : 0);
     const ground = cam.distance * Math.sin(tilt);   // how far out in the XZ plane
     return {
       position: new THREE.Vector3(ground * Math.sin(az), height + cam.distance * Math.cos(tilt), ground * Math.cos(az)),
@@ -705,7 +726,7 @@ export class LocalMapView {
     if (this.controlsLocked()) return;
     const cam = this.config.local.camera;
     const controls = new MapControls(this.camera, this.domElement);
-    controls.target.set(0, 0, 0);
+    controls.target.set(0, this.baseTileHeight ?? 0, 0);
     controls.enablePan = false;
     controls.enableZoom = false;
     controls.enableDamping = true;

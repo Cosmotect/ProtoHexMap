@@ -45,6 +45,8 @@ export function createUI(config, handlers) {
   $('btn-new').addEventListener('click', () => handlers.onNewMap());
   $('btn-restart').addEventListener('click', () => handlers.onRestart());
   $('btn-reveal').addEventListener('click', () => handlers.onRevealAll());
+  // Debug: ends the current local-map fight as an instant victory.
+  $('btn-win-battle').addEventListener('click', () => { closeMenu(); handlers.onWinBattle && handlers.onWinBattle(); });
   $('btn-enter').addEventListener('click', () => handlers.onEnter());
   $('btn-menu').addEventListener('click', () => toggleMenu());
   $('btn-settings').addEventListener('click', () => { closeMenu(); handlers.onOpenSettings(); });

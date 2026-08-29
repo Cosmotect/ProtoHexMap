@@ -49,7 +49,10 @@ export const CONFIG = {
     radius: 6,                // rings of local hexes around the arena centre
     hexSize: 1.0,
     gap: 0.03,
-    tileHeight: 0.3,
+    tileHeight: 0.3,          // minimum baseline thickness of an arena tile
+    typeHeightScale: 2,       // arena baseline = world tile type's visual height x this
+                              // (a hill arena starts taller than a plains one; the
+                              // backdrop hexes' tops use the same formula)
     elevationStep: 0.35,      // world units of visual height per combat elevation level
                               // (the LEVELS themselves are combat rules: src/config/abilities.js)
     flyInMs: 1500,            // the dive from the world map into the arena

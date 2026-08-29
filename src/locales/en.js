@@ -25,6 +25,8 @@ export const en = {
   'menu.restart.title': 'Restart this same map (R)',
   'menu.reveal': 'Reveal map',
   'menu.reveal.title': 'Debug: lift the fog everywhere',
+  'menu.winBattle': 'Win battle',
+  'menu.winBattle.title': 'Debug: defeat every enemy in the current local-map fight instantly',
   'menu.settings': 'Settings',
   'menu.settings.title': 'Every config value, editable at runtime',
   'menu.npe': 'New player experience',

@@ -203,7 +203,40 @@ fs.mkdirSync(OUT, { recursive: true });
   if (landed.orientation === (await page.evaluate(() => window.game.config.map.orientation))) problems.push('local map orientation should be opposite to the world map');
   if (landed.pan !== false || landed.zoom !== false) problems.push('local camera must not pan or zoom: ' + JSON.stringify(landed));
   await page.screenshot({ path: path.join(OUT, '21-local-map.png') });
-  await settleBattleIfAny();
+  // Arena baseline heights: tiles start at the world tile TYPE's height; the
+  // backdrop hexes' bottoms sit on the arena floor and their tops use the same
+  // type formula; three rings of them stand around the arena.
+  const baseline = await page.evaluate(() => {
+    const lv = window.__localView; const g = window.game;
+    const cfgL = g.config.local;
+    const typeH = g.config.tileTypes[g.state.position.type]?.height ?? 0.3;
+    const expected = Math.max(cfgL.tileHeight, typeH * (cfgL.typeHeightScale ?? 2));
+    const t0 = lv.map.hexes.get('0,0');
+    const backs = lv.scene.children.filter((c) => c.isMesh && c.userData.key === undefined
+      && c.geometry.type === 'CylinderGeometry' && c.geometry.parameters.radiusTop > cfgL.hexSize * 3);
+    return {
+      expected, base: lv.baseTileHeight, backs: backs.length,
+      tileOk: Math.abs((t0.top - (t0.elevation ?? 0) * (cfgL.elevationStep ?? 0.35)) - expected) < 1e-6,
+      backBottomsOk: backs.every((b) => Math.abs(b.position.y) < 1e-6),
+    };
+  });
+  if (Math.abs(baseline.base - baseline.expected) > 1e-6 || !baseline.tileOk) problems.push('arena baseline height wrong: ' + JSON.stringify(baseline));
+  if (baseline.backs <= 6) problems.push(`expected up to 3 rings of backdrop hexes, got ${baseline.backs}`);
+  if (!baseline.backBottomsOk) problems.push('backdrop hex bottoms are not on the arena floor');
+  // The menu's "Win battle" button ends the fight as an instant victory.
+  await page.click('#btn-menu');
+  await page.waitForTimeout(200);
+  await page.click('#btn-win-battle');
+  await page.waitForFunction(() => !document.getElementById('dialog').classList.contains('hidden'), null, { timeout: 25000 });
+  const wonBtn = await page.evaluate(() => ({
+    won: !!(window.game.state.lastBattle && window.game.state.lastBattle.won),
+    engineGone: !window.__battle,
+    menuClosed: document.getElementById('menu').classList.contains('hidden'),
+  }));
+  if (!wonBtn.won || !wonBtn.engineGone || !wonBtn.menuClosed) problems.push('Win battle button did not win the fight: ' + JSON.stringify(wonBtn));
+  await dismissDialog();
+  await dismissDialog();
+  await page.waitForFunction(() => window.__cinematic.mode() === 'idle', null, { timeout: 25000 }).catch(() => {});
   const backOut = await page.evaluate(() => ({ mode: window.__cinematic.mode(), filter: window.__renderer.renderer.domElement.style.filter, bar: document.getElementById('battle-bar').classList.contains('hidden') }));
   if (backOut.mode !== 'idle' || backOut.filter) problems.push('did not return cleanly to the world map: ' + JSON.stringify(backOut));
   if (!backOut.bar) problems.push('battle bar stayed visible after the fight');

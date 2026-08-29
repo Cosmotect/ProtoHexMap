@@ -24,6 +24,8 @@ export const ru = {
   'menu.restart.title': 'Начать эту же карту заново (R)',
   'menu.reveal': 'Открыть карту',
   'menu.reveal.title': 'Отладка: снять туман со всей карты',
+  'menu.winBattle': 'Выиграть бой',
+  'menu.winBattle.title': 'Отладка: мгновенно победить всех врагов в текущем бою на локальной карте',
   'menu.settings': 'Настройки',
   'menu.settings.title': 'Все значения конфига, редактируемые на лету',
   'menu.npe': 'Обучение новичка',
@@ -344,6 +346,10 @@ export const ru = {
   'settings.note.audio': 'Звук синтезируется в браузере, а не грузится из файлов - единственная ручка это громкость. До первого клика по странице ничего не играет (браузеры не разрешают звук раньше).',
   'settings.language': 'Язык',
   'settings.language.group': 'язык',
+  'settings.camera.group': 'режим камеры',
+  'settings.camera.current': 'Текущая камера',
+  'settings.camera.perspective': 'Камера: перспектива',
+  'settings.camera.topdown': 'Камера: сверху',
 
   // ----- new player experience ------------------------------------------------------------
   'npe.kicker': 'Обучение новичка',

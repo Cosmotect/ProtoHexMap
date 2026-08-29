@@ -131,6 +131,7 @@ the AUTO-simulation and must be re-measured against interactive play.
   holding just the Enter button (the battle bar replaces it during a fight), the party
   panel left, a collapsible legend bottom-right (entries expand with config-generated
   info texts), a menu top-right (M: seed, load, copy link, new map, restart, reveal,
+  "Win battle" - a debug button that instantly wins the current local-map fight -
   settings, guided run). The world blurs behind open windows. The event log
   (bottom-left) is a design aid, off by default (Settings > General). UI scale and the
   log switch are browser preferences (localStorage), not config.
@@ -169,14 +170,19 @@ the AUTO-simulation and must be re-measured against interactive play.
 
 * **The arena**: a hex grid of `local.radius` (6) rings in the OPPOSITE orientation to
   the world map, so one world tile visually breaks into a sub-grid. Tile colours are
-  shades of the entered world tile, pulled towards each neighbouring world tile near
-  the edge facing it (squared falloff, per-tile jitter). The six neighbouring world
-  tiles surround the arena as giant uninteractive backdrop hexes - their real
-  world-map colours and clamped height differences (a mountain reads as a wall, water
-  as a drop); ether neighbours and the map edge stay void. Battle arenas get rolling
-  heights: `applyElevationWave` (three seeded sine waves) snaps each tile to a level
-  0..`elevationLevels` (3), drawn at `local.elevationStep` (0.35) world units per
-  level; the campfire layout stays flat. Arena camera: rotation only.
+  shades of the entered world tile, pulled towards each IMMEDIATE neighbouring world
+  tile near the edge facing it (squared falloff, per-tile jitter). Arena tiles have a
+  BASELINE height from the entered world tile's TYPE - max(`local.tileHeight`, type's
+  visual height x `local.typeHeightScale` (2)) - so a hill arena starts taller than a
+  plains one; battle arenas then add rolling heights on top: `applyElevationWave`
+  (three seeded sine waves) snaps each tile to a level 0..`elevationLevels` (3), drawn
+  at `local.elevationStep` (0.35) world units per level (the campfire layout stays
+  flat, baseline only). THREE rings of surrounding world tiles stand around the arena
+  as giant uninteractive backdrop hexes: bottoms on the arena floor, tops at the SAME
+  type-baseline formula - so a mountain neighbour towers over a hill arena and a
+  same-type neighbour sits flush with the arena's wave-less level; hidden tiles use
+  the fog colour and fog height (no terrain leaks), ether and the map edge stay void.
+  Arena camera: rotation only, aimed at the baseline top.
 * **The dive**: Enter on a combat tile (or a forced fight) flies the camera into the
   tile - FOV stretch, screenshake, cloud layers, blur and flash peaking at
   `local.swapPoint`, where the world scene swaps for the arena (`local.flyInMs` /

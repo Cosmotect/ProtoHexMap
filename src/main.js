@@ -168,23 +168,29 @@ function beginJourney() {
 let battle = null;      // the running combat engine, if any
 let battleCtx = null;   // the context game.prepareCombat handed over
 
-// The six world tiles around `hex`, for the arena's backdrop and colour pull:
-// world-plane offset, final rendered colour, and height difference. Ether
-// neighbours and the map edge stay holes - the void shows through.
+// The world tiles around `hex` (three rings of them), for the arena's backdrop
+// and edge-colour pull: world-plane offset, ring, final rendered colour and the
+// TYPE's visual height. Hidden tiles report the fog height and fog colour, so
+// the backdrop never leaks unexplored terrain. Ether neighbours and the map
+// edge stay holes - the void shows through.
+const BACKDROP_RINGS = 3;
 function worldNeighborsFor(hex) {
   const out = [];
-  const curRec = renderer.tiles.get(hex.key);
-  const curH = curRec ? curRec.height : 0.35;
-  for (const [dq, dr] of [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]]) {
-    const nb = game.map.hexes.get(`${hex.q + dq},${hex.r + dr}`);
-    if (!nb || nb.type === 'ether') continue;
-    const rec = renderer.tiles.get(nb.key);
-    out.push({
-      dx: nb.x - hex.x,
-      dy: nb.y - hex.y,
-      color: renderer.targetColorFor(nb).getHex(),
-      dh: (rec ? rec.height : CONFIG.colors.fogTileHeight) - curH,
-    });
+  const R = BACKDROP_RINGS;
+  for (let dq = -R; dq <= R; dq++) {
+    for (let dr = Math.max(-R, -dq - R); dr <= Math.min(R, -dq + R); dr++) {
+      const ring = (Math.abs(dq) + Math.abs(dr) + Math.abs(dq + dr)) / 2;
+      if (ring < 1) continue;
+      const nb = game.map.hexes.get(`${hex.q + dq},${hex.r + dr}`);
+      if (!nb || nb.type === 'ether') continue;
+      out.push({
+        dx: nb.x - hex.x,
+        dy: nb.y - hex.y,
+        ring,
+        color: renderer.targetColorFor(nb).getHex(),
+        height: nb.revealed ? (CONFIG.tileTypes[nb.type]?.height ?? 0.3) : CONFIG.colors.fogTileHeight,
+      });
+    }
   }
   return out;
 }
@@ -289,6 +295,8 @@ ui = createUI(CONFIG, {
   onNewMap: () => startRun(resolveSeed()),
   onRestart: () => startRun(game.seed),
   onRevealAll: () => game.revealAll(),
+  // Debug: instantly win the fight running on the local map (does nothing outside one).
+  onWinBattle: () => { if (battle) battle.debugResolve(true); },
   onEnter: () => {
     if (startScreen) {
       if (!ui.rosterOpen() && !settings.isOpen()) beginJourney();
