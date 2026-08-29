@@ -435,10 +435,6 @@ export const en = {
   'settings.uiscale': 'UI scale',
   'settings.showlog': 'Show event log',
   'settings.uiscale.group': 'interface',
-  'settings.camera.group': 'camera mode',
-  'settings.camera.current': 'Current camera',
-  'settings.camera.perspective': 'Camera: perspective',
-  'settings.camera.topdown': 'Camera: top-down',
 
   // ----- new player experience ------------------------------------------------------------
   'npe.kicker': 'New player experience',

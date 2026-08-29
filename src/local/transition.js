@@ -35,15 +35,13 @@ export function createCombatCinematic({ renderer, config, container }) {
     return {
       position: renderer.camera.position.clone(),
       target: renderer.controls.target.clone(),
-      fov: renderer.camera.isPerspectiveCamera ? renderer.camera.fov : null,
-      wasOrtho: renderer.cameraMode === 'orthographic',
+      fov: renderer.camera.fov,
     };
   }
   function restoreWorldCamera(saved) {
-    if (saved.wasOrtho && renderer.cameraMode !== 'orthographic') renderer.setupCamera('orthographic', saved.target.clone());
     renderer.camera.position.copy(saved.position);
     renderer.controls.target.copy(saved.target);
-    if (saved.fov != null && renderer.camera.isPerspectiveCamera) {
+    if (saved.fov != null) {
       renderer.camera.fov = saved.fov;
       renderer.camera.updateProjectionMatrix();
     }
@@ -55,10 +53,7 @@ export function createCombatCinematic({ renderer, config, container }) {
   // opts: { worldHex, baseColor, party, enemies, seed, recipe, onArrived }
   function flyIn(opts) {
     if (isActive()) return false;
-    // The cinematic needs a perspective camera; the top-down mode swaps in one
-    // for the duration and gets its own camera back on the way out.
     const saved = saveWorldCamera();
-    if (saved.wasOrtho) renderer.setupCamera('perspective', saved.target.clone());
     renderer.controls.enabled = false;
 
     // Build the arena now, while we are still above the clouds: this is where a
@@ -91,7 +86,6 @@ export function createCombatCinematic({ renderer, config, container }) {
   function startScreen(opts) {
     if (isActive()) return false;
     const saved = saveWorldCamera();
-    if (saved.wasOrtho) renderer.setupCamera('perspective', saved.target.clone());
     renderer.controls.enabled = false;
     localView.build({ ...opts, enemies: [], layout: 'camp' });
     const rec = renderer.tiles.get(opts.worldHex.key);
@@ -112,6 +106,15 @@ export function createCombatCinematic({ renderer, config, container }) {
   // ----- fly OUT: local -> world -------------------------------------------
   function flyOut({ onDone } = {}) {
     if (mode !== 'local') return false;
+    // The climb starts from where the player ACTUALLY left the camera, not from
+    // the arena's canonical resting pose: if they rotated the shot before
+    // leaving, snapping back first was a visible jolt. Snapshot it before the
+    // controls are torn down (they own the look-at target).
+    flight.localFrom = {
+      position: localView.camera.position.clone(),
+      target: (localView.controls ? localView.controls.target : localView.finalCameraPose().target).clone(),
+      fov: localView.camera.fov,
+    };
     localView.deactivate();
     flight.onDone = onDone;
     flight.swapped = false;
@@ -195,7 +198,7 @@ export function createCombatCinematic({ renderer, config, container }) {
     // mode === 'out': climb from the arena, punch the clouds, settle on the map.
     if (t < swapT) {
       const k = easeInCubic(t / swapT);
-      const from = localView.finalCameraPose();
+      const from = flight.localFrom ?? localView.finalCameraPose();
       const to = localView.overheadCameraPose();
       localView.camera.position.lerpVectors(from.position, to.position, k);
       addShake(localView.camera.position, shake);

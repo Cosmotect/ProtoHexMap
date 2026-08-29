@@ -58,7 +58,6 @@ const container = document.getElementById('scene');
 // URL switches, handy for comparing variants without editing config.js:
 //   ?seed=1234        same map every time
 //   ?orient=pointy    pointy-top world hexes instead of the default flat-top
-//   ?camera=ortho     start in the top-down camera
 //   ?npe=1            start the guided new player experience
 const params = new URLSearchParams(window.location.search);
 if (params.get('orient') === 'flat' || params.get('orient') === 'pointy') CONFIG.map.orientation = params.get('orient');
@@ -71,8 +70,6 @@ let ui = null;
 const settings = createSettings({
   config: CONFIG,
   defaults: DEFAULTS,
-  onToggleCamera: () => { if (!cinematic.isActive()) renderer.toggleCameraMode(); },
-  getCameraMode: () => renderer.cameraMode,
   getUiScale: loadUiScale,
   onSetUiScale: (v) => applyUiScale(v),
   getShowLog: loadShowLog,
@@ -255,7 +252,6 @@ ui = createUI(CONFIG, {
   },
   onNewMap: () => startRun(resolveSeed()),
   onRestart: () => startRun(game.seed),
-  onToggleCamera: () => { if (!cinematic.isActive()) renderer.toggleCameraMode(); },
   onRevealAll: () => game.revealAll(),
   onEnter: () => {
     if (startScreen) {
@@ -534,7 +530,6 @@ renderer.onHexHover = (hex) => ui.setHover(hex, game);
 // Clicking anywhere on the world (not just a tile) while a window is open flashes the window.
 container.addEventListener('pointerdown', () => { if (ui.dialogOpen()) ui.flashDialog(); });
 
-if (params.get('camera') === 'ortho') renderer.toggleCameraMode();
 if (params.get('npe')) startRun(resolveSeed(NPE_SEED), { npe: true });
 else startRun(resolveSeed(params.get('seed')));
 initSplash();

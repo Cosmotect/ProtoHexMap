@@ -86,7 +86,6 @@ export function createUI(config, handlers) {
     // The menu is the one thing that always answers; everything else waits while input is blocked.
     if (e.key === 'm' || e.key === 'M') { toggleMenu(); return; }
     if (handlers.isInputBlocked && handlers.isInputBlocked()) return;
-    if (e.key === 'c' || e.key === 'C') handlers.onToggleCamera();
     if (e.key === 'n' || e.key === 'N') handlers.onNewMap();
     if (e.key === 'r' || e.key === 'R') handlers.onRestart();
     if (e.key === 'e' || e.key === 'E') {

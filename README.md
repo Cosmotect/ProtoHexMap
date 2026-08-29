@@ -82,7 +82,6 @@ Handy URL switches (add them to the address):
 |---|---|
 | `?seed=1234` | Same map every time. The seed is also shown in the HUD and saved in the address bar. |
 | `?orient=flat` | Flat-top hexes instead of pointy-top. |
-| `?camera=ortho` | Start in the top-down (orthographic) camera. |
 | `?npe=1` | Start the guided new player experience (fixed map, interface revealed piece by piece). |
 | `?nostart=1` | Skip the Everlands splash and the campfire start screen (used by the tests). |
 

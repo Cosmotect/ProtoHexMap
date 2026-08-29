@@ -48,7 +48,7 @@ export const CONFIG = {
   local: {
     radius: 6,                // rings of local hexes around the arena centre
     hexSize: 1.0,
-    gap: 0.06,
+    gap: 0.03,
     tileHeight: 0.3,
     elevationStep: 0.35,      // world units of visual height per combat elevation level
                               // (the LEVELS themselves are combat rules: src/config/abilities.js)
@@ -58,17 +58,17 @@ export const CONFIG = {
     shake: 0.4,               // screenshake amplitude at the peak of the flight (world units)
     cloudColor: 0xdfe6f2,     // the clouds punched through during the flight
     // The arena camera: rotation only (no panning, no zooming).
-    camera: { fov: 46, tiltDegrees: 55, distance: 13, minTiltDegrees: 25, maxTiltDegrees: 70 },
+    camera: { fov: 46, tiltDegrees: 55, distance: 22, minTiltDegrees: 25, maxTiltDegrees: 70 },
     // The START SCREEN camera (the party around the campfire) is its own pose:
     // much closer to the fire and locked, because that shot is composed, not
     // explored. It is also the pose the fly-out to the world map starts from.
     startCamera: {
       fov: 46,
-      tiltDegrees: 58,        // 0 = straight down; higher = more of a ground-level look
+      tiltDegrees: 65,        // 0 = straight down; higher = more of a ground-level look
       azimuthDegrees: 30,     // spin around the fire. 30 puts a TILE dead centre behind the
                               // flame instead of the seam between two, which is what lets the
                               // party sit as one row of three rather than two-plus-a-straggler
-      distance: 7.4,          // how far from the fire
+      distance: 5,            // how far from the fire
       targetHeight: 0.5,      // the camera aims this high above the centre tile (the flame)
       lockControls: true,     // true = the player cannot rotate the start shot
     },
@@ -95,18 +95,17 @@ export const CONFIG = {
   },
 
   // ----- Camera ------------------------------------------------------
+  // The world map camera. Perspective only - the top-down orthographic mode was
+  // removed on 2026-08-29.
   camera: {
-    mode: 'perspective',      // 'perspective' or 'orthographic' (toggle in the HUD too)
-    fov: 42,                  // perspective field of view, degrees
+    fov: 42,                  // field of view, degrees
     tiltDegrees: 52,          // angle between the "look down" direction and straight down (0 = top-down)
     distance: 16,             // how far the camera starts from the player
     minDistance: 6,
     maxDistance: 32,
-    minTiltDegrees: 15,       // how far the player may tilt the perspective camera
+    minTiltDegrees: 15,       // how far the player may tilt the camera
     maxTiltDegrees: 72,
-    orthoTiltDegrees: 30,     // starting tilt of the orthographic (isometric style) camera
-    orthoViewHeight: 14,      // how many world units tall the orthographic view is
-    followPlayer: false,      // camera glides after the player when they move
+    followPlayer: true,       // camera glides after the player when they move
     followDurationMs: 650,
   },
 

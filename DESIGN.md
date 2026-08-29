@@ -231,8 +231,11 @@ Three separate pools implement it (`src/config/units.js`): `battle.enemies.bands
   reference table: a key missing in another language falls back to English, a key missing
   everywhere shows as the key itself.
 * **Settings window** (`settings.js`): every value of the config files, on tabs named after
-  them (World, Encounters, Units, General; the language and camera mode live on General).
-  The window spans the screen and lays groups out in up to five columns. The
+  them (World, Encounters, Units, General, Audio; the language, the UI scale and the event
+  log switch live on General). The window spans the screen and lays groups out in up to
+  five columns; a tab holding a TABLE (tile types, biomes) switches to a grid instead, so
+  the table can take two or three tracks and still sit beside the ordinary groups rather
+  than on its own row underneath them. The
   form is generated from the shape of the config, changes are written into CONFIG at once,
   saved in the browser (localStorage `hexmap-settings-v1`) and re-applied on load, so they
   take precedence over the files. Every row has a reset button (file value), every tab a
@@ -264,9 +267,11 @@ Three separate pools implement it (`src/config/units.js`): `battle.enemies.bands
 * **Encounters**: ~33% of walkable tiles (not adjacent to the start) get a type by weight:
   battle 5, event 2, shop 1, treasure 0.8, acolyte 0.15. Stepping on one only writes a log line.
 * **Seeds**: `?seed=1234` in the URL, the HUD, and the "Copy link" button. Same seed, same map.
-* **Camera**: perspective by default (tilt 52 degrees, fov 42), follows the player with a
-  glide; orthographic / isometric alternative on C. Map-style controls: left-drag pan,
-  right-drag orbit, wheel zoom, arrow keys pan.
+* **Camera**: perspective only (tilt 52 degrees, fov 42), following the player with a glide
+  (`camera.followPlayer`). Map-style controls: left-drag pan, right-drag orbit, wheel zoom,
+  arrow keys pan. The top-down orthographic mode was removed on 2026-08-29 - it doubled
+  every camera rule (its own projection, zoom limits, tilt range, no distance fog) for a
+  view the prototype was never designed around.
 * **The LOCAL map** (`src/local/`, since 2026-08-27): combat encounters (battle, Stasis
   Seed, Stasis Colony) play out on a separate arena grid instead of a bare window.
   * The local grid is a hex map of `local.radius` (6) rings using the OPPOSITE hex
@@ -378,6 +383,18 @@ Outcome choice per type is an open question (see below); the hook does not care.
 
 ## Decisions log
 
+* 2026-08-29 The orthographic / top-down camera was deleted (config keys, the projection
+  branch in setupCamera, the C shortcut, the Settings toggle, the ?camera=ortho switch and
+  the cinematic's save-and-restore special case). It was a second set of every camera rule
+  serving a view nobody designs against.
+  The climb out of a local map now starts from the pose the player ACTUALLY left the camera
+  in, not from `finalCameraPose()`: rotating the arena and then leaving used to snap the
+  shot back before lifting off.
+  Tile types and biomes went back to being tables. The earlier fix for "they hog the full
+  width" had turned them into ordinary groups, which put an attribute name on every row of
+  every entry. The real problem was the layout engine: CSS multi-column can only span an
+  item across ALL columns or none, so tabs with a table now use a grid, where one section
+  can be three tracks wide and the rest stay one.
 * 2026-08-28 (c) **Interactive combat**: the hex-box combat core moved in
   (`src/local/battle/bhex.js` + `engine.js`, config in `src/config/abilities.js`) and
   fights are now PLAYED on the local map instead of simulated - free player activation

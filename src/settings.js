@@ -24,14 +24,15 @@ const TABS = [
 // Keys that are not meant to be edited by hand (visual placeholders, long texts).
 const SKIP_KEYS = new Set(['shape', 'info', 'flavour', 'names', 'icon']);
 
-// Sections shown as one wide table (rows = entries, columns = attributes)
-// instead of one group per entry. Empty on purpose: a table that wide has to
-// span the full width of the window, which pushed tile types and biomes onto
-// their own rows below everything else. As ordinary groups they flow into the
-// same columns as every other section. Put a name back here to get the table.
-const MATRIX_SECTIONS = new Set();
+// Sections shown as one table (rows = entries, columns = attributes) instead of
+// one group per entry, so an attribute name is written once rather than repeated
+// for every tile type or biome. A table is wider than an ordinary group, so a tab
+// containing one lays its sections out on a GRID (where a section can be told to
+// span several columns) instead of the CSS multi-column flow the other tabs use -
+// see `has-matrix` in render() and style.css.
+const MATRIX_SECTIONS = new Set(['tileTypes', 'biomes']);
 
-export function createSettings({ config, defaults, onChange, onToggleCamera, getCameraMode, getUiScale, onSetUiScale, getShowLog, onSetShowLog, onClose }) {
+export function createSettings({ config, defaults, onChange, getUiScale, onSetUiScale, getShowLog, onSetShowLog, onClose }) {
   const $ = (id) => document.getElementById(id);
   const win = $('settings');
   const tabsEl = $('settings-tabs');
@@ -95,10 +96,6 @@ export function createSettings({ config, defaults, onChange, onToggleCamera, get
       parts.push(`<div class="settings-group"><div class="settings-group-title">${t('settings.language.group')}</div>
         <div class="settings-row"><span class="settings-label">${t('settings.language')}</span>
         <select id="settings-language">${options}</select><span class="settings-reset"></span></div></div>`);
-      parts.push(`<div class="settings-group"><div class="settings-group-title">${t('settings.camera.group')}</div>
-        <div class="settings-row"><span class="settings-label">${t('settings.camera.current')}</span>
-        <button id="btn-settings-camera">${t(getCameraMode() === 'perspective' ? 'settings.camera.perspective' : 'settings.camera.topdown')}</button>
-        <span class="settings-reset"></span></div></div>`);
       // UI scale: a browser preference (like the language), not part of CONFIG.
       const scales = [0.75, 0.9, 1, 1.1, 1.25, 1.5];
       const current = getUiScale ? getUiScale() : 1;
@@ -115,7 +112,10 @@ export function createSettings({ config, defaults, onChange, onToggleCamera, get
         : renderGroup(section, config[section], defaults[section], section));
     }
     bodyEl.innerHTML = parts.join('');
-    bodyEl.querySelector('#btn-settings-camera')?.addEventListener('click', () => { onToggleCamera(); render(); });
+    // Tabs with a table switch from the multi-column flow to a grid, where the
+    // table can be told to occupy several columns and still sit beside the
+    // ordinary groups instead of below them (style.css).
+    bodyEl.classList.toggle('has-matrix', tab.sections.some((s) => MATRIX_SECTIONS.has(s)));
     bodyEl.querySelector('#settings-language')?.addEventListener('change', (e) => { setLanguage(e.target.value); render(); });
     bodyEl.querySelector('#settings-uiscale')?.addEventListener('change', (e) => { if (onSetUiScale) onSetUiScale(Number(e.target.value)); });
     bodyEl.querySelector('#settings-showlog')?.addEventListener('change', (e) => { if (onSetShowLog) onSetShowLog(e.target.checked); });
@@ -178,7 +178,10 @@ export function createSettings({ config, defaults, onChange, onToggleCamera, get
       }).join('');
       return `<tr><th title="${path}.${rn}">${rn}</th>${cells}</tr>`;
     }).join('');
-    return `<div class="settings-group settings-matrix"><div class="settings-group-title">${title}</div>
+    // A table with many attributes needs one more grid track than a narrow one,
+    // so it does not end up scrolling sideways inside its own box (style.css).
+    const wide = cols.length >= 7 ? ' wide' : '';
+    return `<div class="settings-group settings-matrix${wide}"><div class="settings-group-title">${title}</div>
       <div class="settings-matrix-scroll"><table><thead>${head}</thead><tbody>${body}</tbody></table></div></div>`;
   }
 

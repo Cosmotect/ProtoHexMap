@@ -54,8 +54,7 @@ export class MapRenderer {
 
     this.setupLights();
     this.buildSharedGeometry();
-    this.cameraMode = config.camera.mode;
-    this.setupCamera(this.cameraMode, new THREE.Vector3(0, 0, 0));
+    this.setupCamera(new THREE.Vector3(0, 0, 0));
 
     this.bindInput();
     window.addEventListener('resize', () => this.resize());
@@ -101,7 +100,7 @@ export class MapRenderer {
     this.atmosphere.color.copy(col);
     this.atmosphere.near = bg.fogNear;
     this.atmosphere.far = bg.fogFar;
-    this.scene.fog = (this.cameraMode === 'orthographic' || bg.fog === false) ? null : this.atmosphere;
+    this.scene.fog = bg.fog === false ? null : this.atmosphere;
     if (this.groundMaterial) this.groundMaterial.color.set(bg.groundColor);
   }
 
@@ -156,7 +155,10 @@ export class MapRenderer {
     this.stasisGroup = null;
   }
 
-  setupCamera(mode, target) {
+  // The world camera. Perspective only: the top-down orthographic mode was
+  // removed on 2026-08-29 (the prototype is designed around the perspective
+  // shot, and a second projection meant a second set of every camera rule).
+  setupCamera(target) {
     const cfg = this.config.camera;
     const w = this.container.clientWidth || window.innerWidth;
     const h = this.container.clientHeight || window.innerHeight;
@@ -164,19 +166,9 @@ export class MapRenderer {
 
     if (this.controls) this.controls.dispose();
 
-    let camera;
-    let tilt;
-    let distance;
-    if (mode === 'orthographic') {
-      const vh = cfg.orthoViewHeight;
-      camera = new THREE.OrthographicCamera(-vh * aspect / 2, vh * aspect / 2, vh / 2, -vh / 2, -200, 400);
-      tilt = deg(cfg.orthoTiltDegrees);
-      distance = 40; // irrelevant for size in orthographic mode, only for depth
-    } else {
-      camera = new THREE.PerspectiveCamera(cfg.fov, aspect, 0.1, 400);
-      tilt = deg(cfg.tiltDegrees);
-      distance = cfg.distance;
-    }
+    const camera = new THREE.PerspectiveCamera(cfg.fov, aspect, 0.1, 400);
+    const tilt = deg(cfg.tiltDegrees);
+    const distance = cfg.distance;
     camera.position.set(
       target.x,
       target.y + distance * Math.cos(tilt),
@@ -188,34 +180,18 @@ export class MapRenderer {
     controls.target.copy(target);
     controls.enableDamping = true;
     controls.dampingFactor = 0.1;
-    controls.zoomToCursor = mode !== 'orthographic';
+    controls.zoomToCursor = true;
     controls.keyPanSpeed = 24;
     controls.listenToKeyEvents(window);
-    if (mode === 'orthographic') {
-      controls.minZoom = 0.45;
-      controls.maxZoom = 3.5;
-      controls.minPolarAngle = 0;
-      controls.maxPolarAngle = deg(62);
-    } else {
-      controls.minDistance = cfg.minDistance;
-      controls.maxDistance = cfg.maxDistance;
-      controls.minPolarAngle = deg(cfg.minTiltDegrees);
-      controls.maxPolarAngle = deg(cfg.maxTiltDegrees);
-    }
+    controls.minDistance = cfg.minDistance;
+    controls.maxDistance = cfg.maxDistance;
+    controls.minPolarAngle = deg(cfg.minTiltDegrees);
+    controls.maxPolarAngle = deg(cfg.maxTiltDegrees);
     controls.update();
 
     this.camera = camera;
     this.controls = controls;
-    this.cameraMode = mode;
-    // Distance based fog makes no sense for a camera without perspective.
-    this.scene.fog = (mode === 'orthographic' || this.config.worldBackground.fog === false) ? null : this.atmosphere;
-  }
-
-  toggleCameraMode() {
-    const next = this.cameraMode === 'perspective' ? 'orthographic' : 'perspective';
-    cancelTween(this.followTween);
-    this.setupCamera(next, this.controls.target.clone());
-    return next;
+    this.scene.fog = this.config.worldBackground.fog === false ? null : this.atmosphere;
   }
 
   resize() {
@@ -224,16 +200,7 @@ export class MapRenderer {
     this.renderer.setSize(w, h, false);
     this.renderer.domElement.style.width = '100%';
     this.renderer.domElement.style.height = '100%';
-    const aspect = w / h;
-    if (this.camera.isPerspectiveCamera) {
-      this.camera.aspect = aspect;
-    } else {
-      const vh = this.config.camera.orthoViewHeight;
-      this.camera.left = -vh * aspect / 2;
-      this.camera.right = vh * aspect / 2;
-      this.camera.top = vh / 2;
-      this.camera.bottom = -vh / 2;
-    }
+    this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   }
 
@@ -306,7 +273,7 @@ export class MapRenderer {
     this.rebuildStasisLines(game);
 
     const p = this.playerWorld(game.state.position);
-    this.setupCamera(this.cameraMode, new THREE.Vector3(p.x, 0, p.z));
+    this.setupCamera(new THREE.Vector3(p.x, 0, p.z));
   }
 
   clearMap() {
