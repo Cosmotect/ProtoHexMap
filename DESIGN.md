@@ -263,14 +263,26 @@ everything downstream (renderer, HUD, combat) sees an ordinary, just small, map.
   no splash / campfire / roster - a scenario drops straight onto its map. Restart
   keeps the scenario; New map leaves it. Reaching the goal ends the run as a
   scenario victory (`end.scenario`); the `next` field will chain the maps.
+* **Hint cards**: a scenario lists its own cards as `{ id, at, ... }` triggers
+  (`at: 'start' | 'arrive' (tile, optional hold) | 'encounter' (encounterType) |
+  'combatStart' | 'camp' | ...`); texts live in the locales as
+  `scenario.<map>.card.<id>.title/.text` (config placeholders work). The card
+  renderer is the old guide's (queue, green line, input block), but in scenario
+  mode the HUD stays fully visible and the card header shows the MAP's name -
+  the level teaches, the cards only point. main.js sends the extra
+  `combatStart` trigger when the battle engine takes over.
+* **Progression**: completing a map is stored in localStorage
+  (`hexmap-tutorial-progress`); Menu > Learn > **Tutorial** opens the first
+  unfinished map of the chain (`next` links them); after a scenario win the end
+  overlay offers "Next map" when a next exists. Restart replays the map.
 * **Why**: fully deterministic, so every tutorial map gets an end-to-end
   walkthrough in the smoke test and cannot break silently (the old seeded NPE
   broke whenever worldgen changed).
-* **Planned next** (approved plan): map 1 "The Road" (corridor: move, fog, first
-  fight, camp) - layout shipped, slim guide cards pending; map 2 "The Fork"
-  (choice of routes, terrain costs, scripted ambush, shop, high-ground arena
-  recipe); map 3 "The Withering" (a compressed scripted Stasis with a mini-Seed);
-  then the menu entry replaces the old seeded NPE, which gets removed.
+* **Status**: map 1 "The Road" is COMPLETE (corridor: move, fog, unavoidable
+  first fight, cache-pays-for-camp beat, waypoint; 4 hint cards). Planned:
+  map 2 "The Fork" (choice of routes, terrain costs, scripted ambush, shop,
+  high-ground arena recipe); map 3 "The Withering" (a compressed scripted
+  Stasis with a mini-Seed); then the old seeded NPE gets removed.
 
 ## How the code is split
 

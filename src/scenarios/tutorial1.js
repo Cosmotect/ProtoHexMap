@@ -43,4 +43,12 @@ export const TUTORIAL_1 = {
   maxSupplies: 60,
   goal: { type: 'reach', tile: '9,-4' },
   next: null,   // tutorial2 hooks in here later
+  // Short hint cards (texts: scenario.tutorial1.card.<id>.* in the locales).
+  // Deliberately few - the corridor itself does the teaching.
+  cards: [
+    { id: 'road', at: 'start', target: { tile: '1,0' } },
+    { id: 'bridge', at: 'arrive', tile: '4,-2', target: { el: '#btn-enter' } },
+    { id: 'combat', at: 'combatStart', target: { el: '#battle-bar' } },
+    { id: 'cache', at: 'encounter', encounterType: 'treasure', target: { el: '#btn-enter' } },
+  ],
 };

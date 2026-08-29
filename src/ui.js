@@ -51,6 +51,8 @@ export function createUI(config, handlers) {
   $('btn-menu').addEventListener('click', () => toggleMenu());
   $('btn-settings').addEventListener('click', () => { closeMenu(); handlers.onOpenSettings(); });
   $('btn-npe').addEventListener('click', () => { closeMenu(); handlers.onStartNpe(); });
+  // The tutorial: the first unfinished hand-authored map of the chain.
+  $('btn-tutorial').addEventListener('click', () => { closeMenu(); handlers.onStartTutorial && handlers.onStartTutorial(); });
   function toggleMenu() { els.menu.classList.toggle('hidden'); updateBlur(); }
   function closeMenu() { els.menu.classList.add('hidden'); updateBlur(); }
   // The world blurs while the menu or any of its windows (settings) is open.
@@ -65,6 +67,7 @@ export function createUI(config, handlers) {
   $('btn-overlay-restart').addEventListener('click', () => { hideEnd(); handlers.onRestart(); });
   $('btn-overlay-new').addEventListener('click', () => { hideEnd(); handlers.onNewMap(); });
   $('btn-overlay-inspect').addEventListener('click', () => hideEnd());
+  $('btn-overlay-next').addEventListener('click', () => { hideEnd(); handlers.onNextScenario && handlers.onNextScenario(); });
   const loadTypedSeed = () => {
     const value = $('seed-input').value.trim();
     if (value) handlers.onLoadSeed(value);
@@ -356,6 +359,11 @@ export function createUI(config, handlers) {
 
   function showEnd(game) {
     const s = game.state;
+    // After a tutorial-map victory the overlay leads to the next map of the chain.
+    const nextLabel = handlers.scenarioNextLabel ? handlers.scenarioNextLabel() : null;
+    const nextBtn = $('btn-overlay-next');
+    nextBtn.classList.toggle('hidden', !nextLabel);
+    if (nextLabel) nextBtn.textContent = nextLabel;
     els.overlayTitle.textContent = t(s.status === 'won' ? 'end.won.title' : 'end.lost.title');
     const reason = Array.isArray(s.endReason) ? t(s.endReason[0], s.endReason[1]) : String(s.endReason || '');
     els.overlayText.textContent = `${reason} ${t('end.inspectNote')}`;

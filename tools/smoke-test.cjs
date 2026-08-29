@@ -554,6 +554,9 @@ fs.mkdirSync(OUT, { recursive: true });
     max: window.game.state.maxSupplies,
     stasisLines: !!window.__renderer.stasisGroup,
     legendHasGoal: document.getElementById('legend-items').textContent.includes('Waypoint'),
+    card: !document.getElementById('tutorial').classList.contains('hidden'),
+    cardTitle: document.getElementById('tutorial-title').textContent,
+    hudVisible: !document.getElementById('party').classList.contains('npe-hidden'),
   }));
   if (scn.id !== 'tutorial1' || scn.tiles !== 12 || scn.start !== '0,0') problems.push('scenario map wrong: ' + JSON.stringify(scn));
   if (scn.startScreen || scn.splash) problems.push('scenario boot should skip the splash and campfire: ' + JSON.stringify(scn));
@@ -561,9 +564,21 @@ fs.mkdirSync(OUT, { recursive: true });
   if (scn.supplies !== 10 || scn.max !== 60) problems.push('scenario supplies wrong: ' + JSON.stringify(scn));
   if (scn.stasisLines) problems.push('a scenario without a Stasis still drew stasis lines');
   if (scn.legendHasGoal) problems.push('the hidden waypoint marker leaked into the legend');
+  if (!scn.card || !/road/i.test(scn.cardTitle)) problems.push('the opening tutorial card did not show: ' + JSON.stringify(scn));
+  if (!scn.hudVisible) problems.push('scenario mode should keep the whole HUD visible');
   await page.screenshot({ path: path.join(OUT, '60-scenario-start.png') });
+  await page.click('#btn-tutorial-ok');
+  await page.waitForTimeout(150);
   let camped = false;
+  let cardsSeen = 0;
   for (let i = 0; i < 24; i++) {
+    // Dismiss whichever hint card popped (the bridge, the fight, the cache...).
+    const dismissed = await page.evaluate(() => {
+      const open = !document.getElementById('tutorial').classList.contains('hidden');
+      if (open) document.getElementById('btn-tutorial-ok').click();
+      return open;
+    });
+    if (dismissed) { cardsSeen += 1; await page.waitForTimeout(120); continue; }
     const st = await page.evaluate(() => {
       const g = window.game;
       if (g.state.status !== 'playing') return { done: g.state.status };
@@ -607,8 +622,27 @@ fs.mkdirSync(OUT, { recursive: true });
   }));
   if (scnEnd.status !== 'won' || !/end.scenario/.test(scnEnd.reason)) problems.push('scenario walkthrough did not end in a victory: ' + JSON.stringify(scnEnd));
   if (!camped) problems.push('scenario walkthrough never reached the treasure/camp beat');
-  await page.waitForTimeout(800);
+  if (cardsSeen < 3) problems.push(`expected at least 3 more hint cards along the road, saw ${cardsSeen}`);
+  // Any card still open holds the end overlay back: dismiss, then the overlay follows.
+  await page.evaluate(() => { const b = document.getElementById('btn-tutorial-ok'); if (!document.getElementById('tutorial').classList.contains('hidden')) b.click(); });
+  await page.waitForFunction(() => !document.getElementById('overlay').classList.contains('hidden'), null, { timeout: 15000 }).catch(() => problems.push('end overlay did not appear after the scenario win'));
+  const prog = await page.evaluate(() => { try { return JSON.parse(localStorage.getItem('hexmap-tutorial-progress') ?? '{}'); } catch { return {}; } });
+  if (!prog.tutorial1) problems.push('tutorial completion was not stored: ' + JSON.stringify(prog));
   await page.screenshot({ path: path.join(OUT, '61-scenario-won.png') });
+
+  // The menu's Tutorial button starts the (first unfinished) tutorial map.
+  await page.goto(URL.replace(/\?.*$/, '') + '?seed=777&nostart=1', { waitUntil: 'load', timeout: 60000 });
+  await page.waitForTimeout(1200);
+  await page.click('#btn-menu');
+  await page.waitForTimeout(150);
+  await page.click('#btn-tutorial');
+  await page.waitForFunction(() => window.game && window.game.scenario && window.game.scenario.id === 'tutorial1', null, { timeout: 15000 }).catch(() => problems.push('the menu Tutorial button did not start the tutorial map'));
+  const menuBoot = await page.evaluate(() => ({
+    url: window.location.search,
+    card: !document.getElementById('tutorial').classList.contains('hidden'),
+  }));
+  if (!/scenario=tutorial1/.test(menuBoot.url)) problems.push('the tutorial did not land in the address bar: ' + menuBoot.url);
+  if (!menuBoot.card) problems.push('starting the tutorial from the menu did not show the opening card');
 
   console.log(problems.length ? 'PROBLEMS:\n' + problems.join('\n') : 'OK: no errors, all checks passed.');
   await browser.close();

@@ -244,6 +244,8 @@ function beginInteractiveBattle(ctx) {
   window.__battle = battle;   // for debugging / automated tests
   view.bindBattle(battle);
   ui.setBattleMode(battle);
+  // The guide may have a card for the first fight (scenario maps).
+  tutorial.onEvent('combatStart', {}, game);
 }
 
 function finishInteractiveBattle(won) {
@@ -302,6 +304,16 @@ ui = createUI(CONFIG, {
   },
   onNewMap: () => startRun(resolveSeed()),   // "New map" always leaves scenario mode
   onRestart: () => startRun(game.seed, { scenario: activeScenario }),
+  // The menu's Tutorial button: the first unfinished map of the chain.
+  onStartTutorial: () => startRun(1, { scenario: firstUnfinishedTutorial() }),
+  // The end overlay's "Next map" button (only offered after a scenario win).
+  onNextScenario: () => {
+    const nx = activeScenario?.next ? scenarioById(activeScenario.next) : null;
+    if (nx) startRun(1, { scenario: nx });
+  },
+  scenarioNextLabel: () => (
+    game && game.state.status === 'won' && activeScenario?.next && scenarioById(activeScenario.next)
+      ? t('end.nextMap') : null),
   onRevealAll: () => game.revealAll(),
   // Debug: instantly win the fight running on the local map (does nothing outside one).
   onWinBattle: () => { if (battle) battle.debugResolve(true); },
@@ -324,6 +336,29 @@ ui = createUI(CONFIG, {
 const tutorial = createTutorial({ config: CONFIG, ui, renderer });
 // The end screen waits for the guide's last card.
 tutorial.setOnIdle(() => { if (pendingEnd && game && game.state.status !== 'playing' && !ui.dialogOpen()) { pendingEnd = false; ui.showEnd(game); } });
+
+// ----- tutorial progression --------------------------------------------------
+// Which tutorial maps this browser has completed (a preference, like the UI
+// scale - not part of any run's state). The menu's Tutorial button opens the
+// first unfinished map of the chain; finishing a map stores it here.
+const TUTORIAL_KEY = 'hexmap-tutorial-progress';
+function tutorialProgress() {
+  try { return JSON.parse(localStorage.getItem(TUTORIAL_KEY)) ?? {}; } catch { return {}; }
+}
+function markTutorialDone(id) {
+  try { localStorage.setItem(TUTORIAL_KEY, JSON.stringify({ ...tutorialProgress(), [id]: true })); } catch { /* private mode etc. */ }
+}
+// Walks the chain from the first map; a fully completed chain starts over.
+function firstUnfinishedTutorial() {
+  const done = tutorialProgress();
+  let s = scenarioById('tutorial1');
+  const visited = new Set();
+  while (s && done[s.id] && s.next && !visited.has(s.id)) {
+    visited.add(s.id);
+    s = scenarioById(s.next);
+  }
+  return s ?? scenarioById('tutorial1');
+}
 
 // ----- scenario mode (src/scenarios/): hand-authored maps, the tutorial -----
 // A scenario's configPatch temporarily rewrites CONFIG values for its run (a
@@ -382,10 +417,13 @@ function startRun(seed, opts = {}) {
     });
   };
 
-  // Keep the seed in the address bar so the link can be shared.
+  // Keep the seed (and the scenario, when one is running) in the address bar
+  // so the link can be shared.
   try {
     const url = new URL(window.location.href);
     url.searchParams.set('seed', String(seed));
+    if (activeScenario) url.searchParams.set('scenario', activeScenario.id);
+    else url.searchParams.delete('scenario');
     window.history.replaceState(null, '', url.toString());
   } catch {
     // Some embedded viewers do not allow changing the address bar. Not a problem.
@@ -408,6 +446,9 @@ function startRun(seed, opts = {}) {
     tutorial.onEvent(type, payload, game);
     if (type === 'log') ui.renderLog(game);
     if (type === 'end') {
+      // Winning a tutorial map is remembered (the menu's Tutorial button then
+      // opens the next unfinished one).
+      if (activeScenario && game.state.status === 'won') markTutorialDone(activeScenario.id);
       const thisGame = game;
       // Let the hop finish before the overlay appears (and ignore it if a new run started meanwhile).
       // If a battle report / event is open, the end screen waits until it is closed.
@@ -423,9 +464,10 @@ function startRun(seed, opts = {}) {
   ui.update(game);
   ui.renderLog(game);
   if (opts.npe) tutorial.start();
-  // A scenario drops straight onto its map: no campfire, no roster - the real
-  // run teaches those. Normal runs keep the start-screen ceremony.
-  else if (!activeScenario && !params.get('nostart')) enterStartScreen();
+  // A scenario drops straight onto its map (no campfire, no roster - the real
+  // run teaches those) and brings its own short hint cards.
+  else if (activeScenario) { if (activeScenario.cards?.length) tutorial.startScenario(activeScenario); }
+  else if (!params.get('nostart')) enterStartScreen();
 }
 
 // ----- encounter dialogs (top centre) -----------------------------------

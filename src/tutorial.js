@@ -29,7 +29,10 @@ const TARGETS = { ...PIECES, menu: '#menu-wrap' };
 // Card targets: a HUD piece name, { el: cssSelector }, { tile: hexKey } (green ring on the
 // tile, line to its top) or { marker: hexKey } (green outline behind the 3D shape).
 export function createTutorial({ config, ui, renderer }) {
-  const state = { active: false, seen: new Set(), queue: [], showing: false, finishAfter: false, moving: 0, current: null };
+  // mode: 'npe' = the old guided seeded run; 'scenario' = short scripted hint
+  // cards on a hand-authored map (src/scenarios/), triggered by the scenario's
+  // own card list instead of event heuristics.
+  const state = { active: false, mode: 'npe', scenario: null, seen: new Set(), queue: [], showing: false, finishAfter: false, moving: 0, current: null };
   const $ = (sel) => document.querySelector(sel);
   const card = $('#tutorial');
   const titleEl = $('#tutorial-title');
@@ -196,6 +199,10 @@ export function createTutorial({ config, ui, renderer }) {
 
   function start() {
     state.active = true;
+    state.mode = 'npe';
+    state.scenario = null;
+    const kicker = $('#tutorial .tutorial-kicker');
+    if (kicker) kicker.textContent = t('npe.kicker');
     state.seen.clear();
     state.queue.length = 0;
     state.showing = false;
@@ -203,6 +210,47 @@ export function createTutorial({ config, ui, renderer }) {
     state.moving = 0;
     hideAll();
     say('welcome', 'npe.welcome', {}, { target: { tile: '0,0' } });
+  }
+
+  // ----- scenario mode (the tutorial maps) ---------------------------------
+  // The HUD stays fully visible: a scenario map teaches through its geometry,
+  // the cards are only short hints, listed in the scenario itself as
+  // { id, at, ... } triggers. Texts live in the locale tables as
+  // scenario.<mapId>.card.<cardId>.title / .text (config placeholders work).
+  function startScenario(scenario) {
+    state.active = true;
+    state.mode = 'scenario';
+    state.scenario = scenario;
+    // The card header names the map instead of the old guide's banner.
+    const kicker = $('#tutorial .tutorial-kicker');
+    if (kicker) kicker.textContent = t(`scenario.${scenario.id}.name`);
+    state.seen.clear();
+    state.queue.length = 0;
+    state.showing = false;
+    state.finishAfter = false;
+    state.moving = 0;
+    for (const c of scenario.cards ?? []) if (c.at === 'start') showScenarioCard(c);
+  }
+
+  function showScenarioCard(c, opts = {}) {
+    say(`sc:${c.id}`, `scenario.${state.scenario.id}.card.${c.id}`, {}, { target: c.target ?? null, ...opts });
+  }
+
+  // Card triggers, matched against the game events main.js forwards here
+  // (plus 'combatStart', which main.js sends when the battle engine takes over).
+  function onScenarioEvent(type, payload, game) {
+    for (const c of state.scenario?.cards ?? []) {
+      if (state.seen.has(`sc:${c.id}`)) continue;
+      if (c.at === 'arrive') {
+        if (type !== 'arrive' || payload.hex?.key !== c.tile) continue;
+        // A holding card pauses everything the tile would do until "Got it".
+        if (c.hold) { payload.hold = true; showScenarioCard(c, { onDone: () => game.resumeArrival() }); continue; }
+      } else if (c.at === 'encounter') {
+        if (type !== 'encounter' || payload.type !== c.encounterType) continue;
+      } else if (c.at !== type) continue;
+      showScenarioCard(c);
+    }
+    if (type === 'end') finish('end');
   }
 
   function finish(reason) {
@@ -226,6 +274,7 @@ export function createTutorial({ config, ui, renderer }) {
   // Called for every game event from main.js.
   function onEvent(type, payload, game) {
     if (!state.active) return;
+    if (state.mode === 'scenario') { onScenarioEvent(type, payload, game); return; }
     const s = game.state;
 
     if (type === 'move') {
@@ -306,7 +355,7 @@ export function createTutorial({ config, ui, renderer }) {
   // Called by main.js before a move. Returns true when the guide takes over the click:
   // the first step onto costly terrain (a mountain) gets a card with "climb" / "stay".
   function interceptMove(hex, game) {
-    if (!state.active || state.showing) return false;
+    if (!state.active || state.mode === 'scenario' || state.showing) return false;
     const tr = config.tileTypes[hex.type];
     if (!tr || (!(tr.supplyCost > 0) && !(tr.hpCost > 0))) return false;
     const key = `climb:${hex.type}`;
@@ -325,5 +374,5 @@ export function createTutorial({ config, ui, renderer }) {
   // the world, the Enter button and the keyboard ignore input, the menu does not.
   function isBlocking() { return state.active && (state.showing || state.moving > 0); }
 
-  return { start, finish, onEvent, interceptMove, isActive: () => state.active, isBlocking, setOnIdle };
+  return { start, startScenario, finish, onEvent, interceptMove, isActive: () => state.active, isBlocking, setOnIdle };
 }
