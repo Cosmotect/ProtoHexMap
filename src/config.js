@@ -50,7 +50,7 @@ export const CONFIG = {
     hexSize: 1.0,
     gap: 0.03,
     tileHeight: 0.3,          // minimum baseline thickness of an arena tile
-    typeHeightScale: 2,       // arena baseline = world tile type's visual height x this
+    typeHeightScale: 16,      // arena baseline = world tile type's visual height x this
                               // (a hill arena starts taller than a plains one; the
                               // backdrop hexes' tops use the same formula)
     elevationStep: 0.35,      // world units of visual height per combat elevation level
@@ -61,17 +61,17 @@ export const CONFIG = {
     shake: 0.4,               // screenshake amplitude at the peak of the flight (world units)
     cloudColor: 0xdfe6f2,     // the clouds punched through during the flight
     // The arena camera: rotation only (no panning, no zooming).
-    camera: { fov: 46, tiltDegrees: 55, distance: 22, minTiltDegrees: 25, maxTiltDegrees: 70 },
+    camera: { fov: 50, tiltDegrees: 55, distance: 22, minTiltDegrees: 25, maxTiltDegrees: 70 },
     // The START SCREEN camera (the party around the campfire) is its own pose:
     // much closer to the fire and locked, because that shot is composed, not
     // explored. It is also the pose the fly-out to the world map starts from.
     startCamera: {
-      fov: 46,
-      tiltDegrees: 65,        // 0 = straight down; higher = more of a ground-level look
+      fov: 60,
+      tiltDegrees: 70,        // 0 = straight down; higher = more of a ground-level look
       azimuthDegrees: 30,     // spin around the fire. 30 puts a TILE dead centre behind the
                               // flame instead of the seam between two, which is what lets the
                               // party sit as one row of three rather than two-plus-a-straggler
-      distance: 5,            // how far from the fire
+      distance: 3,             // how far from the fire
       targetHeight: 0.5,      // the camera aims this high above the centre tile (the flame)
       lockControls: true,     // true = the player cannot rotate the start shot
     },
@@ -83,18 +83,22 @@ export const CONFIG = {
   // The two maps are tuned separately - the world map is a wide vista, the
   // local map is one tile blown up to arena size.
   worldBackground: {
-    color: 0x0e1320,          // behind the map, and the colour distant tiles fade into
+    color: 0x1c2035,          // behind the map, and the colour distant tiles fade into
     fog: true,                // distance fog on (off = tiles stay sharp to the horizon)
-    fogNear: 30,              // world units at which the fade starts
-    fogFar: 80,               // ...and at which a tile is fully the background colour
-    groundColor: 0x0b0f19,    // the void floor far below, seen through the ether holes
+    fogNear: 15,              // world units at which the fade starts
+    fogFar: 60,               // ...and at which a tile is fully the background colour
+    groundColor: 0x205f62,    // the void floor far below, seen through the ether holes
+    groundDepth: -10,         // how far below y=0 that floor sits (was -30: with the
+                              // tighter fogNear/fogFar above, -30 fogged out to plain
+                              // background colour before it read as a floor at all)
   },
   localBackground: {
-    color: 0x0e1320,
+    color: 0x181539,
     fog: true,
-    fogNear: 26,
-    fogFar: 70,
-    groundColor: 0x0b0f19,
+    fogNear: 20,
+    fogFar: 60,
+    groundColor: 0x2d6673,
+    groundDepth: -10,         // same fix as worldBackground.groundDepth, for the arena
   },
 
   // ----- Camera ------------------------------------------------------
@@ -144,13 +148,13 @@ export const CONFIG = {
   // (The background and the void floor moved to worldBackground / localBackground above.)
   colors: {
     fogTile: 0x1f2536,        // colour of tiles still hidden under the fog of war
-    fogTileHeight: 0.22,
-    startTile: 0x9fd9ff,
+    fogTileHeight: 1,
+    startTile: 0x1f1e28,
     biomeTintAmount: 0.34,    // how far a tile's type colour is shifted towards its biome colour (0..1)
     seedTile: 0x4a1a2a,       // tile under the Stasis Seed
     colonyTile: 0x33204a,     // tile under an active Stasis Colony
     stasisLine: 0x9a5cff,     // the lines growing from the Seed to its Colonies
-    visitedTint: 0.82,        // multiplier applied to the colour of tiles you already stepped on
+    visitedTint: 1,           // multiplier applied to the colour of tiles you already stepped on
     reachableRing: 0xffd166,
     abilityAimRing: 0xff4d4d,  // tile highlight while picking a target for a unit's ability
     hoverRing: 0xffffff,

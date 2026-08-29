@@ -54,13 +54,18 @@ export class LocalMapView {
   // offset from the entered tile, final colour, and height difference. They become
   // huge uninteractive backdrop hexes around the arena, and pull the colour of
   // edge-facing arena tiles towards themselves (the sense of place).
-  build({ worldHex, baseColor, party, enemies, seed, recipe = null, layout = 'battle', neighbors = [] }) {
+  build({ worldHex, baseColor, party, enemies, seed, recipe = null, layout = 'battle', neighbors = [], worldAzimuth = 0 }) {
     this.dispose();
     const cfg = this.config.local;
     const rng = createRng((seed ?? 1) ^ ((worldHex?.q ?? 0) * 73856093) ^ ((worldHex?.r ?? 0) * 19349663));
     this.rng = rng;
 
     this.layout = layout;
+    // The bearing the world camera was facing the instant the dive started
+    // (see transition.js flyIn) - finalCameraPose() lands a battle arena's
+    // camera facing the same way, instead of always the same fixed side.
+    // Unused for 'camp' (the campfire keeps its own composed azimuth).
+    this.worldAzimuth = worldAzimuth;
     this.map = generateLocalMap(this.config, recipe);
     // Battle arenas get rolling tile heights (high ground matters in combat);
     // the campfire start screen stays flat and calm.
@@ -92,7 +97,7 @@ export class LocalMapView {
       new THREE.MeshStandardMaterial({ color: bg.groundColor, roughness: 1 })
     );
     floor.rotation.x = -Math.PI / 2;
-    floor.position.y = -30;
+    floor.position.y = bg.groundDepth ?? -30;
     this.scene.add(floor);
 
     // Tiles: shades of the world tile's colour, so the arena clearly IS that tile.
@@ -760,7 +765,7 @@ export class LocalMapView {
       ? { ...this.config.local.camera, ...(this.config.local.startCamera ?? {}) }
       : this.config.local.camera;
     const tilt = deg(cam.tiltDegrees);
-    const az = isCamp ? deg(cam.azimuthDegrees ?? 0) : 0;
+    const az = isCamp ? deg(cam.azimuthDegrees ?? 0) : (this.worldAzimuth ?? 0);
     // Aim at the tiles' baseline top (the arena floor now rises with the world
     // tile's type), plus the composed offset on the start screen.
     const height = (this.baseTileHeight ?? 0) + (isCamp ? (cam.targetHeight ?? 0) : 0);

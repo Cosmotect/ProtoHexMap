@@ -86,8 +86,9 @@ export class MapRenderer {
     this.groundMaterial = new THREE.MeshStandardMaterial({ color: this.config.worldBackground.groundColor, roughness: 1, metalness: 0 });
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), this.groundMaterial);
     ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -30;
+    ground.position.y = this.config.worldBackground.groundDepth ?? -30;
     this.scene.add(ground);
+    this.groundMesh = ground;
   }
 
   // Re-reads config.worldBackground onto the live scene, so tweaking the colour
@@ -102,6 +103,7 @@ export class MapRenderer {
     this.atmosphere.far = bg.fogFar;
     this.scene.fog = bg.fog === false ? null : this.atmosphere;
     if (this.groundMaterial) this.groundMaterial.color.set(bg.groundColor);
+    if (this.groundMesh) this.groundMesh.position.y = bg.groundDepth ?? -30;
   }
 
   buildSharedGeometry() {
@@ -213,10 +215,12 @@ export class MapRenderer {
     const cfg = this.config;
 
     for (const hex of game.map.hexes.values()) {
-      // Ether is a hole in the world: no tile mesh at all - the camera looks straight
-      // down into the void. The hex stays in the game data (it may become navigable
-      // later); it just draws nothing, so it cannot be hovered or clicked either.
-      if (hex.type === 'ether') continue;
+      // Ether hides under the fog like any other tile, and gets the same fog
+      // plate while unrevealed. Once revealed it is a hole in the world - no
+      // tile really there, the camera looks straight down into the void - so
+      // applyRevealed() hides its plate instead of settling it into a colour
+      // (see the isEther branch there). Either way it stays in the game data
+      // (it may become navigable later).
       const mat = new THREE.MeshStandardMaterial({
         color: cfg.colors.fogTile,
         roughness: 0.85,
@@ -475,6 +479,7 @@ export class MapRenderer {
 
   applyRevealed(record, animate, delayMs = 0) {
     const hex = record.hex;
+    const isEther = hex.type === 'ether';
     const targetH = this.config.tileTypes[hex.type].height;
     const targetColor = this.targetColorFor(hex);
     const mesh = record.mesh;
@@ -489,10 +494,17 @@ export class MapRenderer {
       record.ring.position.y = h + 0.02;
       if (record.marker) this.placeMarker(record, record.marker);
     };
+    // Ether has no real tile once revealed - the fog plate that stood in for
+    // it sinks and darkens like any other reveal, then disappears outright so
+    // the void floor shows through, instead of settling into a flat dark disc.
+    const finish = () => {
+      if (isEther) mesh.visible = false;
+      if (record.marker) record.marker.visible = true;
+    };
 
     if (!animate) {
       apply(1);
-      if (record.marker) record.marker.visible = true;
+      finish();
       return;
     }
     cancelTween(record.colorTween);
@@ -502,8 +514,8 @@ export class MapRenderer {
       ease: Ease.outCubic,
       onUpdate: apply,
       onComplete: () => {
+        finish();
         if (record.marker) {
-          record.marker.visible = true;
           const m = record.marker;
           const s = m.userData.baseScale || 1;
           tween({ duration: 350, ease: Ease.outBack, onUpdate: (t) => m.scale.setScalar(s * t) });
@@ -725,7 +737,10 @@ export class MapRenderer {
 
   pickHex() {
     this.raycaster.setFromCamera(this.pointer, this.camera);
-    const hits = this.raycaster.intersectObjects(this.tileMeshes, false);
+    // Raycaster does not itself skip invisible objects: filter those out, or a
+    // revealed ether tile (its plate hidden in applyRevealed - see the isEther
+    // branch there) would still catch clicks meant for the void hole it left.
+    const hits = this.raycaster.intersectObjects(this.tileMeshes.filter((m) => m.visible), false);
     return hits.length ? hits[0].object.userData.hex : null;
   }
 

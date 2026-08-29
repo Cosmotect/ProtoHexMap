@@ -68,9 +68,16 @@ export function createCombatCinematic({ renderer, config, container, onModeChang
     const saved = saveWorldCamera();
     renderer.controls.enabled = false;
 
+    // The arena's resting shot should face the same way the player was looking
+    // on the world map the instant the dive started - landing on a fixed side
+    // every time would fight whatever direction they approached the tile from.
+    // Same bearing convention finalCameraPose() already uses for the campfire
+    // shot: 0 = +Z, turning towards +X as it grows (atan2(dx, dz)).
+    const worldAzimuth = Math.atan2(saved.position.x - saved.target.x, saved.position.z - saved.target.z);
+
     // Build the arena now, while we are still above the clouds: this is where a
     // handcrafted recipe is applied, so the swap below reveals a finished map.
-    localView.build(opts);
+    localView.build({ ...opts, worldAzimuth });
 
     const rec = renderer.tiles.get(opts.worldHex.key);
     const hexPos = new THREE.Vector3(opts.worldHex.x, (rec ? rec.height : 0.35) + 1.6, -opts.worldHex.y);

@@ -944,13 +944,45 @@ export class Game {
     return a;
   }
 
-  revealHexes(list) {
+  // Marks every not-yet-revealed hex in `list` as revealed, pulls in whole
+  // connected ether pockets touched by that (see expandEtherPockets), then
+  // emits 'reveal' unless silent. The one place both reveal() and
+  // revealHexes() funnel through, so ether behaves the same from either.
+  finishReveal(list, { silent = false } = {}) {
     const newly = [];
     for (const h of list) {
       if (h && !h.revealed) { h.revealed = true; newly.push(h); }
     }
-    if (newly.length) this.emit('reveal', { hexes: newly });
+    this.expandEtherPockets(newly);
+    if (!silent && newly.length) this.emit('reveal', { hexes: newly });
     return newly;
+  }
+
+  // Ether tiles sit hidden under the fog like anything else, but they come in
+  // connected pockets (a path that never leaves ether). Revealing only part of
+  // a pocket would look broken - a hole with a wall of fog cutting through it -
+  // so the moment any ether tile in `newly` is revealed, this walks outward
+  // through its ether-only neighbours and reveals the rest of the pocket too,
+  // appending them to `newly` so the renderer animates them in together.
+  expandEtherPockets(newly) {
+    const seeds = newly.filter((h) => h.type === 'ether');
+    if (!seeds.length) return;
+    const visited = new Set(seeds.map((h) => h.key));
+    const stack = [...seeds];
+    while (stack.length) {
+      const cur = stack.pop();
+      for (const [nq, nr] of neighbors(cur.q, cur.r)) {
+        const nb = this.hexAt(nq, nr);
+        if (!nb || nb.type !== 'ether' || visited.has(nb.key)) continue;
+        visited.add(nb.key);
+        stack.push(nb);
+        if (!nb.revealed) { nb.revealed = true; newly.push(nb); }
+      }
+    }
+  }
+
+  revealHexes(list) {
+    return this.finishReveal(list);
   }
 
   // Reveals an irregular patch of `size` hidden tiles, grown from a random hidden tile
@@ -999,20 +1031,16 @@ export class Game {
   // A tile is revealed when its distance <= radius + its terrainHeight (tall terrain is
   // visible from further away).
   reveal(q, r, radius, silent) {
-    const newly = [];
+    const list = [];
     const maxH = Math.max(0, ...Object.values(this.config.tileTypes).map((t) => t.terrainHeight ?? 0))
       + Math.max(0, ...Object.values(this.config.biomes).map((b) => b.terrainHeight ?? 0));
     for (const [hq, hr] of hexesInRange(q, r, radius + maxH)) {
       const h = this.hexAt(hq, hr);
       if (!h || h.revealed) continue;
       const d = hexDistance(q, r, hq, hr);
-      if (d <= radius + (h.terrainHeight ?? 0)) {
-        h.revealed = true;
-        newly.push(h);
-      }
+      if (d <= radius + (h.terrainHeight ?? 0)) list.push(h);
     }
-    if (!silent && newly.length) this.emit('reveal', { hexes: newly });
-    return newly;
+    return this.finishReveal(list, { silent });
   }
 
   // Debug helper for designers: lift the fog everywhere.
