@@ -630,18 +630,90 @@ fs.mkdirSync(OUT, { recursive: true });
   if (!prog.tutorial1) problems.push('tutorial completion was not stored: ' + JSON.stringify(prog));
   await page.screenshot({ path: path.join(OUT, '61-scenario-won.png') });
 
+  // ----- Map 2 "The Fork": the Next map button chains straight into it --------
+  const nextVisible = await page.evaluate(() => !document.getElementById('btn-overlay-next').classList.contains('hidden'));
+  if (!nextVisible) problems.push('the end overlay did not offer Next map after tutorial 1');
+  await page.click('#btn-overlay-next');
+  await page.waitForFunction(() => window.game && window.game.scenario && window.game.scenario.id === 'tutorial2', null, { timeout: 15000 }).catch(() => problems.push('Next map did not open tutorial2'));
+  await page.waitForTimeout(600);
+  const scn2 = await page.evaluate(() => ({
+    tiles: window.game.map.hexes.size,
+    byStep5: window.game.config.fatigue.byStep[5],
+    boxes: document.querySelectorAll('#fatigue-boxes .fbox').length,
+    card: !document.getElementById('tutorial').classList.contains('hidden'),
+  }));
+  if (scn2.tiles !== 12 || scn2.byStep5 !== 100) problems.push('tutorial2 map or configPatch wrong: ' + JSON.stringify(scn2));
+  if (scn2.boxes !== 5) problems.push(`fatigue bar did not rebuild for the patched table (boxes: ${scn2.boxes})`);
+  if (!scn2.card) problems.push('tutorial2 did not open with its fatigue card');
+  // Walk the LEFT road: the hill and the mountain charge for passage, the
+  // scripted ambush lands on the mountain (the 4th step), and the plateau
+  // guards get fought on the AUTHORED arena (recipe heights + fixed spawns).
+  let sawAmbush = false;
+  for (const [q, r] of [[1, 0], [2, -1], [3, -2], [4, -3], [5, -3], [6, -3], [7, -4]]) {
+    for (let i = 0; i < 4; i++) {
+      const open = await page.evaluate(() => {
+        const el = document.getElementById('tutorial');
+        const o = !el.classList.contains('hidden');
+        if (o) document.getElementById('btn-tutorial-ok').click();
+        return o;
+      });
+      if (!open) break;
+      await page.waitForTimeout(120);
+    }
+    const moved = await page.evaluate(([mq, mr]) => window.game.moveTo(window.game.hexAt(mq, mr)), [q, r]);
+    if (!moved) { problems.push(`tutorial2 walkthrough could not step to ${q},${r}`); break; }
+    await page.waitForTimeout(250);
+    if (await page.evaluate(() => window.__cinematic.isActive() || !!window.__battle)) {
+      if (await page.evaluate(() => window.game.state.position.key === '4,-3')) sawAmbush = true;
+    }
+    await settleBattleIfAny();
+    const pos = await page.evaluate(() => ({ enc: window.game.state.position.encounter, status: window.game.state.status }));
+    if (pos.status !== 'playing') break;
+    if (pos.enc === 'battle') {
+      await page.evaluate(() => { const el = document.getElementById('tutorial'); if (!el.classList.contains('hidden')) document.getElementById('btn-tutorial-ok').click(); });
+      await page.evaluate(() => window.game.enter(false));
+      await page.waitForFunction(() => !!window.__battle, null, { timeout: 30000 });
+      const arena = await page.evaluate(() => {
+        const b = window.__battle;
+        return {
+          h00: b.state.heights['0,0'],
+          hRamp: b.state.heights['0,1'],
+          enemies: b.state.units.filter((u) => u.isEnemy).map((u) => u.pos).sort().join('|'),
+          raised: Object.values(b.state.heights).filter((h) => h > 0).length,
+        };
+      });
+      if (arena.h00 !== 2 || arena.hRamp !== 1) problems.push('guard arena recipe heights not applied: ' + JSON.stringify(arena));
+      if (arena.enemies !== '0,0|1,-1|2,-1') problems.push('guard arena fixed spawns not applied: ' + JSON.stringify(arena));
+      if (arena.raised !== 7) problems.push('recipe arena should have exactly the 7 authored raised tiles: ' + JSON.stringify(arena));
+      await page.screenshot({ path: path.join(OUT, '64-guard-arena.png') });
+      await settleBattleIfAny();
+    }
+  }
+  if (!sawAmbush) problems.push('the scripted ambush did not fire on the left road');
+  const scn2End = await page.evaluate(() => ({ status: window.game.state.status }));
+  if (scn2End.status !== 'won') problems.push('tutorial2 walkthrough did not win: ' + JSON.stringify(scn2End));
+  await page.evaluate(() => { const el = document.getElementById('tutorial'); if (!el.classList.contains('hidden')) document.getElementById('btn-tutorial-ok').click(); });
+  await page.waitForFunction(() => !document.getElementById('overlay').classList.contains('hidden'), null, { timeout: 15000 }).catch(() => problems.push('no end overlay after tutorial2'));
+  // Leaving the tutorial must undo the configPatch (the fatigue table returns).
+  await page.click('#btn-overlay-new');
+  await page.waitForTimeout(900);
+  const restored = await page.evaluate(() => ({ byStep9: window.game.config.fatigue.byStep[9], byStep5: window.game.config.fatigue.byStep[5], scenario: !!window.game.scenario }));
+  // The default table has byStep[9] = 75 and byStep[5] = 5; the patch had set [5] = 100.
+  if (restored.scenario || restored.byStep9 !== 75 || restored.byStep5 !== 5) problems.push('configPatch was not undone after the tutorial: ' + JSON.stringify(restored));
+
   // The menu's Tutorial button starts the (first unfinished) tutorial map.
   await page.goto(URL.replace(/\?.*$/, '') + '?seed=777&nostart=1', { waitUntil: 'load', timeout: 60000 });
   await page.waitForTimeout(1200);
   await page.click('#btn-menu');
   await page.waitForTimeout(150);
   await page.click('#btn-tutorial');
-  await page.waitForFunction(() => window.game && window.game.scenario && window.game.scenario.id === 'tutorial1', null, { timeout: 15000 }).catch(() => problems.push('the menu Tutorial button did not start the tutorial map'));
+  // Both maps are complete by now, so the chain settles on its last map.
+  await page.waitForFunction(() => window.game && window.game.scenario && window.game.scenario.id === 'tutorial2', null, { timeout: 15000 }).catch(() => problems.push('the menu Tutorial button did not start the tutorial map'));
   const menuBoot = await page.evaluate(() => ({
     url: window.location.search,
     card: !document.getElementById('tutorial').classList.contains('hidden'),
   }));
-  if (!/scenario=tutorial1/.test(menuBoot.url)) problems.push('the tutorial did not land in the address bar: ' + menuBoot.url);
+  if (!/scenario=tutorial2/.test(menuBoot.url)) problems.push('the tutorial did not land in the address bar: ' + menuBoot.url);
   if (!menuBoot.card) problems.push('starting the tutorial from the menu did not show the opening card');
 
   console.log(problems.length ? 'PROBLEMS:\n' + problems.join('\n') : 'OK: no errors, all checks passed.');

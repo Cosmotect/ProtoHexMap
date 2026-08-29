@@ -42,7 +42,7 @@ export const TUTORIAL_1 = {
   supplies: 10,
   maxSupplies: 60,
   goal: { type: 'reach', tile: '9,-4' },
-  next: null,   // tutorial2 hooks in here later
+  next: 'tutorial2',
   // Short hint cards (texts: scenario.tutorial1.card.<id>.* in the locales).
   // Deliberately few - the corridor itself does the teaching.
   cards: [

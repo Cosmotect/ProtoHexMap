@@ -278,11 +278,23 @@ everything downstream (renderer, HUD, combat) sees an ordinary, just small, map.
 * **Why**: fully deterministic, so every tutorial map gets an end-to-end
   walkthrough in the smoke test and cannot break silently (the old seeded NPE
   broke whenever worldgen changed).
-* **Status**: map 1 "The Road" is COMPLETE (corridor: move, fog, unavoidable
-  first fight, cache-pays-for-camp beat, waypoint; 4 hint cards). Planned:
-  map 2 "The Fork" (choice of routes, terrain costs, scripted ambush, shop,
-  high-ground arena recipe); map 3 "The Withering" (a compressed scripted
-  Stasis with a mini-Seed); then the old seeded NPE gets removed.
+* **Arena recipes are LIVE**: a battle encounter's `recipe` now really shapes
+  its arena - `tiles: { 'q,r': { elevation } }` authors the heights (the random
+  elevation wave stays off when a recipe brings its own), and
+  `spawns: { party: [keys], enemies: [keys] }` pins units to authored tiles
+  positionally (extras fall back to random). Flows through the existing
+  `hex.recipe` -> flyIn -> localview path, so normal runs can use recipes too.
+* **Status**: map 1 "The Road" COMPLETE (corridor: move, fog, unavoidable first
+  fight, cache-pays-for-camp beat, waypoint; 4 hint cards; next: tutorial2).
+  Map 2 "The Fork" COMPLETE: a Y island - short steep road (hill + mountain
+  prices) vs long flat road (shop with fixed stock + cache); compressed fatigue
+  via configPatch ({2:0,3:30,4:70,5:100}) with a scripted two-Husk ambush at
+  step 4 (the 4th tile of EITHER road is deliberately empty so it always
+  lands); the waypoint guarded by a fight on an authored plateau arena
+  (enemies spawn on high ground, a ramp on one side, a sheer drop on the
+  other - the shove lesson). 5 hint cards. Planned: map 3 "The Withering"
+  (a compressed scripted Stasis with a mini-Seed); then the old seeded NPE
+  gets removed.
 
 ## How the code is split
 

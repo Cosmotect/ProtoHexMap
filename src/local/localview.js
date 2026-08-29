@@ -67,9 +67,13 @@ export class LocalMapView {
     // Unused for 'camp' (the campfire keeps its own composed azimuth).
     this.worldAzimuth = worldAzimuth;
     this.map = generateLocalMap(this.config, recipe);
+    this.recipe = recipe ?? null;
     // Battle arenas get rolling tile heights (high ground matters in combat);
     // the campfire start screen stays flat and calm.
-    if (layout !== 'camp') applyElevationWave(this.map, () => rng.random(), COMBAT_CONFIG.combat.elevationLevels);
+    // A recipe that authors its own elevations IS the arena's height map: the
+    // random wave stays off so the designed terrain comes through untouched.
+    const recipeHasHeights = !!recipe?.tiles && Object.values(recipe.tiles).some((t) => t.elevation != null);
+    if (layout !== 'camp' && !recipeHasHeights) applyElevationWave(this.map, () => rng.random(), COMBAT_CONFIG.combat.elevationLevels);
     this.scene = new THREE.Scene();
     // The local map's own background settings, separate from the world map's.
     const bg = this.config.localBackground;
@@ -438,11 +442,23 @@ export class LocalMapView {
 
   // Units land on random distinct tiles. Used both for the fly-in stage dressing
   // and (via beginBattle) for the real fight; returns where everyone stood.
-  placeUnits(party, enemies, rng) {
+  // `fixed` (from an arena recipe's `spawns`) pins units to authored tiles,
+  // positionally; anyone beyond the authored list still lands on a random tile.
+  placeUnits(party, enemies, rng, fixed = null) {
     const used = new Set();
-    const partyKeys = pickRandomTiles(this.map, party.length, () => rng.random(), used);
-    partyKeys.forEach((k) => used.add(k));
-    const enemyKeys = pickRandomTiles(this.map, enemies.length, () => rng.random(), used);
+    const resolve = (defs, authored) => {
+      const keys = [];
+      for (let i = 0; i < defs.length; i++) {
+        const k = authored?.[i];
+        if (k && this.map.hexes.has(k) && !used.has(k)) { keys.push(k); used.add(k); }
+        else keys.push(null);
+      }
+      const fillers = pickRandomTiles(this.map, keys.filter((k) => !k).length, () => rng.random(), used);
+      let f = 0;
+      return keys.map((k) => k ?? (used.add(fillers[f]), fillers[f++]));
+    };
+    const partyKeys = resolve(party, fixed?.party);
+    const enemyKeys = resolve(enemies, fixed?.enemies);
 
     party.forEach((u, i) => this.addPartyToken(u, i, partyKeys[i]));
     const enemyColor = this.config.encounters.visuals.battle?.color ?? 0xe2474b;
@@ -482,7 +498,7 @@ export class LocalMapView {
   beginBattle({ party, enemies }) {
     this.clearUnits();
     const rng = this.rng ?? { random: Math.random };
-    const placement = this.placeUnits(party, enemies, rng);
+    const placement = this.placeUnits(party, enemies, rng, this.recipe?.spawns ?? null);
     const heights = {};
     for (const tile of this.map.hexes.values()) heights[tile.key] = tile.elevation ?? 0;
     return { ...placement, heights };
