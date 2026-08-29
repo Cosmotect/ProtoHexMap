@@ -75,7 +75,7 @@ export const TUTORIAL_2 = {
     { afterSteps: 4, enemies: [{ name: 'Husk', hp: 12, power: 0 }, { name: 'Husk', hp: 12, power: 0 }] },
   ],
   goal: { type: 'reach', tile: '7,-4' },
-  next: null,   // tutorial3 hooks in here later
+  next: 'tutorial3',
   cards: [
     { id: 'fatigue', at: 'start', target: { el: '#fatigue-bar' } },
     { id: 'fork', at: 'arrive', tile: '2,-1', target: { tile: '3,-2' } },

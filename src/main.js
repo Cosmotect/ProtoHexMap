@@ -5,7 +5,7 @@ import { Game } from './game.js';
 import { MapRenderer } from './render.js';
 import { createUI } from './ui.js';
 import { resolveSeed } from './rng.js';
-import { createTutorial, NPE_SEED } from './tutorial.js';
+import { createTutorial } from './tutorial.js';
 import { scenarioById } from './scenarios/index.js';
 import { createSettings, deepClone } from './settings.js';
 import { createCombatCinematic } from './local/transition.js';
@@ -59,7 +59,6 @@ const container = document.getElementById('scene');
 // URL switches, handy for comparing variants without editing config.js:
 //   ?seed=1234        same map every time
 //   ?orient=pointy    pointy-top world hexes instead of the default flat-top
-//   ?npe=1            start the guided new player experience
 const params = new URLSearchParams(window.location.search);
 if (params.get('orient') === 'flat' || params.get('orient') === 'pointy') CONFIG.map.orientation = params.get('orient');
 
@@ -123,7 +122,7 @@ function initSplash() {
   const el = document.getElementById('splash');
   if (!el) return;
   // Test / guide / scenario entrances skip the ceremony.
-  if (params.get('nostart') || params.get('npe') || params.get('scenario')) { el.remove(); return; }
+  if (params.get('nostart') || params.get('scenario')) { el.remove(); return; }
   setTimeout(() => {
     el.style.transitionDuration = `${CONFIG.start.splashFadeMs}ms`;
     el.classList.add('fade');
@@ -331,7 +330,6 @@ ui = createUI(CONFIG, {
     game.enter(false);
   },
   onLoadSeed: (value) => startRun(resolveSeed(value)),
-  onStartNpe: () => startRun(resolveSeed(NPE_SEED), { npe: true }),
 });
 const tutorial = createTutorial({ config: CONFIG, ui, renderer });
 // The end screen waits for the guide's last card.
@@ -463,10 +461,9 @@ function startRun(seed, opts = {}) {
   ui.hideEnd();
   ui.update(game);
   ui.renderLog(game);
-  if (opts.npe) tutorial.start();
   // A scenario drops straight onto its map (no campfire, no roster - the real
   // run teaches those) and brings its own short hint cards.
-  else if (activeScenario) { if (activeScenario.cards?.length) tutorial.startScenario(activeScenario); }
+  if (activeScenario) { if (activeScenario.cards?.length) tutorial.startScenario(activeScenario); }
   else if (!params.get('nostart')) enterStartScreen();
 }
 
@@ -629,7 +626,6 @@ renderer.onHexClick = (hex) => {
   if (ui.dialogOpen()) { ui.flashDialog(); return; }
   if (tutorial.isBlocking()) return;
   if (renderer.busy) return;
-  if (game.canMoveTo(hex) && tutorial.interceptMove(hex, game)) return;
   // A step whose terrain damage would disable someone asks for confirmation first.
   if (game.canMoveTo(hex) && hex.hpCost > 0) {
     const doomed = game.livingUnits().filter((u) => u.hp <= hex.hpCost);
@@ -656,7 +652,6 @@ container.addEventListener('pointerdown', () => { if (ui.dialogOpen()) ui.flashD
 // ?scenario=<id> boots straight into a hand-authored map (the tutorial series).
 const bootScenario = params.get('scenario') ? scenarioById(params.get('scenario')) : null;
 if (bootScenario) startRun(1, { scenario: bootScenario });   // fixed seed: scenarios are deterministic
-else if (params.get('npe')) startRun(resolveSeed(NPE_SEED), { npe: true });
 else startRun(resolveSeed(params.get('seed')));
 initSplash();
 window.__startScreen = () => startScreen; // for debugging / automated tests

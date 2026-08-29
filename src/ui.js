@@ -50,7 +50,6 @@ export function createUI(config, handlers) {
   $('btn-enter').addEventListener('click', () => handlers.onEnter());
   $('btn-menu').addEventListener('click', () => toggleMenu());
   $('btn-settings').addEventListener('click', () => { closeMenu(); handlers.onOpenSettings(); });
-  $('btn-npe').addEventListener('click', () => { closeMenu(); handlers.onStartNpe(); });
   // The tutorial: the first unfinished hand-authored map of the chain.
   $('btn-tutorial').addEventListener('click', () => { closeMenu(); handlers.onStartTutorial && handlers.onStartTutorial(); });
   function toggleMenu() { els.menu.classList.toggle('hidden'); updateBlur(); }

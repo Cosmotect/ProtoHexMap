@@ -41,7 +41,7 @@ Handy URL switches (add them to the address):
 |---|---|
 | `?seed=1234` | Same map every time. The seed is also shown in the HUD and saved in the address bar. |
 | `?orient=pointy` | Pointy-top world hexes instead of the default flat-top. |
-| `?npe=1` | Start the guided new player experience (fixed map, interface revealed piece by piece). |
+| `?scenario=tutorial1` | Boot straight into a tutorial map (tutorial1 / tutorial2 / tutorial3). |
 | `?nostart=1` | Skip the Everlands splash and the campfire start screen (used by the automated test). |
 
 Keyboard: **E** enter the encounter / make camp (in a fight: end the whole turn),

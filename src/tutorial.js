@@ -1,38 +1,26 @@
-// New player experience (NPE): a guided first run on a fixed map.
-// The HUD starts empty and pieces appear as they become relevant; short cards
-// explain each mechanic the first time it matters. While a card is open (or a piece is
-// still gliding into place) all input is blocked except the menu. Ends when the first
-// Stasis Colony falls (or the run ends), after which the run continues as a normal one.
+// The tutorial guide: short hint cards over the hand-authored scenario maps
+// (src/scenarios/). The maps themselves do the teaching - a card only points.
 //
-// Every word comes from the locale tables (npe.*) and every number from the config (text.js).
+// Each scenario lists its cards as { id, at, ... } triggers; onEvent matches
+// them against the game events main.js forwards here (plus 'combatStart',
+// which main.js sends when the battle engine takes over). Texts live in the
+// locale tables as scenario.<mapId>.card.<cardId>.title / .text, filled with
+// the config placeholders (text.js). While a card is open all input is
+// blocked except the menu; Skip hides the rest of the map's cards.
+//
+// (The old seeded "new player experience" that guided a full random run lived
+// here until the scenario maps replaced it.)
 
-import { tc, tallTerrainSentence, firstRiskyStep, encounterLabel, encounterInfo } from './text.js';
-import { t, joinList } from './i18n.js';
+import { tc } from './text.js';
+import { t } from './i18n.js';
 import { uiScale } from './ui.js';
 
-export const NPE_SEED = 6;   // fixed seed: every new player sees the same map (chosen for a battle, event, treasure and shop close to the start)
-
-const ARRIVE_MS = 1500;      // a revealed HUD piece glides from the screen centre to its place in this time (and shrinks from 2x)
-
-// HUD pieces, in the order they get revealed.
-const PIECES = {
-  statusbar: '#statusbar',
-  fatiguebar: '#fatigue-bar',
-  party: '#party',
-  legend: '.bottom-right',
-};
-// (The event log is not here: it is off by default and lives in Settings > General,
-// so the guide neither hides nor reveals it.)
-// (The menu is never hidden: it is the one control that always answers, but cards may point at it.)
-const TARGETS = { ...PIECES, menu: '#menu-wrap' };
-
-// Card targets: a HUD piece name, { el: cssSelector }, { tile: hexKey } (green ring on the
-// tile, line to its top) or { marker: hexKey } (green outline behind the 3D shape).
+// Card targets: { el: cssSelector } (green outline on a HUD piece),
+// { tile: hexKey } (green ring on a world tile) or { marker: hexKey } (green
+// outline behind an encounter's 3D shape). A green dashed line runs from the
+// card to whichever it is.
 export function createTutorial({ config, ui, renderer }) {
-  // mode: 'npe' = the old guided seeded run; 'scenario' = short scripted hint
-  // cards on a hand-authored map (src/scenarios/), triggered by the scenario's
-  // own card list instead of event heuristics.
-  const state = { active: false, mode: 'npe', scenario: null, seen: new Set(), queue: [], showing: false, finishAfter: false, moving: 0, current: null };
+  const state = { active: false, scenario: null, seen: new Set(), queue: [], showing: false, current: null };
   const $ = (sel) => document.querySelector(sel);
   const card = $('#tutorial');
   const titleEl = $('#tutorial-title');
@@ -43,8 +31,8 @@ export function createTutorial({ config, ui, renderer }) {
   let onIdle = null;          // main.js hook: called whenever no card is waiting any more
 
   $('#btn-tutorial-ok').addEventListener('click', next);
-  // "Go" is only shown on choice cards (e.g. climbing a mountain): it runs the card's
-  // onGo instead of its onDone, then moves on.
+  // "Go" is only shown on choice cards: it runs the card's onGo instead of its
+  // onDone, then moves on. (No scenario card uses it yet; the mechanism stays.)
   $('#btn-tutorial-go').addEventListener('click', () => {
     const go = state.current?.onGo;
     if (state.current) state.current.onDone = null;
@@ -64,53 +52,21 @@ export function createTutorial({ config, ui, renderer }) {
     if (currentTarget && (currentTarget.tile || currentTarget.marker)) renderer.flashHighlight();
   }
 
-  function targetElement(t) {
-    if (!t) return null;
-    const sel = typeof t === 'string' ? TARGETS[t] : t.el;
-    return sel ? $(sel) : null;
+  function targetElement(t2) {
+    return t2 && t2.el ? $(t2.el) : null;
   }
   // Green outline on the element (or 3D object) the open card points at.
-  function setTarget(t) {
+  function setTarget(t2) {
     const prev = targetElement(currentTarget);
     if (prev) prev.classList.remove('npe-target', 'npe-target-flash');
-    currentTarget = t;
-    const el = targetElement(t);
+    currentTarget = t2;
+    const el = targetElement(t2);
     if (el) el.classList.add('npe-target');
-    renderer.setHighlight(t && t.marker ? { hexKey: t.marker } : t && t.tile ? { tile: t.tile } : null);
+    renderer.setHighlight(t2 && t2.marker ? { hexKey: t2.marker } : t2 && t2.tile ? { tile: t2.tile } : null);
   }
 
   function updateBlocker() {
     blocker.classList.toggle('hidden', !isBlocking());
-  }
-
-  function hideAll() {
-    for (const sel of Object.values(PIECES)) $(sel)?.classList.add('npe-hidden');
-  }
-
-  // Shows a piece: it spawns at the screen centre and glides to its real position.
-  function reveal(piece) {
-    const el = $(PIECES[piece]);
-    if (!el || !el.classList.contains('npe-hidden')) return;
-    el.classList.remove('npe-hidden');
-    const r = el.getBoundingClientRect();
-    const z = uiScale();   // translate lengths are in the zoomed HUD's units
-    const dx = (window.innerWidth / 2 - (r.left + r.width / 2)) / z;
-    const dy = (window.innerHeight / 2 - (r.top + r.height / 2)) / z;
-    el.style.translate = `${dx}px ${dy}px`;
-    el.style.scale = '2';
-    void el.offsetWidth; // commit the start position before the transition begins
-    el.classList.add('npe-arrive');
-    el.style.translate = '0px 0px';
-    el.style.scale = '1';
-    state.moving += 1;
-    updateBlocker();
-    setTimeout(() => {
-      el.classList.remove('npe-arrive');
-      el.style.translate = '';
-      el.style.scale = '';
-      state.moving = Math.max(0, state.moving - 1);
-      updateBlocker();
-    }, ARRIVE_MS);
   }
 
   // ----- green line from the card to the piece it talks about -------------------
@@ -119,12 +75,12 @@ export function createTutorial({ config, ui, renderer }) {
     const a = card.getBoundingClientRect();
     const ax = a.left + a.width / 2, ay = a.top + a.height / 2;
     let end = null;
-    const t = currentTarget;
-    if (t.tile) end = renderer.tileTopScreen(t.tile);
-    else if (t.marker) end = renderer.markerScreen(t.marker);
+    const t2 = currentTarget;
+    if (t2.tile) end = renderer.tileTopScreen(t2.tile);
+    else if (t2.marker) end = renderer.markerScreen(t2.marker);
     else {
-      const el = targetElement(t);
-      if (el && !el.classList.contains('npe-hidden') && !el.classList.contains('hidden')) {
+      const el = targetElement(t2);
+      if (el && !el.classList.contains('hidden')) {
         const b = el.getBoundingClientRect();
         if (b.width > 0) end = edgePoint(b, ax, ay);
       }
@@ -143,21 +99,14 @@ export function createTutorial({ config, ui, renderer }) {
     if (dx === 0 && dy === 0) return { x: cx, y: cy };
     const sx = dx !== 0 ? (r.width / 2) / Math.abs(dx) : Infinity;
     const sy = dy !== 0 ? (r.height / 2) / Math.abs(dy) : Infinity;
-    const t = Math.min(sx, sy);
-    return { x: cx + dx * t, y: cy + dy * t };
+    const t2 = Math.min(sx, sy);
+    return { x: cx + dx * t2, y: cy + dy * t2 };
   }
   (function tick() { drawLine(); requestAnimationFrame(tick); })();
 
-  function revealAll() {
-    for (const sel of Object.values(PIECES)) {
-      const el = $(sel);
-      if (el) { el.classList.remove('npe-hidden', 'npe-arrive'); el.style.translate = ''; }
-    }
-  }
-
   // Cards are queued so they never stack: the next one waits for "Got it".
   // say(key, localeKey, params, opts): title/text come from <localeKey>.title / .text,
-  // filled with the config placeholders plus params. sayRaw takes ready-made strings.
+  // filled with the config placeholders plus params.
   // opts.target: what the card refers to (green line); opts.onDone runs after "Got it".
   function say(key, localeKey, params, opts) {
     sayRaw(key, tc(`${localeKey}.title`, config, params), tc(`${localeKey}.text`, config, params), opts);
@@ -180,7 +129,6 @@ export function createTutorial({ config, ui, renderer }) {
       card.classList.add('hidden');
       if (onIdle) onIdle();
       updateBlocker();
-      if (state.finishAfter) finish('complete');
       return;
     }
     state.showing = true;
@@ -197,38 +145,16 @@ export function createTutorial({ config, ui, renderer }) {
     updateBlocker();
   }
 
-  function start() {
-    state.active = true;
-    state.mode = 'npe';
-    state.scenario = null;
-    const kicker = $('#tutorial .tutorial-kicker');
-    if (kicker) kicker.textContent = t('npe.kicker');
-    state.seen.clear();
-    state.queue.length = 0;
-    state.showing = false;
-    state.finishAfter = false;
-    state.moving = 0;
-    hideAll();
-    say('welcome', 'npe.welcome', {}, { target: { tile: '0,0' } });
-  }
-
-  // ----- scenario mode (the tutorial maps) ---------------------------------
-  // The HUD stays fully visible: a scenario map teaches through its geometry,
-  // the cards are only short hints, listed in the scenario itself as
-  // { id, at, ... } triggers. Texts live in the locale tables as
-  // scenario.<mapId>.card.<cardId>.title / .text (config placeholders work).
+  // ----- scenario cards ------------------------------------------------------
   function startScenario(scenario) {
     state.active = true;
-    state.mode = 'scenario';
     state.scenario = scenario;
-    // The card header names the map instead of the old guide's banner.
+    // The card header names the map.
     const kicker = $('#tutorial .tutorial-kicker');
     if (kicker) kicker.textContent = t(`scenario.${scenario.id}.name`);
     state.seen.clear();
     state.queue.length = 0;
     state.showing = false;
-    state.finishAfter = false;
-    state.moving = 0;
     for (const c of scenario.cards ?? []) if (c.at === 'start') showScenarioCard(c);
   }
 
@@ -236,9 +162,26 @@ export function createTutorial({ config, ui, renderer }) {
     say(`sc:${c.id}`, `scenario.${state.scenario.id}.card.${c.id}`, {}, { target: c.target ?? null, ...opts });
   }
 
-  // Card triggers, matched against the game events main.js forwards here
-  // (plus 'combatStart', which main.js sends when the battle engine takes over).
-  function onScenarioEvent(type, payload, game) {
+  function finish(reason) {
+    if (!state.active) return;
+    // Never leave the game waiting on a card that will not be answered.
+    const done = state.current?.onDone;
+    state.current = null;
+    if (done) done();
+    state.active = false;
+    state.queue.length = 0;
+    state.showing = false;
+    setTarget(null);
+    card.classList.add('hidden');
+    updateBlocker();
+    if (reason === 'skipped') ui.showBanner(t('banner.skipped'), 1400);
+    if (onIdle) onIdle();
+  }
+
+  // Called for every game event from main.js (plus 'combatStart' from the
+  // combat bridge): matches the scenario's card triggers.
+  function onEvent(type, payload, game) {
+    if (!state.active) return;
     for (const c of state.scenario?.cards ?? []) {
       if (state.seen.has(`sc:${c.id}`)) continue;
       if (c.at === 'arrive') {
@@ -253,126 +196,11 @@ export function createTutorial({ config, ui, renderer }) {
     if (type === 'end') finish('end');
   }
 
-  function finish(reason) {
-    if (!state.active) return;
-    // Never leave the game waiting on a card that will not be answered.
-    const done = state.current?.onDone;
-    state.current = null;
-    if (done) done();
-    state.active = false;
-    state.queue.length = 0;
-    state.showing = false;
-    state.moving = 0;
-    setTarget(null);
-    card.classList.add('hidden');
-    revealAll();
-    updateBlocker();
-    if (reason === 'skipped') ui.showBanner(t('banner.skipped'), 1400);
-    if (onIdle) onIdle();
-  }
-
-  // Called for every game event from main.js.
-  function onEvent(type, payload, game) {
-    if (!state.active) return;
-    if (state.mode === 'scenario') { onScenarioEvent(type, payload, game); return; }
-    const s = game.state;
-
-    if (type === 'move') {
-      const turn = s.turn;
-      if (turn === 1) say('fog', 'npe.fog', { tall: tallTerrainSentence(config) }, { target: { tile: '-1,2' } });
-      if (turn === 2) say('party', 'npe.party', {}, { target: 'party', onShow: () => reveal('party') });
-      if (turn === 3) {
-        const risky = firstRiskyStep(config);
-        const forceable = joinList(config.fatigue.forceable.map((k) => `<b>${encounterLabel(k).toLowerCase()}</b>`), 'or');
-        // The bar is the thing being explained, so it arrives with the card.
-        const boxes = Object.keys(config.fatigue.byStep).map(Number).filter(Number.isFinite);
-        say('fatigue', 'npe.fatigue',
-          {
-            from: risky ? t('npe.fatigue.fromStep', { n: risky }) : t('npe.fatigue.soon'),
-            forceable,
-            boxes: boxes.length ? Math.max(...boxes) : 0,
-          },
-          { target: { el: '#fatigue-bar' }, onShow: () => { reveal('fatiguebar'); reveal('statusbar'); } });
-      }
-      if (s.fatigue > 0) {
-        // The guide keeps the restoration place vague on purpose, so it is left out of this list.
-        const resets = Object.entries(config.fatigue.resetOn)
-          .filter(([k, r]) => r === 'always' && k !== 'acolyte')
-          .map(([k]) => (k === 'camp' ? t('reset.camp') : encounterLabel(k).toLowerCase()));
-        say('tired', 'npe.tired', { fatigue: s.fatigue, resets: joinList(resets) }, { target: { el: '#fatigue-bar' } });
-      }
-    }
-
-    // Arriving on an encounter tile for the first time: the encounter card comes BEFORE
-    // anything the tile does (a fatigue roll, a forced fight), so the game holds the
-    // arrival until the card is acknowledged.
-    if (type === 'arrive' && payload.hex.encounter && !state.seen.has('encounters')) {
-      payload.hold = true;
-      say('encounters', 'npe.encounters', {},
-        { target: { marker: payload.hex.key }, onShow: () => reveal('statusbar'), onDone: () => game.resumeArrival() });
-    }
-
-    if (type === 'change' && s.status === 'playing' && !s.position.encounter && s.turn >= 6) {
-      say('camp', 'npe.camp', {}, { target: { el: '#stat-supplies' }, onShow: () => reveal('statusbar') });
-    }
-
-    if (type === 'forced') {
-      say('forced', 'npe.forced', {}, { target: { el: '#dialog' } });
-    }
-
-    if (type === 'dialog') {
-      const k = payload.kind;
-      const kind =
-        k === 'battle' ? (payload.intro ? 'event' : payload.result?.seedFight ? 'stasisSeed' : payload.result?.colonyFight ? 'stasisColony' : 'battle') :
-        k === 'shop' ? 'shop' :
-        k === 'acolyte' ? 'acolyte' :
-        k === 'supplies' ? (payload.titleKey === 'treasure.title' ? 'treasure' : 'event') :
-        'event';
-      sayRaw(`enc:${kind}`, encounterLabel(kind), `<p>${encounterInfo(kind, config)}</p>`, { target: { el: '#dialog' } });
-      if (k === 'battle') say('battle-report', 'npe.report', {}, { target: { el: '#dialog' }, onShow: () => reveal('legend') });
-    }
-
-    if (type === 'camp') {
-      say('camped', 'npe.rested', {}, { target: { el: '#fatigue-bar' } });
-    }
-
-    if (type === 'encounter' && payload.type === 'stasisColony' && s.lastBattle?.won) {
-      say('colonydown', 'npe.stasis', {}, { target: 'legend', onShow: () => { revealAll(); state.finishAfter = true; } });
-    }
-
-    if (type === 'end') {
-      if (s.status === 'lost') {
-        // One last card, then everything comes back and the end screen follows.
-        say('dead', 'npe.dead', {}, { target: 'party', onShow: () => { revealAll(); state.finishAfter = true; } });
-      } else {
-        finish('end');
-      }
-    }
-  }
-
   function setOnIdle(fn) { onIdle = fn; }
 
-  // Called by main.js before a move. Returns true when the guide takes over the click:
-  // the first step onto costly terrain (a mountain) gets a card with "climb" / "stay".
-  function interceptMove(hex, game) {
-    if (!state.active || state.mode === 'scenario' || state.showing) return false;
-    const tr = config.tileTypes[hex.type];
-    if (!tr || (!(tr.supplyCost > 0) && !(tr.hpCost > 0))) return false;
-    const key = `climb:${hex.type}`;
-    if (state.seen.has(key)) return false;
-    say(key, 'npe.climb', {
-      terrain: t(`terrain.${hex.type}`).toLowerCase(),
-      supplies: tr.supplyCost, hp: tr.hpCost, bonus: tr.revealBonus, height: tr.terrainHeight,
-    }, {
-      target: { tile: hex.key },
-      choice: { go: t('npe.climb.go'), stay: t('npe.climb.stay'), onGo: () => game.moveTo(hex) },
-    });
-    return true;
-  }
+  // True while a card waits for "Got it": the world, the Enter button and the
+  // keyboard ignore input, the menu does not.
+  function isBlocking() { return state.active && state.showing; }
 
-  // True while a card waits for "Got it" or a HUD piece is still gliding into place:
-  // the world, the Enter button and the keyboard ignore input, the menu does not.
-  function isBlocking() { return state.active && (state.showing || state.moving > 0); }
-
-  return { start, startScenario, finish, onEvent, interceptMove, isActive: () => state.active, isBlocking, setOnIdle };
+  return { startScenario, finish, onEvent, isActive: () => state.active, isBlocking, setOnIdle };
 }

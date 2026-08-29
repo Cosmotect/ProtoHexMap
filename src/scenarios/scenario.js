@@ -70,6 +70,7 @@ export function buildScenarioMap(config, scenario) {
     const hex = hexes.get(key);
     if (!hex) continue;
     hex.encounter = enc.type;
+    if (enc.type === 'stasisSeed') hex.isSeed = true;
     if (enc.enemies) {
       hex.enemies = cloneEnemies(enc.enemies);
       if (enc.title) hex.enemies.title = enc.title;
@@ -78,6 +79,18 @@ export function buildScenarioMap(config, scenario) {
     if (enc.event) hex.scenarioEvent = enc.event;
     if (enc.supplies != null) hex.scenarioSupplies = enc.supplies;
     if (enc.recipe) hex.recipe = enc.recipe;
+  }
+
+  // A scripted Stasis: the Seed comes from a stasisSeed encounter above; the
+  // future Colony sites are marked here so Game's ordinary Stasis machinery
+  // (lines, spawning, withering) picks them up like on a generated map.
+  const seed = [...hexes.values()].find((h) => h.isSeed) ?? null;
+  const colonies = [];
+  for (const col of scenario.stasis?.colonies ?? []) {
+    const hex = hexes.get(col.site);
+    if (!hex) continue;
+    hex.isColony = true;
+    colonies.push(hex);
   }
 
   const start = hexes.get(scenario.start);
@@ -92,18 +105,20 @@ export function buildScenarioMap(config, scenario) {
   const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
   for (const h of hexes.values()) { h.x -= cx; h.y -= cy; }
 
-  // The HUD's route hint: steps to the goal tile (when the goal is a place).
+  // The HUD's route hint: steps to the goal tile (or to a scripted Seed).
   let route = null;
   if (scenario.goal?.type === 'reach') {
     const goalHex = hexes.get(scenario.goal.tile);
     if (goalHex) route = shortestPath(hexes, start, goalHex);
+  } else if (scenario.goal?.type === 'seed' && seed) {
+    route = shortestPath(hexes, start, seed);
   }
 
   return {
     hexes,
     start,
-    seed: null,          // no Stasis unless a scenario scripts one (later maps)
-    colonies: [],
+    seed,
+    colonies,
     shortestPath: route ?? [start],
     bounds: { minX: minX - cx, maxX: maxX - cx, minY: minY - cy, maxY: maxY - cy },
     radius: maxRing,

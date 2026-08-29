@@ -147,22 +147,18 @@ the AUTO-simulation and must be re-measured against interactive play.
 * **Audio** (`audio.js`): synthesised with the Web Audio API, no files - the fatigue
   bar's rising / falling blips with per-play jitter. The voice is fixed in code; the
   only setting is `audio.volume`. Silent until the first click (browser rule).
-* **New player experience** (`tutorial.js`, `?npe=1`, fixed `NPE_SEED` = 6): a guided
-  first run. The HUD starts empty and appears piece by piece; cards point a green
-  dashed line at what they explain (HUD outline, tile ring, or encounter shape);
-  input outside the card is blocked, the menu always works. Arriving on an encounter
-  tile holds everything it would do until the card is acknowledged (`arrive` event
-  with `hold`, then `resumeArrival`). The first costly step (mountain) asks
-  Climb / Stay before moving. The guide ends at the first cleared Colony; "Skip guide"
-  reveals everything. All card numbers are generated from config (`text.js`).
-  NOTE: the fixed map depends on the world / encounter config.
+* **New player experience**: the tutorial scenario series (see "Scenarios" below).
+  `tutorial.js` is only the hint-card renderer now - queue, green dashed line to
+  the thing a card talks about (HUD outline, tile ring, or encounter shape),
+  input blocked outside the card with the menu always working, `hold` on arrive
+  cards (then `resumeArrival`). All card numbers come from config (`text.js`).
 * **Start flow**: a black fullscreen "Everlands" splash (`config.start`) masks
   loading; the game boots straight into the local map of the start tile - the party
   around a campfire in a composed, locked shot (`local.startCamera`). Clicking a party
   unit (token or panel row) opens the **roster** grid; picking an entry swaps that
   slot (`game.setPartyUnit`, turn 0 only). "Begin journey" (in the Enter button's
   slot) flies the camera out to the world map and the run begins. `?nostart=1` and
-  `?npe=1` skip the ceremony.
+  `?scenario=<id>` skip the ceremony.
 * **Seeds**: `?seed=...` in the URL, the HUD and the copy-link button; same seed =
   same map. The run-over overlay offers "Inspect the map".
 
@@ -255,14 +251,19 @@ everything downstream (renderer, HUD, combat) sees an ordinary, just small, map.
   groups, shop stock, fixed event ids and treasure amounts, an optional fixed party
   and supplies, scripted `ambushes` (a forced fight fires at an exact step count on
   an empty tile - fatigue stops rolling dice entirely in scenario mode), a `goal`
-  (reach a tile marked with the hidden `goal` waypoint marker) and an optional
-  `configPatch` (per-run CONFIG overrides, applied and undone by main.js).
-  `buildScenarioMap` returns the same shape `generateMap` does. A scenario without a
-  scripted Stasis simply has none (guards in advanceStasis / the renderer).
+  (`{ type: 'reach', tile }` with the hidden waypoint marker, or `{ type: 'seed' }` -
+  destroying the scripted Seed wins) and an optional `configPatch` (per-run CONFIG
+  overrides, applied and undone by main.js). A scripted Stasis: a `stasisSeed`
+  encounter becomes the Seed, and `stasis.colonies` lists the future Colony sites
+  with an authored `arriveTurn` (used as the line distance), `debuff`, `title` and
+  garrison - Game's ordinary Stasis machinery (lines, spawning, withering, curses)
+  runs on top unchanged. `buildScenarioMap` returns the same shape `generateMap`
+  does. A scenario without a Stasis simply has none (guards in advanceStasis / the
+  renderer).
 * **Entry**: `?scenario=<id>` (registry in `src/scenarios/index.js`), fixed seed,
   no splash / campfire / roster - a scenario drops straight onto its map. Restart
   keeps the scenario; New map leaves it. Reaching the goal ends the run as a
-  scenario victory (`end.scenario`); the `next` field will chain the maps.
+  scenario victory (`end.scenario`); the `next` field chains the maps.
 * **Hint cards**: a scenario lists its own cards as `{ id, at, ... }` triggers
   (`at: 'start' | 'arrive' (tile, optional hold) | 'encounter' (encounterType) |
   'combatStart' | 'camp' | ...`); texts live in the locales as
@@ -292,9 +293,14 @@ everything downstream (renderer, HUD, combat) sees an ordinary, just small, map.
   step 4 (the 4th tile of EITHER road is deliberately empty so it always
   lands); the waypoint guarded by a fight on an authored plateau arena
   (enemies spawn on high ground, a ramp on one side, a sheer drop on the
-  other - the shove lesson). 5 hint cards. Planned: map 3 "The Withering"
-  (a compressed scripted Stasis with a mini-Seed); then the old seeded NPE
-  gets removed.
+  other - the shove lesson). 5 hint cards. Map 3 "The Withering" COMPLETE:
+  a radius-3 fully revealed island with a visible mini-Seed from turn one;
+  the accelerated Stasis clock (configPatch: lineSpeed 1, witherEvery 1) and a
+  single scripted Colony ("Rot Chorus", arriveTurn 6, maxHp curse) make the
+  time pressure the lesson - dawdle and the island rots under your feet; a weak
+  (1 chevron) and a strong (4 chevrons) fight teach reading danger marks; goal
+  type 'seed'. 4 hint cards; last map of the chain (no Next). The old seeded
+  NPE (`?npe=1`, `NPE_SEED`) is REMOVED - the scenario series replaced it.
 
 ## How the code is split
 

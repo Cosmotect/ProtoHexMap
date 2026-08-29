@@ -40,14 +40,20 @@ export class Game {
     const debuffIds = Object.keys(config.stasis.debuffs);
     this.stasis = {
       seed: this.map.seed,
-      colonies: (this.map.colonies ?? []).map((hex) => ({
-        hex,
-        distance: hexDistance(this.map.seed.q, this.map.seed.r, hex.q, hex.r),
-        progress: 0,
-        active: false,
-        cleared: false,
-        debuff: this.rng.pick(debuffIds),
-      })),
+      colonies: (this.map.colonies ?? []).map((hex, i) => {
+        // A scripted Stasis (scenario.stasis.colonies[i]) fixes the arrival
+        // turn (distance walked at lineSpeed 1), the debuff and the garrison.
+        const script = scenario?.stasis?.colonies?.[i] ?? null;
+        return {
+          hex,
+          distance: script?.arriveTurn ?? hexDistance(this.map.seed.q, this.map.seed.r, hex.q, hex.r),
+          progress: 0,
+          active: false,
+          cleared: false,
+          debuff: script?.debuff ?? this.rng.pick(debuffIds),
+          script,
+        };
+      }),
       witherCharge: new Map(),   // source hex key -> accumulated wither charge
     };
 
@@ -353,7 +359,13 @@ export class Game {
   spawnColony(c) {
     c.active = true;
     c.hex.encounter = 'stasisColony';
-    c.hex.enemies = makeEnemies(this.rng, this.config.battle, c.hex.ring, 'colony');
+    // Scripted Colonies (tutorial) bring an authored garrison; the rest roll one.
+    if (c.script?.enemies) {
+      c.hex.enemies = cloneEnemies(c.script.enemies);
+      if (c.script.title) c.hex.enemies.title = c.script.title;
+    } else {
+      c.hex.enemies = makeEnemies(this.rng, this.config.battle, c.hex.ring, 'colony');
+    }
     this.addLog('log.colonySpawn', {
       where: { hex: { type: c.hex.type, biome: c.hex.biome, q: c.hex.q, r: c.hex.r } },
       debuff: { key: `debuff.${c.debuff}.name` },

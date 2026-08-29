@@ -355,59 +355,12 @@ fs.mkdirSync(OUT, { recursive: true });
   await page.screenshot({ path: path.join(OUT, '03-end.png') });
   void end;
 
-  // New player experience: HUD hidden, first card visible, party revealed after step 2.
-  await page.goto(URL.replace(/\?.*$/, '') + '?npe=1', { waitUntil: 'load', timeout: 60000 });
-  await page.waitForTimeout(1500);
-  const npe0 = await page.evaluate(() => ({
-    card: !document.getElementById('tutorial').classList.contains('hidden'),
-    party: document.getElementById('party').classList.contains('npe-hidden'),
-    stats: document.getElementById('statusbar').classList.contains('npe-hidden'),
-    menuVisible: !document.getElementById('menu-wrap').classList.contains('npe-hidden'),
-    blocker: !document.getElementById('input-block').classList.contains('hidden'),
-  }));
-  if (!npe0.card || !npe0.party || !npe0.stats || !npe0.menuVisible || !npe0.blocker) problems.push('NPE start state wrong: ' + JSON.stringify(npe0));
-  await page.waitForTimeout(300);
-  const lineToTile = await page.evaluate(() => { const l = document.querySelector('#tutorial-lines line'); if (!l) return null; const p = window.__renderer.tileTopScreen('0,0'); return { x2: +l.getAttribute('x2'), y2: +l.getAttribute('y2'), tx: p.x, ty: p.y, ring: window.__renderer.highlightRing.visible }; });
-  if (!lineToTile || Math.abs(lineToTile.x2 - lineToTile.tx) > 2 || Math.abs(lineToTile.y2 - lineToTile.ty) > 2 || !lineToTile.ring) problems.push('welcome card line does not end on the centre tile: ' + JSON.stringify(lineToTile));
-  // The menu still opens while a card is showing.
-  await page.click('#btn-menu'); await page.waitForTimeout(100);
-  const menuWhileCard = await page.evaluate(() => !document.getElementById('menu').classList.contains('hidden'));
-  if (!menuWhileCard) problems.push('menu did not open while an NPE card was showing');
-  await page.keyboard.press('Escape'); await page.waitForTimeout(100);
-  await page.screenshot({ path: path.join(OUT, '05-npe-start.png') });
-  // Input is blocked while the card is open.
-  {
-    const n = await page.evaluate(() => { const h = window.game.reachable()[0]; return [h.q, h.r]; });
-    const p = await screenPos(n[0], n[1]);
-    await page.mouse.move(p.x, p.y); await page.waitForTimeout(60); await page.mouse.down(); await page.mouse.up();
-    await page.waitForTimeout(200);
-    const turn = await page.evaluate(() => window.game.state.turn);
-    if (turn !== 0) problems.push('NPE let the player move while a card was open');
-  }
-  await page.click('#btn-tutorial-ok');
-  for (let i = 0; i < 2; i++) {
-    await waitIdle();
-    // Step onto encounter-FREE tiles: an encounter would hold the arrival behind
-    // its own card and derail the step count (the map depends on the world config).
-    const n = await page.evaluate(() => { const r = window.game.reachable(); const h = r.find((x) => !x.encounter) ?? r[0]; return [h.q, h.r]; });
-    const p = await screenPos(n[0], n[1]);
-    await page.mouse.move(p.x, p.y); await page.waitForTimeout(60); await page.mouse.down(); await page.mouse.up();
-    await page.waitForTimeout(300);
-    await page.click('#btn-tutorial-ok').catch(() => {});
-    await page.waitForTimeout(100);
-  }
-  await waitIdle();
-  const npe2 = await page.evaluate(() => ({ turn: window.game.state.turn, party: document.getElementById('party').classList.contains('npe-hidden') }));
-  if (npe2.turn !== 2 || npe2.party) problems.push('NPE did not reveal the party after step 2: ' + JSON.stringify(npe2));
-  await page.screenshot({ path: path.join(OUT, '06-npe-step2.png') });
+  // Menu, blur and the settings window (on a plain run).
+  await page.goto(URL, { waitUntil: 'load', timeout: 60000 });
+  await page.waitForTimeout(1200);
   // Legend texts are generated from the config (no stale numbers).
   const legendOk = await page.evaluate(() => document.getElementById('legend-items').textContent.includes('20 supplies'));
   if (!legendOk) problems.push('legend text does not reflect the config camp cost');
-  // Skip the guide (everything comes back).
-  await page.evaluate(() => document.getElementById('btn-tutorial-skip').click());
-  await page.waitForTimeout(200);
-  const blockerGone = await page.evaluate(() => document.getElementById('input-block').classList.contains('hidden'));
-  if (!blockerGone) problems.push('input blocker stayed after skipping the guide');
   await page.click('#btn-menu'); await page.waitForTimeout(150);
   const blurred = await page.evaluate(() => document.getElementById('scene').classList.contains('blurred'));
   if (!blurred) problems.push('world did not blur with the menu open');
@@ -421,7 +374,7 @@ fs.mkdirSync(OUT, { recursive: true });
   await page.evaluate(() => { const i = document.querySelector('[data-path="rest.cost"]'); i.value = '33'; i.dispatchEvent(new Event('change')); });
   await page.waitForTimeout(100);
   // The Enter button shows the camp cost only on tiles without an encounter, so that
-  // part of the check adapts to wherever the walk above happened to end.
+  // part of the check adapts to wherever the run happens to stand.
   const applied = await page.evaluate(() => ({ cost: window.game.config.rest.cost, label: document.getElementById('btn-enter').textContent, onEncounter: !!window.game.state.position.encounter, legend: document.getElementById('legend-items').textContent.includes('33 supplies'), stored: localStorage.getItem('hexmap-settings-v1') }));
   if (applied.cost !== 33 || (!applied.onEncounter && !applied.label.includes('33')) || !applied.legend || !applied.stored.includes('rest.cost')) problems.push('setting change did not apply everywhere: ' + JSON.stringify(applied));
   await page.screenshot({ path: path.join(OUT, '08-settings.png') });
@@ -437,67 +390,24 @@ fs.mkdirSync(OUT, { recursive: true });
   await page.click('#btn-settings-close'); await page.waitForTimeout(100);
   const unblurred = await page.evaluate(() => !document.getElementById('scene').classList.contains('blurred'));
   if (!unblurred) problems.push('blur stayed after closing settings');
-  // Climb card: first step onto a mountain asks first; "Stay" cancels, "Climb" moves.
-  await page.goto(URL.replace(/\?.*$/, '') + '?npe=1', { waitUntil: 'load', timeout: 60000 });
-  await page.waitForTimeout(1200);
-  await page.click('#btn-tutorial-ok'); await page.waitForTimeout(100);
-  {
-    const n = await page.evaluate(() => { const g = window.game; const h = g.reachable()[0]; const tr = g.config.tileTypes.mountain; Object.assign(h, { type: 'mountain', supplyCost: tr.supplyCost, hpCost: tr.hpCost, revealBonus: tr.revealBonus, terrainHeight: tr.terrainHeight }); window.__renderer.loadGame(g); return [h.q, h.r]; });
-    await page.waitForTimeout(400);
-    const p = await screenPos(n[0], n[1]);
-    await page.mouse.move(p.x, p.y); await page.waitForTimeout(60); await page.mouse.down(); await page.mouse.up();
-    await page.waitForTimeout(300);
-    const climb = await page.evaluate(() => ({ title: document.getElementById('tutorial-title').textContent, turn: window.game.state.turn, go: !document.getElementById('btn-tutorial-go').classList.contains('hidden'), ok: document.getElementById('btn-tutorial-ok').textContent, ring: window.__renderer.highlightRing.visible }));
-    if (!/Crossing/.test(climb.title) || climb.turn !== 0 || !climb.go || climb.ok !== 'Stay here' || !climb.ring) problems.push('climb card wrong: ' + JSON.stringify(climb));
-    await page.screenshot({ path: path.join(OUT, '11-climb-card.png') });
-    await page.click('#btn-tutorial-ok'); await page.waitForTimeout(200);
-    const stayed = await page.evaluate(() => window.game.state.turn);
-    if (stayed !== 0) problems.push('"Stay here" still moved the party');
-    // The card shows once: the next click moves without asking.
-    await page.mouse.move(p.x, p.y); await page.waitForTimeout(60); await page.mouse.down(); await page.mouse.up();
-    await page.waitForTimeout(600);
-    const moved = await page.evaluate(() => ({ turn: window.game.state.turn, supplies: window.game.state.supplies }));
-    if (moved.turn !== 1 || moved.supplies !== 50) problems.push('second click did not climb: ' + JSON.stringify(moved));
-    await dismissDialog();
-  }
-  // Encounter card precedes a forced encounter: arriving on an encounter tile with the guide active holds the arrival.
-  await page.goto(URL.replace(/\?.*$/, '') + '?npe=1', { waitUntil: 'load', timeout: 60000 });
-  await page.waitForTimeout(1200);
-  await page.click('#btn-tutorial-ok'); await page.waitForTimeout(100);
+
+  // A fatigue-forced fight on a plain run: the dive starts by itself and the
+  // battle opens with the AMBUSH enemy phase.
   await page.evaluate(() => { const g = window.game; g.state.fatigueSteps = 9; g.state.fatigue = 100; g.emit('change'); });
   {
-    // Plant a battle on a neighbouring tile (ring 1 is kept empty by the generator) and rebuild the scene.
-    const n = await page.evaluate(() => { const g = window.game; const h = g.reachable()[0]; h.encounter = 'battle'; h.enemies = [{ name: 'Test', hp: 10, maxHp: 10, power: 9, alive: true }]; window.__renderer.loadGame(g); return [h.q, h.r]; });
+    const n = await page.evaluate(() => { const g = window.game; const h = g.reachable().find((x) => !x.encounter) ?? g.reachable()[0]; h.encounter = 'battle'; h.enemies = [{ name: 'Test', hp: 10, maxHp: 10, power: 9, alive: true }]; window.__renderer.loadGame(g); return [h.q, h.r]; });
     await page.waitForTimeout(400);
     const p = await screenPos(n[0], n[1]);
     await page.mouse.move(p.x, p.y); await page.waitForTimeout(60); await page.mouse.down(); await page.mouse.up();
-    await page.waitForTimeout(700);
-    // step 1 also queues the "fog" card first; dismiss until the encounters card shows, without ever seeing a battle dialog first
-    let sawBattleEarly = false, title = '';
-    for (let i = 0; i < 4; i++) {
-      title = await page.evaluate(() => document.getElementById('tutorial-title').textContent);
-      const dlg = await page.evaluate(() => !document.getElementById('dialog').classList.contains('hidden'));
-      if (dlg) { sawBattleEarly = true; break; }
-      if (title === 'Encounters') break;
-      await page.click('#btn-tutorial-ok'); await page.waitForTimeout(150);
-    }
-    if (sawBattleEarly || title !== 'Encounters') problems.push(`encounter card did not precede the forced encounter (title: ${title}, dialog early: ${sawBattleEarly})`);
-    const markerHl = await page.evaluate(() => !!window.__renderer.highlightMarker);
-    if (!markerHl) problems.push('encounter card did not outline the 3D marker');
-    const chev = await page.evaluate(() => { const g = window.game; const rec = window.__renderer.tiles.get(g.state.position.key); return rec?.marker?.userData.chevrons.length; });
-    console.log('chevrons on this battle:', chev);
-    await page.screenshot({ path: path.join(OUT, '09-npe-encounter-card.png') });
-    await page.click('#btn-tutorial-ok');
-    // The dive is wall-clock 1.5s, but the software renderer here can run below
-    // 1 fps late in the test, so poll instead of fixed waits. The forced fight
-    // is interactive and opens with an AMBUSH enemy phase; win it from the console.
     await page.waitForFunction(() => !!window.__battle, null, { timeout: 30000 }).catch(() => {});
-    const fought = await page.evaluate(() => (window.__battle ? { forcedOk: true } : null));
-    if (!fought) problems.push('forced encounter did not start an interactive battle');
+    if (!(await page.evaluate(() => !!window.__battle))) problems.push('forced encounter did not start an interactive battle');
     await page.evaluate(() => window.__battle && window.__battle.debugResolve(true));
     await page.waitForFunction(() => !document.getElementById('dialog').classList.contains('hidden'), null, { timeout: 25000 }).catch(() => {});
-    const after = await page.evaluate(() => ({ dialog: !document.getElementById('dialog').classList.contains('hidden'), title: document.getElementById('tutorial-title').textContent, mode: window.__cinematic.mode(), lastBattle: !!window.game.state.lastBattle, posEnc: window.game.state.position.encounter, turn: window.game.state.turn }));
-    if (!after.dialog) problems.push('forced encounter did not run after the encounter card: ' + JSON.stringify(after));
+    const after = await page.evaluate(() => ({ dialog: !document.getElementById('dialog').classList.contains('hidden'), lastBattle: !!window.game.state.lastBattle }));
+    if (!after.dialog || !after.lastBattle) problems.push('forced battle did not produce a report: ' + JSON.stringify(after));
+    await dismissDialog();
+    await dismissDialog();
+    await page.waitForFunction(() => window.__cinematic.mode() === 'idle', null, { timeout: 25000 }).catch(() => {});
   }
 
   // The start flow: splash, the campfire start screen, the roster, Begin journey.
@@ -556,7 +466,7 @@ fs.mkdirSync(OUT, { recursive: true });
     legendHasGoal: document.getElementById('legend-items').textContent.includes('Waypoint'),
     card: !document.getElementById('tutorial').classList.contains('hidden'),
     cardTitle: document.getElementById('tutorial-title').textContent,
-    hudVisible: !document.getElementById('party').classList.contains('npe-hidden'),
+    hudVisible: !document.getElementById('party').classList.contains('hidden'),
   }));
   if (scn.id !== 'tutorial1' || scn.tiles !== 12 || scn.start !== '0,0') problems.push('scenario map wrong: ' + JSON.stringify(scn));
   if (scn.startScreen || scn.splash) problems.push('scenario boot should skip the splash and campfire: ' + JSON.stringify(scn));
@@ -701,19 +611,122 @@ fs.mkdirSync(OUT, { recursive: true });
   // The default table has byStep[9] = 75 and byStep[5] = 5; the patch had set [5] = 100.
   if (restored.scenario || restored.byStep9 !== 75 || restored.byStep5 !== 5) problems.push('configPatch was not undone after the tutorial: ' + JSON.stringify(restored));
 
+  // ----- Map 3 "The Withering": the scripted Stasis in miniature --------------
+  await page.goto(URL.replace(/\?.*$/, '') + '?scenario=tutorial3', { waitUntil: 'load', timeout: 60000 });
+  await page.waitForTimeout(1200);
+  const scn3 = await page.evaluate(() => {
+    const g = window.game;
+    return {
+      id: g.scenario?.id,
+      seedTitle: g.map.seed?.enemies?.title,
+      seedRevealed: !!g.map.seed?.revealed,
+      colonies: g.stasis.colonies.length,
+      colonyDist: g.stasis.colonies[0]?.distance,
+      weakRank: g.dangerRank(g.hexAt(-2, 0)),
+      strongRank: g.dangerRank(g.hexAt(-1, 3)),
+      lineSpeed: g.config.stasis.lineSpeed,
+      witherEvery: g.config.stasis.witherEvery,
+    };
+  });
+  if (scn3.id !== 'tutorial3' || scn3.seedTitle !== 'Stasis Sprout' || !scn3.seedRevealed) problems.push('tutorial3 seed wrong: ' + JSON.stringify(scn3));
+  if (scn3.colonies !== 1 || scn3.colonyDist !== 6) problems.push('tutorial3 scripted colony wrong: ' + JSON.stringify(scn3));
+  if (scn3.weakRank !== 1 || scn3.strongRank < 3) problems.push('tutorial3 danger ranks wrong: ' + JSON.stringify(scn3));
+  if (scn3.lineSpeed !== 1 || scn3.witherEvery !== 1) problems.push('tutorial3 configPatch not applied: ' + JSON.stringify(scn3));
+  await page.screenshot({ path: path.join(OUT, '65-withering-start.png') });
+  // Dismiss whatever hint cards are open (start shows two).
+  const okCards = async () => {
+    for (let i = 0; i < 4; i++) {
+      const open = await page.evaluate(() => {
+        const el = document.getElementById('tutorial');
+        const o = !el.classList.contains('hidden');
+        if (o) document.getElementById('btn-tutorial-ok').click();
+        return o;
+      });
+      if (!open) break;
+      await page.waitForTimeout(120);
+    }
+  };
+  await okCards();
+  // Wander in place to burn turns: the scripted colony must land exactly on its
+  // authored arriveTurn (6), whatever the geometry says.
+  for (const [q, r] of [[1, 0], [0, 0], [1, 0], [0, 0], [1, 0], [0, 0]]) {
+    await page.evaluate(([mq, mr]) => window.game.moveTo(window.game.hexAt(mq, mr)), [q, r]);
+    await page.waitForTimeout(200);
+    await okCards();
+  }
+  const clock = await page.evaluate(() => {
+    const g = window.game;
+    return {
+      turn: g.state.turn,
+      colonyActive: g.stasis.colonies[0].active,
+      colonyTitle: g.hexAt(-2, 2)?.enemies?.title,
+      withered: [...g.map.hexes.values()].filter((h) => h.biome === 'wither').length,
+    };
+  });
+  if (clock.turn !== 6) problems.push('tutorial3 wander loop miscounted turns: ' + JSON.stringify(clock));
+  if (!clock.colonyActive || clock.colonyTitle !== 'Rot Chorus') problems.push('scripted colony did not arrive on turn 6: ' + JSON.stringify(clock));
+  if (clock.withered < 5) problems.push('the accelerated wither is not spreading: ' + JSON.stringify(clock));
+  await page.screenshot({ path: path.join(OUT, '66-withering-colony.png') });
+  // Clear the colony: its curse (scripted maxHp debuff) must be on while it
+  // stands and gone from the seed fight after.
+  for (const [q, r] of [[-1, 1], [-2, 2]]) {
+    await page.evaluate(([mq, mr]) => window.game.moveTo(window.game.hexAt(mq, mr)), [q, r]);
+    await page.waitForTimeout(200);
+    await okCards();
+  }
+  // Remember the healthy max HP: the debuff shrinks it only for the fight.
+  const preMax = await page.evaluate(() => window.game.state.party[0].maxHp);
+  await page.evaluate(() => window.game.enter(false));
+  await page.waitForFunction(() => !!window.__battle, null, { timeout: 30000 });
+  const curse = await page.evaluate(([pre]) => {
+    const b = window.__battle;
+    const u = b.state.units.find((x) => !x.isEnemy && x.partyIndex === 0);
+    const frac = window.game.config.stasis.debuffs.maxHp.fraction;
+    return { cursedMax: u.maxHp, expected: Math.round(pre * (1 - frac)) };
+  }, [preMax]);
+  if (curse.cursedMax !== curse.expected) problems.push('colony curse (maxHp debuff) not applied in its fight: ' + JSON.stringify(curse));
+  await settleBattleIfAny();
+  const cleared = await page.evaluate(() => ({
+    cleared: window.game.stasis.colonies.filter((c) => c.cleared).length,
+    status: window.game.state.status,
+  }));
+  if (cleared.cleared !== 1 || cleared.status !== 'playing') problems.push('colony did not clear: ' + JSON.stringify(cleared));
+  // March on the seed and win: a seed-goal scenario ends there.
+  for (const [q, r] of [[-1, 1], [0, 0], [1, -1], [2, -2], [3, -3]]) {
+    await page.evaluate(([mq, mr]) => window.game.moveTo(window.game.hexAt(mq, mr)), [q, r]);
+    await page.waitForTimeout(200);
+    await okCards();
+  }
+  await page.evaluate(() => window.game.enter(false));
+  await page.waitForFunction(() => !!window.__battle, null, { timeout: 30000 });
+  await settleBattleIfAny();
+  const scn3End = await page.evaluate(() => ({
+    status: window.game.state.status,
+    reason: String(window.game.state.endReason),
+    prog: (() => { try { return JSON.parse(localStorage.getItem('hexmap-tutorial-progress') ?? '{}'); } catch { return {}; } })(),
+  }));
+  if (scn3End.status !== 'won' || !/end.seed/.test(scn3End.reason)) problems.push('tutorial3 did not end in a seed victory: ' + JSON.stringify(scn3End));
+  if (!scn3End.prog.tutorial3) problems.push('tutorial3 completion was not stored: ' + JSON.stringify(scn3End.prog));
+  await okCards();
+  await page.waitForFunction(() => !document.getElementById('overlay').classList.contains('hidden'), null, { timeout: 15000 }).catch(() => problems.push('no end overlay after tutorial3'));
+  // The last map of the chain: no Next map button.
+  const lastNext = await page.evaluate(() => document.getElementById('btn-overlay-next').classList.contains('hidden'));
+  if (!lastNext) problems.push('tutorial3 (the last map) still offers Next map');
+  await page.screenshot({ path: path.join(OUT, '67-withering-won.png') });
+
   // The menu's Tutorial button starts the (first unfinished) tutorial map.
   await page.goto(URL.replace(/\?.*$/, '') + '?seed=777&nostart=1', { waitUntil: 'load', timeout: 60000 });
   await page.waitForTimeout(1200);
   await page.click('#btn-menu');
   await page.waitForTimeout(150);
   await page.click('#btn-tutorial');
-  // Both maps are complete by now, so the chain settles on its last map.
-  await page.waitForFunction(() => window.game && window.game.scenario && window.game.scenario.id === 'tutorial2', null, { timeout: 15000 }).catch(() => problems.push('the menu Tutorial button did not start the tutorial map'));
+  // All three maps are complete by now, so the chain settles on its last map.
+  await page.waitForFunction(() => window.game && window.game.scenario && window.game.scenario.id === 'tutorial3', null, { timeout: 15000 }).catch(() => problems.push('the menu Tutorial button did not start the tutorial map'));
   const menuBoot = await page.evaluate(() => ({
     url: window.location.search,
     card: !document.getElementById('tutorial').classList.contains('hidden'),
   }));
-  if (!/scenario=tutorial2/.test(menuBoot.url)) problems.push('the tutorial did not land in the address bar: ' + menuBoot.url);
+  if (!/scenario=tutorial3/.test(menuBoot.url)) problems.push('the tutorial did not land in the address bar: ' + menuBoot.url);
   if (!menuBoot.card) problems.push('starting the tutorial from the menu did not show the opening card');
 
   console.log(problems.length ? 'PROBLEMS:\n' + problems.join('\n') : 'OK: no errors, all checks passed.');
