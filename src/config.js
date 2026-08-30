@@ -55,6 +55,12 @@ export const CONFIG = {
                               // backdrop hexes' tops use the same formula)
     elevationStep: 0.35,      // world units of visual height per combat elevation level
                               // (the LEVELS themselves are combat rules: src/config/abilities.js)
+    elevationMid: null,       // which level is "untouched ground": the one drawn flush with the
+                              // surrounding world tiles, with the levels above it raised and the
+                              // ones below it sunk.
+                              // null = automatic, the middle of 0..elevationLevels (= 2 today, so
+                              // two steps up and two steps down around an unchanged middle).
+                              // A number shifts the whole arena: smaller = the arena sits higher.
     flyInMs: 1500,            // the dive from the world map into the arena
     flyOutMs: 1300,           // the climb back out
     swapPoint: 0.55,          // where in the flight (0..1) the world swaps for the arena

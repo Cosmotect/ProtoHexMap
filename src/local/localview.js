@@ -9,7 +9,7 @@
 // =====================================================================
 import * as THREE from 'three';
 import { MapControls } from 'three/addons/controls/MapControls.js';
-import { generateLocalMap, pickRandomTiles, applyElevationWave } from './localmap.js';
+import { generateLocalMap, pickRandomTiles, applyElevationWave, neutralElevation } from './localmap.js';
 import { COMBAT_CONFIG } from '../config/abilities.js';
 import { createRng } from '../rng.js';
 
@@ -141,7 +141,7 @@ export class LocalMapView {
       }
       const mat = new THREE.MeshStandardMaterial({ color: col, roughness: 0.85 });
       const mesh = new THREE.Mesh(geo, mat);
-      const h = this.baseTileHeight + (tile.elevation ?? 0) * (cfg.elevationStep ?? 0.35);
+      const h = this.tileHeightFor(tile.elevation);
       mesh.scale.y = Math.max(0.05, h);
       mesh.position.set(tile.x, 0, -tile.y);
       mesh.castShadow = true;
@@ -185,6 +185,18 @@ export class LocalMapView {
     const cfg = this.config.local;
     const h = typeHeight ?? this.config.tileTypes?.ground?.height ?? 0.3;
     return Math.max(cfg.tileHeight, h * (cfg.typeHeightScale ?? 2));
+  }
+
+  // THE ONE PLACE a height LEVEL becomes a visual thickness.
+  // The levels are centred on the middle step: that step is the baseline the
+  // world tile's type gives us (flush with the backdrop neighbours), the steps
+  // above it stick up by elevationStep each, the steps below sink by the same.
+  // Used both when the arena is built and when an ability reshapes the ground.
+  tileHeightFor(level) {
+    const cfg = this.config.local;
+    const mid = cfg.elevationMid ?? neutralElevation(COMBAT_CONFIG.combat.elevationLevels);
+    const base = this.baseTileHeight ?? cfg.tileHeight;
+    return Math.max(0.05, base + ((level ?? mid) - mid) * (cfg.elevationStep ?? 0.35));
   }
 
   // The surrounding world tiles (three rings of them) as giant background hexes
@@ -594,12 +606,11 @@ export class LocalMapView {
     const sb = battle.state;
 
     // Tile heights (abilities can raise / lower ground).
-    const cfg = this.config.local;
     for (const tile of this.map.hexes.values()) {
-      const lvl = sb.heights[tile.key] ?? 0;
+      const lvl = sb.heights[tile.key] ?? neutralElevation(COMBAT_CONFIG.combat.elevationLevels);
       if (lvl === (tile.elevation ?? 0)) continue;
       tile.elevation = lvl;
-      const h = Math.max(0.05, (this.baseTileHeight ?? cfg.tileHeight) + lvl * (cfg.elevationStep ?? 0.35));
+      const h = this.tileHeightFor(lvl);
       tile.mesh.scale.y = h;
       tile.top = h;
     }

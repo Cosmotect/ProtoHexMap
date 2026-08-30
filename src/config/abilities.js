@@ -24,7 +24,11 @@ export const COMBAT_CONFIG = {
     lowPenalty: 1,      // damage removed when attacking from 2+ levels below
     voidEdges: false,   // true = shoves over the map edge kill instead of crashing
     powerPerDamage: 3,  // +1 ability damage per this much of the unit's world-map power
-    elevationLevels: 3, // arena heights run 0..this
+    elevationLevels: 4, // arena heights run 0..this (5 steps: 0,1,2,3,4)
+                        // The MIDDLE step (2) is the arena's neutral ground: it renders
+                        // flush with the surrounding world tiles, 3 and 4 stand above it,
+                        // 1 and 0 are sunk below it. Keep this number EVEN so a middle
+                        // step exists (see config.local.elevationMid).
   },
 };
 

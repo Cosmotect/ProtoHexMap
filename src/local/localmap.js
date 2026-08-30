@@ -12,10 +12,24 @@
 //  Local tiles have NO gameplay logic yet.
 // =====================================================================
 import { hexKey, hexesInRange, hexDistance, axialToPlane } from '../hex.js';
+import { COMBAT_CONFIG } from '../config/abilities.js';
 
 // The local grid uses the opposite orientation to the world grid.
 export function localOrientation(worldOrientation) {
   return worldOrientation === 'flat' ? 'pointy' : 'flat';
+}
+
+/**
+ * THE NEUTRAL STEP. Elevations run 0..levels; the step in the MIDDLE of that
+ * range is "ground level" - the height an untouched arena tile has, drawn flush
+ * with the surrounding world tiles. Steps above it are raised, steps below it
+ * are sunk. With elevationLevels = 4 this is 2, so an arena has two steps up
+ * and two steps down around an unchanged middle.
+ * Everything that turns a level into a visual height goes through this
+ * (see LocalView.tileHeightFor).
+ */
+export function neutralElevation(levels = COMBAT_CONFIG.combat.elevationLevels) {
+  return Math.floor(levels / 2);
 }
 
 /**
@@ -37,7 +51,8 @@ export function generateLocalMap(config, recipe = null) {
       ring: hexDistance(q, r, 0, 0),
       x: plane.x,
       y: plane.y,
-      elevation: 0,        // future: recipes raise / lower tiles
+      elevation: neutralElevation(),  // the middle step = untouched ground level
+                                      // (recipes and the wave move tiles up / down from here)
       type: 'ground',      // future: recipes set local tile types
       decor: null,         // future: set dressing (rocks, trees, ruins...)
     };
@@ -60,6 +75,8 @@ export function generateLocalMap(config, recipe = null) {
  * Expected shape (subject to change when the first real recipes land):
  *   recipe = {
  *     tiles:   { 'q,r': { type, elevation, decor } },   // per-tile overrides
+ *                     // elevation is a LEVEL, 0..COMBAT_CONFIG.combat.elevationLevels.
+ *                     // 2 = untouched ground, 3/4 = one/two steps up, 1/0 = one/two down.
  *     lighting: { ... },                                // picked up by localview
  *   }
  */
@@ -74,18 +91,30 @@ export function applyRecipe(map, recipe) {
 }
 
 /**
- * ELEVATION WAVE - gentle rolling heights for battle arenas.
+ * ELEVATION WAVE - rolling heights for battle arenas.
  * Three overlapping sine waves with seeded phase offsets, snapped to whole
  * levels 0..levels (the combat rules read these as high/low ground). The camp
  * layout skips this: the start screen wants a flat, calm stage.
+ *
+ * How the steps land: v runs -3..3 and is squashed onto 0..levels, so the
+ * MIDDLE step (neutralElevation) is what most tiles get and is drawn at the
+ * untouched ground height; the wave pushes tiles one or two steps up from
+ * there, or one or two steps down. With levels = 4 the mix over the arena is
+ * roughly 43% middle, 25% each one step up / down, 3.5% each two steps up / down
+ * - so the outermost steps read as rare peaks and pits, not as general terrain.
+ *
+ * FREQ is the size of the features: bigger = smaller, choppier bumps (x3 from
+ * the original 0.9 / 0.8 / 0.6, which gave one lazy hill across the whole arena).
  */
+const FREQ = [2.7, 2.4, 1.8];
+
 export function applyElevationWave(map, random, levels) {
   const ph = [random() * Math.PI * 2, random() * Math.PI * 2, random() * Math.PI * 2];
   for (const tile of map.hexes.values()) {
-    const v = Math.sin(tile.q * 0.9 + ph[0])
-            + Math.cos(tile.r * 0.8 + ph[1])
-            + Math.sin((tile.q + tile.r) * 0.6 + ph[2]);
-    // v runs -3..3; squash it onto 0..levels.
+    const v = Math.sin(tile.q * FREQ[0] + ph[0])
+            + Math.cos(tile.r * FREQ[1] + ph[1])
+            + Math.sin((tile.q + tile.r) * FREQ[2] + ph[2]);
+    // v runs -3..3; squash it onto 0..levels (middle step = untouched ground).
     tile.elevation = Math.max(0, Math.min(levels, Math.round(((v + 3) / 6) * levels)));
   }
   return map;
