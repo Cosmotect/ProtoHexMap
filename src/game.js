@@ -350,7 +350,7 @@ export class Game {
     c.hex.encounter = 'stasisColony';
     // Scripted Colonies (tutorial) bring an authored garrison; the rest roll one.
     if (c.script?.enemies) {
-      c.hex.enemies = cloneEnemies(c.script.enemies);
+      c.hex.enemies = cloneEnemies(c.script.enemies, this.config.battle);
       if (c.script.title) c.hex.enemies.title = c.script.title;
     } else {
       c.hex.enemies = makeEnemies(this.rng, this.config.battle, c.hex.ring, 'colony');
@@ -416,7 +416,7 @@ export class Game {
       const amb = this.nextScenarioAmbush(hex);
       if (amb) {
         hex.encounter = 'battle';
-        hex.enemies = cloneEnemies(amb.enemies);
+        hex.enemies = cloneEnemies(amb.enemies, this.config.battle);
         if (amb.title) hex.enemies.title = amb.title;
         const label = this.labelFor('battle');
         this.addLog('log.forced', { label: { key: 'visual.battle.label' }, chance: 100 });

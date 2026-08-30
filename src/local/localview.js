@@ -28,6 +28,38 @@ function roundRect(g, x, y, w, h, r) {
   g.closePath();
 }
 
+// ----- enemy bodies ----------------------------------------------------
+// Every shape a bestiary entry (config/units.js, battle.enemyTypes) may ask for.
+// Each factory returns a geometry roughly 0.55 world units tall, sitting on the
+// origin, so any of them can stand on a tile without further fiddling.
+// Add a name here and it is instantly available to the config.
+const SHAPES = {
+  box:          () => new THREE.BoxGeometry(0.42, 0.42, 0.42),
+  sphere:       () => new THREE.SphereGeometry(0.27, 16, 12),
+  cone:         () => new THREE.ConeGeometry(0.28, 0.56, 16),
+  cylinder:     () => new THREE.CylinderGeometry(0.24, 0.24, 0.5, 16),
+  capsule:      () => new THREE.CapsuleGeometry(0.2, 0.26, 6, 12),
+  prism:        () => new THREE.CylinderGeometry(0.28, 0.28, 0.5, 6),
+  pyramid:      () => new THREE.ConeGeometry(0.32, 0.52, 4),
+  spike:        () => new THREE.ConeGeometry(0.19, 0.72, 10),
+  tetrahedron:  () => new THREE.TetrahedronGeometry(0.34),
+  octahedron:   () => new THREE.OctahedronGeometry(0.3),
+  icosahedron:  () => new THREE.IcosahedronGeometry(0.3),
+  dodecahedron: () => new THREE.DodecahedronGeometry(0.29),
+  torus:        () => new THREE.TorusGeometry(0.22, 0.09, 10, 20),
+  torusKnot:    () => new THREE.TorusKnotGeometry(0.19, 0.06, 64, 8),
+  // Stretched variants of the platonics, for silhouettes the basics cannot make.
+  diamond:      () => new THREE.OctahedronGeometry(0.3).scale(0.75, 1.5, 0.75),
+  shard:        () => new THREE.TetrahedronGeometry(0.34).scale(0.6, 1.7, 0.6),
+  slab:         () => new THREE.BoxGeometry(0.5, 0.34, 0.28),
+  star:         () => new THREE.OctahedronGeometry(0.34, 1).scale(1, 1.2, 1),
+};
+export const SHAPE_NAMES = Object.keys(SHAPES);
+function enemyGeometry(shape) {
+  const make = SHAPES[shape] ?? SHAPES.octahedron;
+  return make();
+}
+
 // The plaque hanging over every unit's head: the portrait, the HP numbers and
 // the health bar as ONE billboard. Sizes are design units on the canvas; only
 // worldWidth / worldY are in world space. The layout deliberately mirrors a row
@@ -62,9 +94,14 @@ const PLAQUE = {
   monoFont: '"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace',
   emojiFont: '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif',
 };
-// Overall canvas size follows from the layout above.
+// Overall canvas size follows from the layout above. There are TWO layouts:
+// the full one (in combat: portrait, numbers, bar, statuses) and an icon-only
+// square for everywhere else - the campfire start screen and any future local
+// encounter that is not a fight, where HP and statuses mean nothing.
 PLAQUE.w = PLAQUE.pad * 2 + PLAQUE.icon + PLAQUE.gap + PLAQUE.bar;
 PLAQUE.h = PLAQUE.pad * 2 + PLAQUE.icon;
+PLAQUE.iconOnlyW = PLAQUE.pad * 2 + PLAQUE.icon;
+PLAQUE.iconOnlyH = PLAQUE.h;
 
 // The statuses a unit can carry, in the order they are shown. `turnsOf` reads a
 // remaining-turns count IF the engine has one for that status - none of today's
@@ -122,6 +159,7 @@ export class LocalMapView {
     this.map = null;
     this.elapsed = 0;
     this.tokens = [];       // unit meshes, for the idle bob
+    this.inCombat = false;  // the local map's combat sub-state (setCombat)
   }
 
   // ----- build ---------------------------------------------------------
@@ -452,25 +490,57 @@ export class LocalMapView {
   // same way in both places.
   makeUnitPlaque(glyph, { enemy = false } = {}) {
     const cv = document.createElement('canvas');
-    cv.width = PLAQUE.w * PLAQUE.dpr;
-    cv.height = PLAQUE.h * PLAQUE.dpr;
     const tex = new THREE.CanvasTexture(cv);
     tex.colorSpace = THREE.SRGBColorSpace;
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial(SPRITE_MAT(tex)));
-    sprite.scale.set(PLAQUE.worldWidth, PLAQUE.worldWidth * (PLAQUE.h / PLAQUE.w), 1);
     sprite.position.set(0, PLAQUE.worldY, 0);   // straight up from the token's axis
     sprite.renderOrder = 10;                    // always on top, never buried in a tile
-    const g = cv.getContext('2d');
-    g.scale(PLAQUE.dpr, PLAQUE.dpr);            // draw in design units, render crisply
-    sprite.userData.ctx = g;
+    sprite.userData.canvas = cv;
     sprite.userData.tex = tex;
     sprite.userData.glyph = glyph ?? '';
     sprite.userData.enemy = !!enemy;
+    sprite.userData.mode = null;     // 'full' | 'icon', decided on the first redraw
     sprite.userData.hp = undefined;
     sprite.userData.maxHp = undefined;
     sprite.userData.statusKey = undefined;
     sprite.userData.hotspots = [];   // status boxes, in canvas design units (hover -> tooltip)
+    this.updateUnitPlaque(sprite, 0, 0, null);
     return sprite;
+  }
+
+  // The local map's COMBAT sub-state. The arena is shown for fights and for
+  // quiet scenes alike (the campfire start screen); this is the switch that
+  // says which. It only changes what is drawn - the engine owns the rules.
+  setCombat(on) {
+    const next = !!on;
+    if (this.inCombat === next) return;
+    this.inCombat = next;
+    // Every plaque redraws itself into the other layout.
+    for (const tok of this.tokens) {
+      const pl = tok.userData.plaque;
+      if (!pl) continue;
+      const u = tok.userData.uid != null ? this.battle?.state.units.find((x) => x.uid === tok.userData.uid) : null;
+      this.updateUnitPlaque(pl, u?.hp ?? pl.userData.hp, u?.maxHp ?? pl.userData.maxHp, u);
+    }
+  }
+
+  // Sizes the plaque's canvas and sprite for the layout it is about to draw.
+  sizePlaque(plaque, mode) {
+    const P = PLAQUE;
+    const w = mode === 'icon' ? P.iconOnlyW : P.w;
+    const h = mode === 'icon' ? P.iconOnlyH : P.h;
+    const cv = plaque.userData.canvas;
+    cv.width = w * P.dpr;
+    cv.height = h * P.dpr;
+    const g = cv.getContext('2d');
+    g.setTransform(P.dpr, 0, 0, P.dpr, 0, 0);   // draw in design units, render crisply
+    plaque.userData.ctx = g;
+    // The icon-only plaque keeps the FULL plaque's height, so a unit's badge does
+    // not change size when a fight starts - only the strip beside it disappears.
+    const worldH = P.worldWidth * (P.h / P.w);
+    plaque.scale.set(worldH * (w / h), worldH, 1);
+    plaque.userData.tex.needsUpdate = true;
+    return { w, h };
   }
 
   // Redraws a plaque for the given hp/maxHp - a no-op if neither changed since
@@ -483,23 +553,31 @@ export class LocalMapView {
     // One string standing for the whole status row: cheap to compare, so the
     // canvas is only redrawn when something the player can see actually changed.
     const statusKey = statuses.map((s2) => `${s2.id}:${s2.turns}:${s2.amount ?? ''}`).join(',');
+    // Out of combat a unit's plaque is just its portrait: HP and statuses are
+    // combat readings, and the campfire is not a fight. `inCombat` is the local
+    // map's sub-state (see setCombat / body.in-combat).
+    const mode = this.inCombat ? 'full' : 'icon';
     if (plaque.userData.hp === clampedHp && plaque.userData.maxHp === safeMax
-        && plaque.userData.statusKey === statusKey) return;
+        && plaque.userData.statusKey === statusKey && plaque.userData.mode === mode) return;
     plaque.userData.hp = clampedHp;
     plaque.userData.maxHp = safeMax;
     plaque.userData.statusKey = statusKey;
 
     const P = PLAQUE;
+    if (plaque.userData.mode !== mode) { this.sizePlaque(plaque, mode); plaque.userData.mode = mode; }
+    const pw = mode === 'icon' ? P.iconOnlyW : P.w;
+    const ph = mode === 'icon' ? P.iconOnlyH : P.h;
     const g = plaque.userData.ctx;
-    g.clearRect(0, 0, P.w, P.h);
+    g.clearRect(0, 0, pw, ph);
+    plaque.userData.hotspots = [];
 
     // The plate everything sits on.
     g.fillStyle = P.plateFill;
-    roundRect(g, 1, 1, P.w - 2, P.h - 2, P.plateRadius);
+    roundRect(g, 1, 1, pw - 2, ph - 2, P.plateRadius);
     g.fill();
     g.strokeStyle = plaque.userData.enemy ? P.plateStrokeEnemy : P.plateStroke;
     g.lineWidth = plaque.userData.enemy ? 2.5 : 2;
-    roundRect(g, 1, 1, P.w - 2, P.h - 2, P.plateRadius);
+    roundRect(g, 1, 1, pw - 2, ph - 2, P.plateRadius);
     g.stroke();
 
     // Icon, in its own inset box on the left (the party panel's `.unit .icon`).
@@ -517,6 +595,7 @@ export class LocalMapView {
       g.textBaseline = 'middle';
       g.fillText(plaque.userData.glyph, ix + iw / 2, iy + iw / 2 + 1);
     }
+    if (mode === 'icon') { plaque.userData.tex.needsUpdate = true; return; }
 
     // Right column: the numbers, then the bar under them.
     const cx = ix + iw + P.gap;
@@ -664,10 +743,13 @@ export class LocalMapView {
     const enemyKeys = resolve(enemies, fixed?.enemies);
 
     party.forEach((u, i) => this.addPartyToken(u, i, partyKeys[i]));
-    const enemyColor = this.config.encounters.visuals.battle?.color ?? 0xe2474b;
+    const fallback = this.config.encounters.visuals.battle?.color ?? 0xe2474b;
     enemies.forEach((u, i) => {
+      // Body and colour come from the bestiary entry the unit was made from
+      // (src/battle.js makeEnemyOfType carries them along on the unit).
+      const enemyColor = u?.color ?? fallback;
       const body = new THREE.Mesh(
-        new THREE.OctahedronGeometry(0.28),
+        enemyGeometry(u?.shape),
         new THREE.MeshStandardMaterial({ color: enemyColor, emissive: 0x330b0b, roughness: 0.45 })
       );
       body.geometry.translate(0, 0.45, 0);
@@ -745,6 +827,7 @@ export class LocalMapView {
     document.body.appendChild(tip);
     this.statusTip = tip;
     this.hoverStatus = null;
+    this.setCombat(true);   // the arena is now a FIGHT: plaques show HP and statuses
     this.enableTilePicking(onTileClick ?? ((k) => battle.clickTile(k)));
     this.syncBattle();
   }
@@ -973,6 +1056,7 @@ export class LocalMapView {
   // Battle over: clean the combat chrome but leave the scene standing (the
   // results window and the fly-out still show it).
   endBattle() {
+    this.setCombat(false);   // back to a quiet arena: plaques go icon-only
     this.disableTilePicking();
     for (const m of this.highlights ?? []) this.scene?.remove(m);
     this.highlights = [];
@@ -1195,6 +1279,7 @@ export class LocalMapView {
     this.layout = null;
     this.placement = null;      // the next arena rolls its own starting positions
     this.placedCounts = null;
+    this.inCombat = false;
     // portraitCache is deliberately kept: the traverse above disposes the
     // per-sprite materials but never the textures, and one small texture per
     // glyph is worth reusing for the whole session.

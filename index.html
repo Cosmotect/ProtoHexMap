@@ -68,6 +68,11 @@
         </div>
       </div>
 
+      <!-- Enemy roster (top centre, in combat only): one card per enemy, in turn
+           order. Same shape as a party-panel row: portrait, name, ability chips,
+           HP and a segmented bar. src/ui.js fills it from the combat engine. -->
+      <div class="top-center enemy-roster hidden" id="enemy-roster"></div>
+
       <div class="panel left-mid party" id="party">
         <div class="party-title" data-i18n="party.title">Party</div>
         <div id="party-units"></div>

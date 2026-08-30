@@ -18,9 +18,11 @@ through dialogs.
 > On a 0-100 combat difficulty scale: regular encounters occupy 0-60, Stasis Colonies
 > 50-70, bosses 80-100.
 
-The three enemy pools live in `src/config/units.js`: `battle.enemies.bands` (regular
-groups, by ring), `battle.colonies` (Stasis Colonies), `battle.bosses` (the Stasis
-Seed). Power is an ENEMY-ONLY number; the party grows through ability upgrade trees
+Every enemy in the game is written out in `src/config/units.js` (see "The bestiary"
+below): `battle.enemyTypes` defines the creatures, `battle.enemyGroups` the line-ups
+they form, and three tables say where a group may show up - `battle.enemies.bands`
+(regular fights, by ring), `battle.colonies`, `battle.bosses`. Power is an
+ENEMY-ONLY number; the party grows through ability upgrade trees
 (see "Ability upgrades" below), so all old party-power yardsticks are void and the
 balance must be re-measured against interactive play.
 
@@ -108,10 +110,8 @@ balance must be re-measured against interactive play.
     (`config.battle.danger`): a regular fight shows 0-2 by the band its TOTAL enemy
     power falls into (`bands` [12, 36]), a Colony always shows `colony` (3), the Seed
     always `seed` (5). Reading whether a fight is takeable is the player's job.
-    Regular groups come from RING BANDS (count range + total group power range, split
-    evenly): rings 1-3 = 1-3 units / 3-6 power, 4-7 = 2-5 / 24-30, 8-11 = 4-8 /
-    50-60, hp 14-22 each. The Seed rolls one of 5 `bosses` variants, a Colony one of
-    5 `colonies` variants (leader + chaff, or an equal-power swarm). Victory: one
+    A fight picks one whole GROUP from the band its ring falls into (rings 1-3, 4-7,
+    8-11); the Seed picks from `bosses`, a Colony from `colonies`. Victory: one
     ability upgrade pick (x`rewardPicks` after a Colony),
     +`battle.victorySupplies` (5) supplies, a lore line.
   * *Treasure*: +`treasure.supplies` (40); if it overflows the cap on an empty tile,
@@ -167,6 +167,33 @@ balance must be re-measured against interactive play.
 * **Seeds**: `?seed=...` in the URL, the HUD and the copy-link button; same seed =
   same map. The run-over overlay offers "Inspect the map".
 
+## The bestiary - enemies, groups, bands (src/config/units.js)
+
+Since 2026-08-31 nothing about an enemy is rolled unit by unit. There are three
+tables, and a fight is fully readable off them:
+
+* **`battle.enemyTypes`** - the bestiary. One entry per creature, deliberately just
+  five things: `name`, `shape` (its 3D body), `color`, `hp`, `power`. A creature's
+  COMBAT half - initiative, speed, flying, which abilities it casts - stays in
+  `config/abilities.js` (`UNIT_COMBAT`, keyed by the same name), because those are
+  rules rather than description.
+  The shapes come from `SHAPES` in `src/local/localview.js`: `box sphere cone
+  cylinder capsule prism pyramid spike tetrahedron octahedron icosahedron
+  dodecahedron torus torusKnot diamond shard slab star`. Adding a name there makes
+  it immediately available to the config.
+* **`battle.enemyGroups`** - the line-ups. A title plus a list of bestiary ids;
+  repeats are fine and get numbered ("Husk 2"). Nothing is rolled inside a group, so
+  what is written is exactly what walks onto the arena, and a group's total power is
+  what the danger chevrons grade.
+* **Where a group appears** - `battle.enemies.bands.<band>.groups` for regular
+  fights by ring, `battle.bosses` for the Stasis Seed, `battle.colonies` for a
+  Colony. All three are just lists of group ids.
+* `battle.enemies.reinforcements` lists the types the Stasis "extra enemies" debuff
+  conjures, since those appear outside any group.
+* A scenario may still hand-write a fight (`enemies: [{ type: 'husk', hp: 12 }]`):
+  the shape and colour come from the bestiary entry, hp and power written there
+  override it (`cloneEnemies` in scenarios/scenario.js).
+
 ## The local map and interactive combat (src/local/)
 
 * **The arena**: a hex grid of `local.radius` (6) rings in the OPPOSITE orientation to
@@ -205,6 +232,20 @@ balance must be re-measured against interactive play.
   `startPlayerPhase()`, which animates nothing, and needs no deferring.
   `cinematic.inArena()` is "the arena is on screen, or the dive is past its swap
   and committed to it" - the test callers use before starting an encounter.
+* **COMBAT is a sub-state of the local map**, not a state of its own. The arena is
+  shown for fights and for quiet scenes alike - the campfire start screen today,
+  other non-combat encounters later - so `body.local-mode` means "the arena is on
+  screen" and `body.in-combat` (with `body.battle-mode`, the same flag under the
+  name the older CSS knows) means "and it is a fight". `localView.setCombat(on)`
+  carries the same switch into the 3D side. Only in combat do the enemy roster and
+  the battle bar appear, and only then do the unit plaques show anything but a
+  portrait.
+* **The enemy roster** (top centre, in combat): one card per enemy in TURN ORDER -
+  the engine's own ordering, initiative high to low and ties by spawn index - with
+  its portrait, name, ability icons (hover for what each does), HP and a segmented
+  bar. It is deliberately the party panel's row turned on its side, and it shares
+  that panel's actual bar CSS rather than a copy of it, so a health bar is drawn and
+  read identically wherever it appears.
 * **The unit plaque** (`localview.js`, the `PLAQUE` block): ONE billboard over each
   unit's head carrying the portrait, the HP numbers and the health bar together -
   icon box on the left, "24 / 40" above a bar on the right, the arrangement of a
@@ -214,6 +255,8 @@ balance must be re-measured against interactive play.
   panel and on the field. One sprite rather than two stacked ones is also what
   keeps the plaque centred over the unit - two of different widths never were.
   Sizes live in the `PLAQUE` constant, deliberately not in the settings window.
+  Out of combat the plaque shrinks to the portrait alone: HP and statuses are
+  combat readings, and the campfire is not a fight.
   The frame is gold for the party and red for enemies - the fastest read of which
   side a token belongs to. Plaque sprites opt out of the scene's distance fog and
   of the renderer's ACES tone mapping (`fog: false, toneMapped: false`): both are

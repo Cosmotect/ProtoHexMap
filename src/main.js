@@ -224,7 +224,12 @@ function beginInteractiveBattle(ctx) {
   const partyDefs = game.state.party
     .map((u, i) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.maxHp, partyIndex: i, alive: u.alive, abilityDefs: resolvedAbilitiesFor(u) }))
     .filter((u) => u.alive && u.hp > 0);
-  const enemyDefs = ctx.enemies.map((e) => ({ name: e.name, hp: e.hp, maxHp: e.maxHp, power: e.power }));
+  // shape and colour ride along from the bestiary entry (src/battle.js) so the
+  // arena can build the right body for each enemy.
+  const enemyDefs = ctx.enemies.map((e) => ({
+    name: e.name, hp: e.hp, maxHp: e.maxHp, power: e.power,
+    shape: e.shape, color: e.color, typeId: e.typeId,
+  }));
   const placement = view.beginBattle({ party: partyDefs, enemies: enemyDefs });
   battleCtx = ctx;
   battle = createBattle({

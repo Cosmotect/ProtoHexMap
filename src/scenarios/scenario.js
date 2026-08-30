@@ -31,6 +31,7 @@
 //      next?: 'tutorial2',                    // the map that follows (used by main.js)
 //    }
 // =====================================================================
+import { enemyTypeByName } from '../battle.js';
 import { hexKey, hexDistance, axialToPlane } from '../hex.js';
 import { setType, shortestPath } from '../map.js';
 
@@ -72,7 +73,7 @@ export function buildScenarioMap(config, scenario) {
     hex.encounter = enc.type;
     if (enc.type === 'stasisSeed') hex.isSeed = true;
     if (enc.enemies) {
-      hex.enemies = cloneEnemies(enc.enemies);
+      hex.enemies = cloneEnemies(enc.enemies, config.battle);
       if (enc.title) hex.enemies.title = enc.title;
     }
     if (enc.stock) hex.shop = { options: [...enc.stock], bought: {}, seen: false };
@@ -127,6 +128,25 @@ export function buildScenarioMap(config, scenario) {
 }
 
 // Fresh battle-ready copies of an authored enemy list.
-export function cloneEnemies(list) {
-  return list.map((e) => ({ name: e.name, hp: e.hp, maxHp: e.hp, power: e.power ?? 0, alive: true }));
+// A scenario's hand-written enemy list. An entry may name a bestiary id
+// (`type: 'husk'`) or just a name; either way the creature's SHAPE and COLOUR
+// come from the bestiary (config/units.js, battle.enemyTypes), while hp and
+// power written here override it - a scripted fight often wants a weaker husk
+// than the wild one.
+export function cloneEnemies(list, cfg = null) {
+  return list.map((e) => {
+    const type = cfg
+      ? (e.type ? { id: e.type, ...(cfg.enemyTypes?.[e.type] ?? {}) } : enemyTypeByName(cfg, e.name))
+      : null;
+    return {
+      typeId: type?.id ?? null,
+      name: e.name ?? type?.name ?? 'Enemy',
+      hp: e.hp ?? type?.hp ?? 10,
+      maxHp: e.hp ?? type?.hp ?? 10,
+      power: e.power ?? type?.power ?? 0,
+      shape: e.shape ?? type?.shape ?? 'octahedron',
+      color: e.color ?? type?.color ?? 0xe2474b,
+      alive: true,
+    };
+  });
 }

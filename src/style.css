@@ -198,17 +198,19 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .unit .name-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .unit .name { font-size: 15px; font-weight: 600; }
 .unit .hp { font-family: var(--mono); font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.unit .bar {
+/* The health bar. The enemy roster reuses these exact rules, so a bar is drawn
+   and read identically in the party panel and above the arena. */
+.unit .bar, .enemy-roster .bar {
   position: relative; height: 12px; border-radius: 3px; margin-top: 5px; overflow: hidden;
   background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.12);
 }
-.unit .bar .fill { position: absolute; inset: 0; width: 0; background: #7fb85f; }
+.unit .bar .fill, .enemy-roster .bar .fill { position: absolute; inset: 0; width: 0; background: #7fb85f; }
 /* segment lines: one per hpSegment HP, drawn on top of the fill (width set inline) */
-.unit .bar .segs {
+.unit .bar .segs, .enemy-roster .bar .segs {
   position: absolute; inset: 0;
   background: repeating-linear-gradient(to right, transparent 0, transparent calc(var(--seg) - 2px), rgba(0, 0, 0, 0.55) calc(var(--seg) - 2px), rgba(0, 0, 0, 0.55) var(--seg));
 }
-.unit.hurt .bar .fill { background: var(--danger); }
+.unit.hurt .bar .fill, .enemy-roster .eunit.hurt .bar .fill { background: var(--danger); }
 .unit.dead { opacity: 0.45; }
 .unit.dead .icon { filter: grayscale(1); }
 .unit.dead .hp { color: var(--danger); }
@@ -709,8 +711,55 @@ button.small { padding: 2px 8px; font-size: 12px; }
 .local-mode #party { display: none; }
 
 /* ----- The battle bar (interactive combat on the local map) --------------- */
-/* Replaces the status bar while a fight runs; body.battle-mode flips them. */
+/* Replaces the status bar while a fight runs; body.battle-mode flips them.
+   body.in-combat is the same state under the name the design uses: the local
+   map's COMBAT sub-state (the arena is also shown for the campfire, which is
+   local-mode without in-combat). */
 .battle-mode #statusbar { display: none; }
+
+/* ----- the enemy roster (top centre, in combat) -------------------------
+   One card per enemy in turn order. Deliberately the party panel's row, laid
+   out in a column instead of a row, so both sides are read the same way. */
+.enemy-roster {
+  position: absolute;          /* .top-center only supplies the offsets */
+  z-index: 20;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  max-width: 94vw;
+  overflow-x: auto;
+  pointer-events: auto;
+  padding: 2px;
+}
+.enemy-roster .eunit {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 190px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  background: var(--panel-bg);
+  border: 1px solid rgba(226, 71, 75, 0.55);   /* the plaques' red, so a card and a body match */
+  backdrop-filter: blur(6px);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+}
+/* Whose turn it is right now. */
+.enemy-roster .eunit.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 6px 24px rgba(0, 0, 0, 0.45); }
+.enemy-roster .eunit.dead { opacity: 0.35; }
+.enemy-roster .eunit.dead .e-icon { filter: grayscale(1); }
+.enemy-roster .e-icon {
+  width: 34px; height: 34px; border-radius: 8px; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--display); font-size: 16px; font-weight: 700;
+  background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.16);
+}
+.enemy-roster .e-info { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 1px; }
+.enemy-roster .e-name { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.enemy-roster .e-hp { font-family: var(--mono); font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.enemy-roster .e-order {
+  font-family: var(--mono); font-size: 10px; color: var(--muted);
+  align-self: flex-start; flex: none; min-width: 14px; text-align: right;
+}
 .battlebar { display: flex; align-items: center; gap: 16px; padding: 10px 16px; max-width: 92vw; }
 .battle-info { display: flex; flex-direction: column; gap: 2px; min-width: 150px; }
 .battle-round {

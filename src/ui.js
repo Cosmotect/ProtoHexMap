@@ -8,6 +8,21 @@ import { unitAbilityIds, upgradeTree, treeLayout, upgradeRef } from './upgrades.
 import { ABILITIES } from './config/abilities.js';
 
 // Display name of an ability (locale key with the config name as fallback).
+// An ability's hover text: its name, what it does, and the numbers that matter.
+// Same source as the party panel and the roster window (the locale tables), so
+// an ability reads the same wherever it is met.
+function abilityTip(id, ab) {
+  const parts = [abilityName(id)];
+  const desc = t(`ability.${id}.desc`);
+  if (desc && desc !== `ability.${id}.desc`) parts.push(desc);
+  const nums = [];
+  if (ab.damage > 0) nums.push(t('battle.ui.dmg', { n: ab.damage }));
+  if (ab.heal > 0) nums.push(t('battle.ui.heal', { n: ab.heal }));
+  if (ab.buff) nums.push(t(`status.${ab.buff === 'crit' ? 'crit' : ab.buff}.name`, { n: ab.buffX }));
+  if (nums.length) parts.push(nums.join(', '));
+  return parts.join(' - ');
+}
+
 function abilityName(id) {
   const key = `ability.${id}.name`;
   const s = t(key);
@@ -48,6 +63,7 @@ export function createUI(config, handlers) {
     battleRound: $('battle-round'),
     battleActive: $('battle-active'),
     battleAbilities: $('battle-abilities'),
+    enemyRoster: $('enemy-roster'),
   };
 
   // ----- buttons -----------------------------------------------------
@@ -499,14 +515,55 @@ export function createUI(config, handlers) {
     const b = e.target.closest('button[data-ab]');
     if (b && battleRef) battleRef.selectAbility(b.dataset.ab);
   });
+  // The local map's COMBAT sub-state. `in-combat` is the name the design uses
+  // for it; `battle-mode` is the same flag under the name the older CSS knows.
+  // Both are only ever on while `local-mode` is (the arena is on screen).
   function setBattleMode(battle) {
     battleRef = battle ?? null;
     document.body.classList.toggle('battle-mode', !!battleRef);
+    document.body.classList.toggle('in-combat', !!battleRef);
     els.battleBar.classList.toggle('hidden', !battleRef);
+    els.enemyRoster.classList.toggle('hidden', !battleRef);
+    if (!battleRef) els.enemyRoster.innerHTML = '';
     if (battleRef) updateBattle();
+  }
+
+  // The enemy roster across the top: one card per enemy, in TURN ORDER - the
+  // engine's own enemy queue (initiative high to low, ties by spawn index), so
+  // the strip reads left to right in the order they will act.
+  function renderEnemyRoster() {
+    if (!battleRef) return;
+    const sb = battleRef.state;
+    const order = sb.units
+      .filter((u) => u.isEnemy)
+      .sort((a, b) => b.init - a.init || a.idx - b.idx);
+    els.enemyRoster.innerHTML = order.map((u, i) => {
+      const dead = u.hp <= 0;
+      const pct = Math.max(0, Math.min(100, (u.hp / u.maxHp) * 100));
+      const segPct = (config.party.hpSegment / u.maxHp) * 100;
+      const cls = `${dead ? 'dead' : ''} ${!dead && pct < 50 ? 'hurt' : ''} ${u.uid === sb.activeUid ? 'active' : ''}`;
+      const chips = (u.abilityIds ?? []).map((id) => {
+        const ab = battleRef.abilityById(id);
+        if (!ab) return '';
+        return `<span class="ab-chip" title="${escapeAttr(abilityTip(id, ab))}">${ab.icon}</span>`;
+      }).join('');
+      // The initial stands in for a portrait: enemies carry no emoji.
+      const initial = (u.name ?? '?').charAt(0);
+      return `<div class="eunit ${cls.trim()}">
+        <div class="e-icon">${escapeHtml(initial)}</div>
+        <div class="e-info">
+          <div class="e-name">${escapeHtml(tn(u.name))}</div>
+          <div class="ab-chips">${chips}</div>
+          <span class="e-hp">${t('party.hp', { hp: Math.max(0, u.hp), max: u.maxHp })}</span>
+          <div class="bar"><div class="fill" style="width:${pct}%"></div><div class="segs" style="--seg:${segPct}%"></div></div>
+        </div>
+        <div class="e-order">${i + 1}</div>
+      </div>`;
+    }).join('');
   }
   function updateBattle() {
     if (!battleRef) return;
+    renderEnemyRoster();
     const sb = battleRef.state;
     els.battleRound.textContent = sb.ambush ? t('battle.ui.ambush') : t('battle.ui.round', { n: sb.round });
     const c = battleRef.curPlayer();

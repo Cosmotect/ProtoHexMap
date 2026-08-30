@@ -106,7 +106,13 @@ export function renameDuplicates(units) {
   return units;
 }
 
-// ----- regular enemies: difficulty by ring band ------------------------------
+// ----- building enemy groups from the bestiary --------------------------------
+// Since 2026-08-31 nothing about a fight is rolled unit by unit: config/units.js
+// holds a BESTIARY (battle.enemyTypes: name, shape, colour, hp, power) and a
+// table of GROUPS (battle.enemyGroups: a title plus a list of bestiary ids).
+// A fight picks one whole GROUP, so what is written in the config is exactly
+// what walks onto the arena.
+
 // The band a ring falls into (cfg.enemies.bands, in listed order). Rings past the
 // last band's maxRing keep using the last band.
 export function ringBand(cfg, ring) {
@@ -115,68 +121,80 @@ export function ringBand(cfg, ring) {
   return bands[bands.length - 1];
 }
 
-// The power of ONE average regular enemy on this ring: the band's average total
-// divided by its average count. Used where enemies appear outside a normal group
-// roll (the Stasis "extra enemies" debuff) and for the danger preview.
+// One live enemy from a bestiary id. `shape` and `color` ride along on the unit
+// so the arena can build its body without looking the type up again.
+export function makeEnemyOfType(cfg, typeId) {
+  const t = cfg.enemyTypes?.[typeId];
+  if (!t) return null;
+  return {
+    typeId,
+    name: t.name,
+    hp: t.hp, maxHp: t.hp,
+    power: t.power,
+    shape: t.shape ?? 'octahedron',
+    color: t.color ?? 0xe2474b,
+    alive: true,
+  };
+}
+
+// Finds a bestiary entry by its DISPLAY name ("Husk 2" -> the husk type), so
+// hand-authored lists (scenarios) can name a creature and still get its body.
+export function enemyTypeByName(cfg, name) {
+  const base = String(name ?? '').replace(/ \d+$/, '');
+  for (const [id, t] of Object.entries(cfg.enemyTypes ?? {})) if (t.name === base) return { id, ...t };
+  return null;
+}
+
+// A whole group by its id. Repeats are numbered ("Husk 2"), and the group's
+// title travels with the list for the battle report.
+export function makeGroup(cfg, groupId) {
+  const g = cfg.enemyGroups?.[groupId];
+  if (!g) return [];
+  const out = renameDuplicates(g.units.map((id) => makeEnemyOfType(cfg, id)).filter(Boolean));
+  out.title = g.title ?? groupId;
+  out.groupId = groupId;
+  return out;
+}
+
+// The power of ONE average enemy on this ring: the mean unit power across every
+// group the band can roll. Used where enemies appear outside a group (the Stasis
+// "extra enemies" debuff).
 export function regularUnitPower(cfg, ring) {
   const b = ringBand(cfg, ring);
-  const avgTotal = (b.powerMin + b.powerMax) / 2;
-  const avgCount = Math.max(1, (b.countMin + b.countMax) / 2);
-  return Math.max(1, Math.round(avgTotal / avgCount));
-}
-
-// Splits a group's total power between `count` units: as evenly as possible, with
-// the remainder handed to random members (so groups are not perfectly uniform).
-// Every unit keeps at least 1 power, so a very small total can exceed itself
-// slightly rather than produce powerless enemies.
-function splitPower(rng, total, count) {
-  const base = Math.max(1, Math.floor(total / count));
-  const out = new Array(count).fill(base);
-  let left = total - base * count;
-  while (left > 0) {
-    out[rng.int(0, count - 1)] += 1;
-    left -= 1;
+  let total = 0, count = 0;
+  for (const gid of b.groups ?? []) {
+    for (const id of cfg.enemyGroups?.[gid]?.units ?? []) {
+      total += cfg.enemyTypes?.[id]?.power ?? 0;
+      count += 1;
+    }
   }
-  return out;
+  return count ? Math.max(1, Math.round(total / count)) : 1;
 }
 
-// `count` regular enemies for a tile on `ring`, all at the ring's average power.
-// (Used for the Stasis "extra enemies" debuff, where there is no group total to split.)
+// `count` loose enemies for a tile on `ring`, rolled from the band's
+// reinforcement types. (The Stasis "extra enemies" debuff, where there is no
+// group to draw.)
 export function makeRegulars(rng, cfg, ring, count) {
-  const e = cfg.enemies;
-  const power = regularUnitPower(cfg, ring);
+  const pool = cfg.enemies.reinforcements?.length
+    ? cfg.enemies.reinforcements
+    : Object.keys(cfg.enemyTypes ?? {});
   const out = [];
   for (let i = 0; i < count; i++) {
-    const hp = rng.int(e.hpMin, e.hpMax);
-    out.push({ name: rng.pick(e.names), hp, maxHp: hp, power, alive: true });
+    const u = makeEnemyOfType(cfg, rng.pick(pool));
+    if (u) out.push(u);
   }
-  return out;
-}
-
-// Rolls one variant out of a named pool (cfg.bosses / cfg.colonies).
-function makeFromPool(rng, pool) {
-  const variant = rng.pick(pool);
-  const out = renameDuplicates(variant.units.map((u) => ({
-    name: u.name, hp: u.hp, maxHp: u.hp, power: u.power ?? variant.power, alive: true,
-  })));
-  out.title = variant.title;
   return out;
 }
 
 // Builds an enemy group for a tile. "ring" = distance from the map centre.
-// "pool" picks who shows up:
-//   'regular' (default) - a group rolled from the ring band
-//   'boss'              - the Stasis Seed: one variant of cfg.bosses
-//   'colony'            - a Stasis Colony: one variant of cfg.colonies
+// "pool" picks which table the group comes from:
+//   'regular' (default) - one of the ring band's groups
+//   'boss'              - the Stasis Seed: one of cfg.bosses
+//   'colony'            - a Stasis Colony: one of cfg.colonies
 // (true is still accepted for 'boss', so older call sites keep working.)
 export function makeEnemies(rng, cfg, ring, pool = 'regular') {
-  if (pool === true || pool === 'boss') return makeFromPool(rng, cfg.bosses);
-  if (pool === 'colony') return makeFromPool(rng, cfg.colonies ?? cfg.bosses);
-
+  if (pool === true || pool === 'boss') return makeGroup(cfg, rng.pick(cfg.bosses));
+  if (pool === 'colony') return makeGroup(cfg, rng.pick(cfg.colonies ?? cfg.bosses));
   const band = ringBand(cfg, ring);
-  const count = rng.int(band.countMin, band.countMax);
-  const powers = splitPower(rng, rng.int(band.powerMin, band.powerMax), count);
-  const group = makeRegulars(rng, cfg, ring, count);
-  group.forEach((u, i) => { u.power = powers[i]; });
-  return renameDuplicates(group);
+  return makeGroup(cfg, rng.pick(band.groups));
 }
