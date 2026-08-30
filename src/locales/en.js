@@ -45,6 +45,7 @@ export const en = {
   'roster.replace': 'Takes the place of {name}',
   'roster.inParty': 'In party',
   'roster.cancel': 'Keep the party as it is',
+  'roster.confirm': 'Lock in',
   'roster.hp': '{n} HP',
   'log.joined': '{name} joins the party at the fire.',
   'status.enter.encounter': 'Enter: {label}',

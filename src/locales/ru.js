@@ -43,6 +43,7 @@ export const ru = {
   'roster.replace': 'Займёт место бойца {name}',
   'roster.inParty': 'В отряде',
   'roster.cancel': 'Оставить отряд как есть',
+  'roster.confirm': 'Подтвердить выбор',
   'roster.hp': '{n} HP',
   'log.joined': '{name} присоединяется к отряду у костра.',
   'name.Stonestep': 'Камнеступ',

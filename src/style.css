@@ -6,6 +6,7 @@
   --muted: #94a0b8;
   --accent: #ffd166;
   --danger: #ff6b6b;
+  --good: #8fe0b8;          /* same green as the tutorial guide's outline (see render.js) */
   --font: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --display: "Cinzel", "Times New Roman", Georgia, serif;
@@ -606,6 +607,11 @@ button.small { padding: 2px 8px; font-size: 12px; }
 .roster-card:hover { background: rgba(255, 255, 255, 0.14); border-color: var(--accent); transform: translateY(-2px); }
 .roster-card.taken { opacity: 0.45; cursor: default; }
 .roster-card.taken:hover { background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.14); transform: none; }
+/* The slot's original unit (green) versus the pending pick if different
+   (gold, same colour hovering already uses) - both can show at once, so the
+   player always sees what they had and what they are about to lock in. */
+.roster-card.confirmed { border-color: var(--good); box-shadow: 0 0 0 1px var(--good); }
+.roster-card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .rc-portrait {
   width: 74px; height: 74px; border-radius: 12px;
   display: flex; align-items: center; justify-content: center;

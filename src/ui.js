@@ -550,42 +550,76 @@ export function createUI(config, handlers) {
   });
 
   // ----- the roster grid (fighting-game style character select) ------------
+  // Picking a card no longer swaps the unit on the spot: it only marks that
+  // card as the pending choice (gold outline) and updates the detail window's
+  // default. The slot's ORIGINAL unit keeps a green outline throughout, and
+  // the actual swap only happens if the player locks it in at the bottom -
+  // Cancel (or Escape) leaves the party exactly as it was.
   const rosterEl = $('roster');
   let rosterPick = null;
   $('btn-roster-cancel').addEventListener('click', () => closeRoster());
+  $('btn-roster-confirm').addEventListener('click', () => {
+    if (!rosterPick) return;
+    const { selectedName, confirmedName, roster, onPick } = rosterPick;
+    closeRoster();
+    // Nothing was actually picked (still the confirmed unit): do NOT call
+    // onPick. setPartyUnit() always hands back a fresh unit - full HP, no
+    // unlocked upgrades - so firing it here would wipe that unit's progress
+    // for no reason, even though the player never asked to change anything.
+    if (selectedName === confirmedName) return;
+    const def = roster.find((r) => r.name === selectedName);
+    if (def && onPick) onPick(def);
+  });
   function openRoster({ slotIndex, party, roster, onPick }) {
     const current = party[slotIndex];
     $('roster-sub').textContent = t('roster.replace', { name: tn(current.name) });
-    const inParty = new Set(party.map((u) => u.name));
+    // A unit already serving in a DIFFERENT slot can't be picked here; the
+    // slot's own current unit is never "taken" against itself - it starts as
+    // the confirmed (green) card instead, same as everyone else's is pickable.
+    const takenElsewhere = new Set(party.filter((u, i) => i !== slotIndex).map((u) => u.name));
     $('roster-grid').innerHTML = roster.map((def, i) => {
-      const taken = inParty.has(def.name);
+      const taken = takenElsewhere.has(def.name);
       const abs = unitAbilityIds(def.name).map((id) => ABILITIES[id]?.icon ?? '').join(' ');
-      return `<div class="roster-card ${taken ? 'taken' : ''}" data-i="${i}">
+      const confirmed = def.name === current.name;
+      return `<div class="roster-card ${taken ? 'taken' : ''} ${confirmed ? 'confirmed' : ''}" data-i="${i}" data-name="${escapeAttr(def.name)}">
         <div class="rc-portrait">${def.icon}</div>
         <div class="rc-name">${escapeHtml(tn(def.name))}</div>
         <div class="rc-stats"><span class="rc-hp">${t('roster.hp', { n: def.hp })}</span><span class="rc-abs">${abs}</span></div>
         ${taken ? `<div class="rc-tag">${t('roster.inParty')}</div>` : ''}
       </div>`;
     }).join('');
-    rosterPick = { roster, onPick, party };
-    // The detail window below the grid opens on the unit whose slot is being
-    // decided; hovering any roster card previews that character instead.
+    rosterPick = { roster, onPick, party, confirmedName: current.name, selectedName: current.name };
+    // The detail window below the grid defaults to the confirmed unit;
+    // hovering any roster card previews that character instead (see the
+    // mouseover/mouseleave handlers below).
     renderUnitDetail(current, party.find((u) => u.name === current.name));
     rosterEl.classList.remove('hidden');
   }
+  // Clicking a pickable card only SELECTS it (gold outline, new detail
+  // default) - it does not swap anyone in. See btn-roster-confirm for that.
   $('roster-grid').addEventListener('click', (e) => {
     const card = e.target.closest('.roster-card');
     if (!card || card.classList.contains('taken') || !rosterPick) return;
     const def = rosterPick.roster[Number(card.dataset.i)];
-    const onPick = rosterPick.onPick;
-    closeRoster();
-    if (def && onPick) onPick(def);
+    if (!def) return;
+    rosterPick.selectedName = def.name;
+    for (const el of $('roster-grid').querySelectorAll('.roster-card')) {
+      el.classList.toggle('selected', el.dataset.name === def.name && def.name !== rosterPick.confirmedName);
+    }
+    renderUnitDetail(def, rosterPick.party.find((u) => u.name === def.name));
   });
-  // Hovering a roster card fills the detail window with that character.
+  // Hovering a roster card previews it in the detail window, overriding
+  // whatever is selected/confirmed; leaving the grid entirely (not just
+  // moving between cards) reverts the window back to that default.
   $('roster-grid').addEventListener('mouseover', (e) => {
     const card = e.target.closest('.roster-card');
     if (!card || !rosterPick) return;
     const def = rosterPick.roster[Number(card.dataset.i)];
+    if (def) renderUnitDetail(def, rosterPick.party.find((u) => u.name === def.name));
+  });
+  $('roster-grid').addEventListener('mouseleave', () => {
+    if (!rosterPick) return;
+    const def = rosterPick.roster.find((r) => r.name === rosterPick.selectedName);
     if (def) renderUnitDetail(def, rosterPick.party.find((u) => u.name === def.name));
   });
   function closeRoster() {
