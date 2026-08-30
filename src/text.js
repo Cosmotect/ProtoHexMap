@@ -8,24 +8,18 @@ const pct = (f) => `${Math.round(f * 100)}%`;
 // Placeholders usable inside locale strings (visual.*.info, npe.*).
 export function placeholders(config) {
   const c = config;
-  const bands = Object.values(c.battle.enemies.bands);
-  const enemyPowerMax = Math.max(...bands.map((b) => b.powerMax));
-  const bossPowers = c.battle.bosses.map((b) => b.power);
-  const colonyPowers = (c.battle.colonies ?? c.battle.bosses).map((b) => b.power);
   return {
     colonyCount: c.stasis.colonyCount,
     rewardPicks: c.stasis.rewardPicks,
     witherHp: c.biomes.wither?.hpCost ?? 0,
     witherEvery: c.stasis.witherEvery,
     debuffMaxHpPct: pct(c.stasis.debuffs.maxHp.fraction),
-    debuffPower: c.stasis.debuffs.power.amount,
+    debuffDamage: c.stasis.debuffs.damage.amount,
     debuffExtraEnemies: c.stasis.debuffs.extraEnemies.count,
-    victoryPower: c.battle.victoryPower,
     campCost: c.rest.cost,
     healPct: pct(c.rest.healFraction),
     shopRestCost: c.shop.restCost,
     upgradeCost: c.shop.upgradeCost,
-    upgradeAmount: c.shop.upgradeAmount,
     mapCost: c.shop.mapCost,
     relicCost: c.shop.relicCost,
     rumorsCost: c.shop.rumorsCost,
@@ -36,11 +30,9 @@ export function placeholders(config) {
     maxSupplies: c.run.startSupplies,
     revivePct: pct(c.acolyte.reviveFraction),
     acolyteMin: c.encounters.guaranteed?.acolyte ?? 0,
-    bossPowerMin: Math.min(...bossPowers),
-    bossPowerMax: Math.max(...bossPowers),
-    colonyPowerMin: Math.min(...colonyPowers),
-    colonyPowerMax: Math.max(...colonyPowers),
-    enemyPowerMax,
+    // The danger scale (absolute chevron counts, config.battle.danger).
+    colonyChevrons: c.battle.danger.colony,
+    seedChevrons: c.battle.danger.seed,
     unitCount: c.party.size ?? 3,
     damageMin: c.battle.damageMin,
     damageMax: c.battle.damageMax,

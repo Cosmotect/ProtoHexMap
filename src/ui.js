@@ -4,6 +4,15 @@ import { describeHex, lerpTable } from './game.js';
 import { terrainInfo, terrainName, encounterLabel, encounterInfo, tc } from './text.js';
 import { t, tn } from './i18n.js';
 import { playFatigueStep, playFatigueClear, clearStaggerMs } from './audio.js';
+import { unitAbilityIds, upgradeTree, treeLayout, upgradeRef } from './upgrades.js';
+import { ABILITIES } from './config/abilities.js';
+
+// Display name of an ability (locale key with the config name as fallback).
+function abilityName(id) {
+  const key = `ability.${id}.name`;
+  const s = t(key);
+  return s === key ? (ABILITIES[id]?.name ?? id) : s;
+}
 
 export function createUI(config, handlers) {
   const $ = (id) => document.getElementById(id);
@@ -434,7 +443,7 @@ export function createUI(config, handlers) {
       actions: [
         ...g.state.party.map((u, i) => ({
           label: `${u.icon} ${tn(u.name)}`,
-          sub: u.alive ? t('dialog.unit.sub', { hp: u.hp, max: u.maxHp, power: u.power }) : t('dialog.unit.disabled'),
+          sub: u.alive ? t('dialog.unit.sub', { hp: u.hp, max: u.maxHp }) : t('dialog.unit.disabled'),
           disabled: !filter(u),
           onClick: () => onPick(i),
         })),
@@ -446,6 +455,29 @@ export function createUI(config, handlers) {
       ],
     });
     openDialog(build(game));
+  }
+
+  // The upgrade reward chooser: one offered upgrade per living unit; picking
+  // one unlocks it (main.js drives the pick count and what happens after).
+  function chooseUpgrade({ game, offers, left, onPick, onSkip }) {
+    openDialog({
+      title: t('battle.lessons.title'),
+      html: `<p>${t('battle.lessons.text')}${left > 1 ? ` ${t('battle.lessons.left', { n: left })}` : ''}</p>`,
+      actions: [
+        ...offers.map((o) => {
+          const u = game.state.party[o.index];
+          return {
+            label: `${u.icon} ${tn(u.name)}: ${t(`upgrade.${o.abilityId}.${o.nodeId}.name`)}`,
+            sub: `${abilityName(o.abilityId)} - ${t(`upgrade.${o.abilityId}.${o.nodeId}.desc`)}`,
+            onClick: () => onPick(o),
+          };
+        }),
+        ...(onSkip ? [{
+          label: t('dialog.skip'), sub: t('dialog.skip.sub'),
+          onClick: () => confirm({ title: t('confirm.skip.title'), text: t('battle.lessons.skip'), onYes: () => { closeDialog(); onSkip(); } }),
+        }] : []),
+      ],
+    });
   }
 
   // Centre-screen banner (forced encounters). Hides itself after `ms`.
@@ -482,7 +514,7 @@ export function createUI(config, handlers) {
       const hint = c.moveLocked ? t('battle.ui.locked') : t('battle.ui.canMove');
       els.battleActive.innerHTML = `<b>${c.icon ?? ''} ${escapeHtml(tn(c.name))}</b> <span class="hp">${t('battle.ui.hp', { hp: c.hp, max: c.maxHp })}</span> <span class="muted">${escapeHtml(hint)}</span>`;
       els.battleAbilities.innerHTML = c.abilityIds.map((id) => {
-        const ab = battleRef.abilityById(id);
+        const ab = battleRef.abilityFor(c, id);   // the unit's UPGRADED def
         if (!ab) return '';
         const sel = sb.selAb === id ? 'selected' : '';
         const num = ab.damage > 0 ? `⚔${ab.damage}` : ab.heal > 0 ? `+${ab.heal}` : '';
@@ -527,14 +559,18 @@ export function createUI(config, handlers) {
     const inParty = new Set(party.map((u) => u.name));
     $('roster-grid').innerHTML = roster.map((def, i) => {
       const taken = inParty.has(def.name);
+      const abs = unitAbilityIds(def.name).map((id) => ABILITIES[id]?.icon ?? '').join(' ');
       return `<div class="roster-card ${taken ? 'taken' : ''}" data-i="${i}">
         <div class="rc-portrait">${def.icon}</div>
         <div class="rc-name">${escapeHtml(tn(def.name))}</div>
-        <div class="rc-stats"><span class="rc-hp">${t('roster.hp', { n: def.hp })}</span><span class="rc-power">${t('party.power', { n: def.power })}</span></div>
+        <div class="rc-stats"><span class="rc-hp">${t('roster.hp', { n: def.hp })}</span><span class="rc-abs">${abs}</span></div>
         ${taken ? `<div class="rc-tag">${t('roster.inParty')}</div>` : ''}
       </div>`;
     }).join('');
-    rosterPick = { roster, onPick };
+    rosterPick = { roster, onPick, party };
+    // The detail window below the grid opens on the unit whose slot is being
+    // decided; hovering any roster card previews that character instead.
+    renderUnitDetail(current, party.find((u) => u.name === current.name));
     rosterEl.classList.remove('hidden');
   }
   $('roster-grid').addEventListener('click', (e) => {
@@ -545,13 +581,76 @@ export function createUI(config, handlers) {
     closeRoster();
     if (def && onPick) onPick(def);
   });
+  // Hovering a roster card fills the detail window with that character.
+  $('roster-grid').addEventListener('mouseover', (e) => {
+    const card = e.target.closest('.roster-card');
+    if (!card || !rosterPick) return;
+    const def = rosterPick.roster[Number(card.dataset.i)];
+    if (def) renderUnitDetail(def, rosterPick.party.find((u) => u.name === def.name));
+  });
   function closeRoster() {
     rosterEl.classList.add('hidden');
     rosterPick = null;
   }
   function rosterOpen() { return !rosterEl.classList.contains('hidden'); }
 
-  return { update, renderLog, setHover, showEnd, hideEnd, openDialog, closeDialog, dialogOpen, flashDialog, confirm, chooseUnit, showBanner, buildLegend, buildFatigueBar, updateBlur, setStartScreen, openRoster, closeRoster, rosterOpen, setBattleMode, updateBattle };
+  // ----- the unit detail window (start screen, below the roster grid) -------
+  // Portrait + backstory on the left; one section per ability with its name,
+  // description and upgrade tree. `unit` (a live party member, when the
+  // character is in the party) supplies the unlocked nodes to light up.
+  function renderUnitDetail(def, unit = null) {
+    const el = $('unit-detail');
+    if (!def) { el.innerHTML = ''; return; }
+    const unlocked = new Set(unit?.upgrades ?? []);
+    const sections = unitAbilityIds(def.name).map((id) => {
+      const ab = ABILITIES[id];
+      if (!ab) return '';
+      return `<div class="ud-ability">
+        <div class="ud-ab-head"><span class="ud-ab-icon">${ab.icon}</span><b>${escapeHtml(abilityName(id))}</b></div>
+        <div class="ud-ab-desc">${escapeHtml(tc(`ability.${id}.desc`, config))}</div>
+        ${abilityTreeSvg(id, unlocked)}
+      </div>`;
+    }).join('');
+    el.innerHTML = `
+      <div class="ud-left">
+        <div class="ud-portrait">${def.icon}</div>
+        <div class="ud-name">${escapeHtml(tn(def.name))}</div>
+        <div class="ud-hp muted">${t('roster.hp', { n: def.hp })}</div>
+        <div class="ud-story">${escapeHtml(t(`unit.${def.name}.story`))}</div>
+      </div>
+      ${sections}`;
+  }
+
+  // The upgrade tree as a small SVG: layered left to right (a node's column is
+  // its longest requires-chain), edges behind, node states as classes
+  // (owned / open / locked). Hover a node for its name + effect.
+  function abilityTreeSvg(abilityId, unlocked) {
+    const tree = upgradeTree(abilityId);
+    if (!tree) return '';
+    const { layers, edges } = treeLayout(abilityId);
+    const W = 300, H = 116;
+    const colW = layers.length > 1 ? (W - 64) / (layers.length - 1) : 0;
+    const pos = {};
+    layers.forEach((nodes, d) => nodes.forEach((n, i) => {
+      pos[n] = { x: 32 + d * colW, y: Math.round((H - 26) * (i + 1) / (nodes.length + 1)) + 4 };
+    }));
+    const isOpen = (n) => (tree[n].requires ?? []).every((p) => unlocked.has(upgradeRef(abilityId, p)));
+    const lines = edges.map(([a, b]) =>
+      `<line x1="${pos[a].x}" y1="${pos[a].y}" x2="${pos[b].x}" y2="${pos[b].y}"></line>`).join('');
+    const nodes = Object.keys(tree).map((n) => {
+      const p = pos[n];
+      const cls = unlocked.has(upgradeRef(abilityId, n)) ? 'owned' : isOpen(n) ? 'open' : 'locked';
+      const name = t(`upgrade.${abilityId}.${n}.name`);
+      const desc = t(`upgrade.${abilityId}.${n}.desc`);
+      return `<g class="ut-node ${cls}">
+        <circle cx="${p.x}" cy="${p.y}" r="9"><title>${escapeHtml(`${name} - ${desc}`)}</title></circle>
+        <text x="${p.x}" y="${p.y + 21}">${escapeHtml(name)}</text>
+      </g>`;
+    }).join('');
+    return `<svg class="ability-tree" viewBox="0 0 ${W} ${H}">${lines}${nodes}</svg>`;
+  }
+
+  return { update, renderLog, setHover, showEnd, hideEnd, openDialog, closeDialog, dialogOpen, flashDialog, confirm, chooseUnit, chooseUpgrade, showBanner, buildLegend, buildFatigueBar, updateBlur, setStartScreen, openRoster, closeRoster, rosterOpen, setBattleMode, updateBattle };
 }
 
 // Log parameters are stored language-neutral and resolved at render time:
@@ -574,15 +673,26 @@ function resolveValue(v) {
   return v;
 }
 
-// One row of the party panel.
+// One row of the party panel. Where the power rating used to sit, the unit's
+// two abilities are shown; "+n" counts that ability's unlocked upgrades, and
+// the tooltip lists them by name.
 function unitCard(u, config) {
   const pct = Math.max(0, Math.min(100, (u.hp / u.maxHp) * 100));
   const segPct = (config.party.hpSegment / u.maxHp) * 100;
   const cls = !u.alive ? 'dead' : pct < 50 ? 'hurt' : '';
+  const chips = unitAbilityIds(u.name).map((id) => {
+    const ab = ABILITIES[id];
+    if (!ab) return '';
+    const owned = (u.upgrades ?? []).filter((r) => r.startsWith(`${id}:`));
+    const names = owned.map((r) => t(`upgrade.${r.replace(':', '.')}.name`)).join(', ');
+    const tip = `${abilityName(id)}${names ? ` - ${names}` : ''}`;
+    return `<span class="ab-chip" title="${escapeAttr(tip)}">${ab.icon} ${escapeHtml(abilityName(id))}${owned.length ? `<b>+${owned.length}</b>` : ''}</span>`;
+  }).join('');
   return `<div class="unit ${cls}">
     <div class="icon">${u.icon}</div>
     <div class="info">
-      <div class="name-row"><span class="name">${escapeHtml(tn(u.name))}</span><span class="power">${t('party.power', { n: u.power })}</span></div>
+      <div class="name-row"><span class="name">${escapeHtml(tn(u.name))}</span></div>
+      <div class="ab-chips">${chips}</div>
       <span class="hp">${u.alive ? t('party.hp', { hp: u.hp, max: u.maxHp }) : t('party.disabled')}</span>
       <div class="bar"><div class="fill" style="width:${pct}%"></div><div class="segs" style="--seg:${segPct}%"></div></div>
     </div>

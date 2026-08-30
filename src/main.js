@@ -11,6 +11,7 @@ import { createSettings, deepClone } from './settings.js';
 import { createCombatCinematic } from './local/transition.js';
 import { createBattle } from './local/battle/engine.js';
 import { COMBAT_CONFIG } from './config/abilities.js';
+import { resolvedAbilitiesFor, availableUpgrades } from './upgrades.js';
 import { t, tn, initLanguage, applyStaticTexts, onLanguageChange } from './i18n.js';
 import { tc } from './text.js';
 import { initAudio } from './audio.js';
@@ -217,9 +218,11 @@ function syncPartyPanel() {
 
 function beginInteractiveBattle(ctx) {
   const view = cinematic.localView;
-  // Plain copies: the engine keeps its own instances; wounds are written back at the end.
+  // Plain copies: the engine keeps its own instances; wounds are written back at
+  // the end. A party unit fights with its RESOLVED abilities - the base defs
+  // plus every upgrade tree node it has unlocked (src/upgrades.js).
   const partyDefs = game.state.party
-    .map((u, i) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.maxHp, power: u.power, partyIndex: i, alive: u.alive }))
+    .map((u, i) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.maxHp, partyIndex: i, alive: u.alive, abilityDefs: resolvedAbilitiesFor(u) }))
     .filter((u) => u.alive && u.hp > 0);
   const enemyDefs = ctx.enemies.map((e) => ({ name: e.name, hp: e.hp, maxHp: e.maxHp, power: e.power }));
   const placement = view.beginBattle({ party: partyDefs, enemies: enemyDefs });
@@ -233,6 +236,7 @@ function beginInteractiveBattle(ctx) {
     partyKeys: placement.partyKeys,
     enemyKeys: placement.enemyKeys,
     forced: ctx.forced,
+    partyDamageMod: ctx.damageMod ?? 0,   // the Stasis "damage" debuff
     onChange: () => { view.syncBattle(); ui.updateBattle(); syncPartyPanel(); },
     onFloater: (k, text, color) => view.addFloater(k, text, color),
     onLog: () => {},   // the floaters carry the story; a combat log can come later
@@ -468,6 +472,24 @@ function startRun(seed, opts = {}) {
 }
 
 // ----- encounter dialogs (top centre) -----------------------------------
+// The upgrade reward chooser: one RANDOM available upgrade per living unit is
+// offered (game.upgradeOffers()); the player unlocks exactly one of them.
+// `left` picks run back to back; onDone runs after the last (or a skip).
+function askUpgradePick(left, onDone) {
+  const offers = game.upgradeOffers();
+  if (!offers.length) { onDone(); return; }
+  ui.chooseUpgrade({
+    game,
+    offers,
+    left,
+    onPick: (offer) => {
+      game.applyUpgradePick(offer);
+      if (left > 1) askUpgradePick(left - 1, onDone); else onDone();
+    },
+    onSkip: onDone,
+  });
+}
+
 function showDialog(d) {
   const wait = holdDialogsUntil - performance.now();
   if (wait > 0) { setTimeout(() => showDialog(d), wait); return; }
@@ -507,7 +529,7 @@ function showDialog(d) {
     ui.chooseUnit({
       title: d.title,
       html: `<p>${escapeHtml(d.text)}</p><div class="effect">${escapeHtml(d.effect)}</div>`,
-      filter: (u) => u.alive,
+      filter: (u) => u.alive && availableUpgrades(u).length > 0,
       game,
       onPick: (i) => { game.blackMarketDeal(i); ui.closeDialog(); },
       extraActions: [{ label: t('dialog.decline'), sub: t('dialog.decline.sub'), onClick: () => ui.confirm({ title: t('confirm.walkAway.title'), text: t('confirm.walkAway.text'), onYes: () => ui.closeDialog() }) }],
@@ -528,20 +550,13 @@ function showDialog(d) {
       ? `<div class="debuffs">${t('battle.debuffs')} ${r.debuffs.map((id) =>
           escapeHtml(`${tc(`debuff.${id}.name`, CONFIG)} (${tc(`debuff.${id}.desc`, CONFIG)})`)).join(', ')}</div>`
       : '';
-    // Victory reward: one power pick after a normal battle, several after a Colony.
-    // Read at click time as well, so the chooser can never be lost to event ordering.
+    // Victory reward: one ability upgrade pick after a normal battle, several
+    // after a Colony. The offers are drawn FRESH before every pick (one random
+    // available upgrade per living unit), so a Colony's second pick already
+    // sees the children the first pick opened.
     const picksNow = () => (r.reward ? (r.rewardPicks ?? 1) : 0);
     const picks = picksNow();
-    const askPick = (left) => {
-      ui.chooseUnit({
-        title: t('battle.lessons.title'),
-        html: `<p>${t('battle.lessons.text', { n: r.reward })}${left > 1 ? ` ${t('battle.lessons.left', { n: left })}` : ''}</p>`,
-        filter: (u) => u.alive,
-        game,
-        onPick: (i) => { game.grantVictoryPower(i); if (left > 1) askPick(left - 1); else ui.closeDialog(); },
-        skip: { text: t('battle.lessons.skip', { n: r.reward * left }), onSkip: () => ui.closeDialog() },
-      });
-    };
+    const askPick = (left, onDone = () => ui.closeDialog()) => askUpgradePick(left, onDone);
     const flavour = r.won && r.lore ? `<p class="flavour">${escapeHtml(t(r.lore))}</p>` : '';
     const salvage = r.won && r.supplies
       ? `<div class="effect">${escapeHtml(r.supplies < r.suppliesFull ? t('battle.supplies.partial', { got: r.supplies, n: r.suppliesFull }) : t('battle.supplies', { n: r.supplies }))}</div>`
@@ -551,7 +566,7 @@ function showDialog(d) {
       html: `${intro}<div class="battle-sum ${r.won ? 'won' : 'lost'}">${t(r.won ? 'battle.victory' : 'battle.defeat', { n: r.rounds })} ${t(r.partyFirst ? 'battle.partyFirst' : 'battle.enemiesFirst')}</div>
              ${debuffs}${flavour}${salvage}<p class="muted">${escapeHtml(t('battle.enemies', { list: enemies }))}</p><div class="battle-lines">${lines.join('')}</div>`,
       actions: [{
-        label: picks ? t('dialog.continueReward', { n: r.reward * picks }) : t('dialog.continue'),
+        label: picks ? t('dialog.continueReward', { n: picks }) : t('dialog.continue'),
         onClick: () => {
           const p = picksNow();
           if (!p) { ui.closeDialog(); return; }
@@ -566,22 +581,27 @@ function showDialog(d) {
     const stock = hex.shop ?? { options: [], bought: {} };
     const unitOption = (id, filter) => () => ui.chooseUnit({
       title: t(`shop.${id}.title`),
-      html: `<p>${t(`shop.${id}.text`, { n: CONFIG.shop.upgradeAmount, cost: game.shopCost(id), pct: `${Math.round(CONFIG.acolyte.reviveFraction * 100)}%` })}</p>`,
+      html: `<p>${t(`shop.${id}.text`, { cost: game.shopCost(id), pct: `${Math.round(CONFIG.acolyte.reviveFraction * 100)}%` })}</p>`,
       filter,
       game,
       onPick: (i) => { game.shopBuy(id, i); showDialog({ kind: 'shop' }); },
       skip: { text: t('shop.pick.skip'), onSkip: () => showDialog({ kind: 'shop' }) },
     });
+    // Buying an upgrade / the relic pays first, then opens the same upgrade
+    // chooser as a battle reward (one pick), and returns to the shop window.
+    const upgradeOption = (id) => () => {
+      if (game.shopBuy(id)) askUpgradePick(1, () => showDialog({ kind: 'shop' }));
+    };
     const clickFor = {
-      upgrade: unitOption('upgrade', (u) => u.alive),
-      relic: unitOption('relic', (u) => u.alive),
+      upgrade: upgradeOption('upgrade'),
+      relic: upgradeOption('relic'),
       spareParts: unitOption('spareParts', (u) => !u.alive),
       rest: () => game.shopBuy('rest'),
       map: () => game.shopBuy('map'),
       rumors: () => game.shopBuy('rumors'),
     };
     const subParams = {
-      n: CONFIG.shop.upgradeAmount, tiles: CONFIG.events.blobSize,
+      tiles: CONFIG.events.blobSize,
       pct: `${Math.round(CONFIG.rest.healFraction * 100)}%`, revivePct: `${Math.round(CONFIG.acolyte.reviveFraction * 100)}%`,
       count: CONFIG.events.rumorsCount, r: CONFIG.events.rumorsRadius,
     };

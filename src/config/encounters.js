@@ -49,18 +49,18 @@ export const ENCOUNTERS = {
   // outward until the whole map is withered - confront the Stasis or lose the land.
   // Each Colony carries one random debuff from "debuffs"; while the Colony is active
   // its debuff also applies to the Seed fight (duplicates stack). Clearing a Colony
-  // removes its debuff and lets the player raise a chosen unit's power "rewardPicks" times.
+  // removes its debuff and grants "rewardPicks" ability upgrade picks.
   stasis: {
     seedMinRing: 'half',      // the Seed sits on the outer rings: 'half' = floor(radius / 2)
     colonyCount: 4,
     minSpacing: 5,            // min distance between Colony sites and from the Seed (their only placement rule)
     lineSpeed: 0.5,           // tiles per player turn each line grows
     witherEvery: 2,           // turns per withered tile, per active source
-    rewardPicks: 2,           // power raises granted for clearing a Colony
+    rewardPicks: 2,           // ability upgrade picks granted for clearing a Colony
     // The debuff pool. Each Colony rolls one id; values are read by the battle code.
     debuffs: {
       maxHp: { fraction: 0.25 },     // party max HP reduced by this fraction (per stack)
-      power: { amount: 6 },          // party power reduced by this much (per stack)
+      damage: { amount: 2 },         // party ability damage reduced by this much (per stack)
       extraEnemies: { count: 2 },    // extra regular enemies join the fight (per stack)
     },
   },
@@ -82,10 +82,10 @@ export const ENCOUNTERS = {
   // options stay in the window greyed out. Once a shop has been entered, hovering its
   // tile (from anywhere on the map) lists what it still sells.
   // Option ids and what they do:
-  //   upgrade    +upgradeAmount power on a chosen unit ("Power")
+  //   upgrade    one ability upgrade pick (the same chooser as a battle reward)
   //   map        reveals events.blobSize tiles nearby ("Information")
   //   rest       exactly a player-built camp: heals rest.healFraction and resets fatigue
-  //   relic      for now identical to "upgrade": +upgradeAmount power on a chosen unit
+  //   relic      for now identical to "upgrade": one ability upgrade pick
   //   rumors     reveals events.rumorsCount hidden battles within events.rumorsRadius
   //   spareParts the Acolyte's service: one disabled unit returns at acolyte.reviveFraction HP
   shop: {
@@ -93,7 +93,6 @@ export const ENCOUNTERS = {
     pool: ['rest', 'relic', 'rumors', 'spareParts'],
     randomCount: 2,
     upgradeCost: 25,
-    upgradeAmount: 3,         // shared by "upgrade" and "relic"
     mapCost: 15,
     restCost: 15,             // a shop bed is a little cheaper than pitching your own camp (rest.cost)
     relicCost: 25,
@@ -114,9 +113,9 @@ export const ENCOUNTERS = {
     vantageMountainRadius: 5,
     suppliesMin: 10,
     suppliesMax: 20,
-    scholarPower: 3,          // +power for ONE random living unit
-    blackMarketHpFraction: 1 / 3,  // max HP sacrificed...
-    blackMarketPower: 6,           // ...for this much power
+    // "Wandering scholar": ONE random living unit unlocks one random available
+    // ability upgrade. "Black market": a chosen unit sacrifices max HP for one.
+    blackMarketHpFraction: 1 / 3,  // max HP sacrificed for the black market upgrade
     // "Merchant caravan" acts as a rest site: same healing as a camp (rest.healFraction).
   },
 

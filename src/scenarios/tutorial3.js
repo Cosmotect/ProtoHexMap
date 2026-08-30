@@ -5,8 +5,10 @@
 //  at once: a mini-Seed in plain sight, ONE Colony line crawling towards its
 //  site on a fixed schedule, and land that rots a tile per source per turn -
 //  the pressure lesson happens in front of the player's eyes, no text needed.
-//  Two ordinary fights wear danger chevrons 1 and 4 side by side (the strong
-//  one guards a cache) - the risk-reading lesson, strictly optional.
+//  Two ordinary fights sit side by side on the absolute danger scale - a
+//  no-chevron skirmish and a 2-chevron wall guarding a cache - the
+//  risk-reading lesson, strictly optional (the Colony always wears 3
+//  chevrons and the Seed 5, per config.battle.danger).
 //  Clearing the Colony lifts its max-health curse; destroying the Seed wins
 //  the map and completes the tutorial.
 //
@@ -43,14 +45,14 @@ export const TUTORIAL_3 = {
         { name: 'Stasis Mote', hp: 20, power: 3 },
       ],
     },
-    // The chevron contrast: a 1-chevron skirmish and a 4-chevron wall, side by
-    // side; the wall guards a cache. Entirely optional - a lesson in reading.
+    // The chevron contrast: a bare skirmish (0 chevrons) and a 2-chevron wall,
+    // side by side; the wall guards a cache. Optional - a lesson in reading.
     '-2,0': { type: 'battle', enemies: [{ name: 'Husk', hp: 14, power: 3 }, { name: 'Husk', hp: 14, power: 3 }] },
     '-1,3': {
       type: 'battle',
       enemies: [
-        { name: 'Raider', hp: 18, power: 6 }, { name: 'Stalker', hp: 16, power: 6 },
-        { name: 'Husk', hp: 14, power: 4 }, { name: 'Husk', hp: 14, power: 4 }, { name: 'Husk', hp: 14, power: 4 },
+        { name: 'Raider', hp: 18, power: 10 }, { name: 'Stalker', hp: 16, power: 10 },
+        { name: 'Husk', hp: 14, power: 6 }, { name: 'Husk', hp: 14, power: 6 }, { name: 'Husk', hp: 14, power: 6 },
       ],
     },
     '-2,3': { type: 'treasure', supplies: 40 },

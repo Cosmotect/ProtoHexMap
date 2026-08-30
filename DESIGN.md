@@ -20,9 +20,9 @@ through dialogs.
 
 The three enemy pools live in `src/config/units.js`: `battle.enemies.bands` (regular
 groups, by ring), `battle.colonies` (Stasis Colonies), `battle.bosses` (the Stasis
-Seed). The old yardstick - "P50", the party power per unit at which a full-HP party
-wins half the time (regular outer group 14, Colony 16, Seed 28) - was measured against
-the AUTO-simulation and must be re-measured against interactive play.
+Seed). Power is an ENEMY-ONLY number; the party grows through ability upgrade trees
+(see "Ability upgrades" below), so all old party-power yardsticks are void and the
+balance must be re-measured against interactive play.
 
 ## Links
 
@@ -63,9 +63,11 @@ the AUTO-simulation and must be re-measured against interactive play.
 * **Movement**: one step per turn to a neighbouring walkable tile, paying the tile's
   costs. Supplies are the only currency, capped at `run.startSupplies` (60).
 * **Party**: `party.size` (3) units, taken from the top of `party.roster` (10
-  characters) - the roster is the ONLY place a character's numbers live. All power
-  numbers sit on a x3 scale (one upgrade step = 3). A unit at 0 HP is disabled until
-  revived; all disabled = run lost. The party moves as one token.
+  characters; name, icon, hp - the character's ABILITIES live in
+  `config/abilities.js`, exactly TWO per character). Party units have NO power
+  number: they grow by unlocking ability upgrades (see "Ability upgrades").
+  A unit at 0 HP is disabled until revived; all disabled = run lost. The party
+  moves as one token. (Enemy power stays, on the x3 scale: /3 = bonus damage.)
 * **Encounters are opt-in**: `encounters.density` (0.5) of walkable tiles carry one
   (the start tile stays empty), type by weight: battle 5, event 2, treasure 0.8,
   shop 0.75, acolyte 0.15 (min 1 acolyte per map). Standing on one enables **Enter**
@@ -90,7 +92,7 @@ the AUTO-simulation and must be re-measured against interactive play.
     instant the player steps there). Lines are straight 3D segments from the Seed
     cone's mid-height, drawn only over revealed tiles.
   * Each Colony carries one random **debuff** (duplicates stack): party max HP -25%,
-    party power -6, or +2 extra enemies. It applies to the Colony's own fight and,
+    party ability damage -2, or +2 extra enemies. It applies to the Colony's own fight and,
     while the Colony is active, to the Seed fight. Debuffs are temporary per fight;
     damage stays.
   * **Withering**: the Seed and each active Colony gain 1/`witherEvery` (2) charge per
@@ -98,29 +100,32 @@ the AUTO-simulation and must be re-measured against interactive play.
     untouched land, one ring of slack) with the wither BIOME. No range cap - left
     alone it swallows the map. Seed/Colony tiles are spared; ether never withers;
     withered water dries into walkable ground; a withered tile loses its encounter.
-  * Clearing a Colony lifts its debuff and grants `rewardPicks` (2) power raises.
+  * Clearing a Colony lifts its debuff and grants `rewardPicks` (2) upgrade picks.
 * **Encounter types**:
   * *Battle / Stasis Seed / Stasis Colony*: interactive combat on the local map (see
     below). Enemy groups are rolled at map generation / Colony spawn and previewed as
-    red danger CHEVRONS above the marker: `danger.base` (1.2) ^ (power gap / 3) *
-    (enemy count / living party count), rounded, drawing capped at 8; active Stasis
-    debuffs are counted in. Regular groups come from RING BANDS (count range + total
-    group power range, split evenly): rings 1-3 = 1-3 units / 3-6 power, 4-7 = 2-5 /
-    24-30, 8-11 = 4-8 / 50-60, hp 14-22 each. The Seed rolls one of 5 `bosses`
-    variants, a Colony one of 5 `colonies` variants (leader + chaff, or an equal-power
-    swarm). Victory: +`battle.victoryPower` (3) power to a chosen unit (x2 picks after
-    a Colony), +`battle.victorySupplies` (5) supplies, a lore line.
+    red danger CHEVRONS above the marker - ABSOLUTE, not party-relative
+    (`config.battle.danger`): a regular fight shows 0-2 by the band its TOTAL enemy
+    power falls into (`bands` [12, 36]), a Colony always shows `colony` (3), the Seed
+    always `seed` (5). Reading whether a fight is takeable is the player's job.
+    Regular groups come from RING BANDS (count range + total group power range, split
+    evenly): rings 1-3 = 1-3 units / 3-6 power, 4-7 = 2-5 / 24-30, 8-11 = 4-8 /
+    50-60, hp 14-22 each. The Seed rolls one of 5 `bosses` variants, a Colony one of
+    5 `colonies` variants (leader + chaff, or an equal-power swarm). Victory: one
+    ability upgrade pick (x`rewardPicks` after a Colony),
+    +`battle.victorySupplies` (5) supplies, a lore line.
   * *Treasure*: +`treasure.supplies` (40); if it overflows the cap on an empty tile,
     the dialog offers "make camp first, then collect".
   * *Event*: one of `events.js` - reveal effects (nearest shop / a blob of tiles /
-    hidden battles / a vantage), a supply find (10-20), a scholar (+3 power, random
-    unit), the black market (trade 1/3 max HP for +6 power, decline allowed), Nomads
-    (a battle through the same combat path), a merchant caravan (acts as a free camp),
-    or plain lore.
+    hidden battles / a vantage), a supply find (10-20), a scholar (a random unit
+    unlocks a random available upgrade), the black market (a chosen unit trades 1/3
+    max HP for a random upgrade, decline allowed), Nomads (a battle through the same
+    combat path), a merchant caravan (acts as a free camp), or plain lore.
   * *Shop*: stays on its tile, revisitable; entering does not reset fatigue. Stock =
-    2 guaranteed options (+3 power for 25, reveal 8 tiles for 15) + 2 random from
-    (rest 15, relic 25 = same as power, rumours 15, spare parts 30 = revive at 50%).
-    Each option sells once; hovering a visited shop lists its remaining stock.
+    2 guaranteed options (Training = one upgrade pick for 25, reveal 8 tiles for 15)
+    + 2 random from (rest 15, relic 25 = same as Training, rumours 15, spare parts
+    30 = revive at 50%). Each option sells once; hovering a visited shop lists its
+    remaining stock.
   * *Acolyte*: revives one fallen unit at `acolyte.reviveFraction` (50%) HP; not
     consumed if nobody has fallen.
   * Battle victories, treasure, shops, the Acolyte and camps each draw a flavour lore
@@ -211,11 +216,16 @@ the AUTO-simulation and must be re-measured against interactive play.
     dmgZone / tagZone / hZone / pushZone offsets from the aim point, rotatable
     abilities snap their zones to one of six 60-degree sectors towards the aim;
     `moveToTarget` dashes the caster. 8 starter abilities; `UNIT_COMBAT` gives every
-    unit name its init / speed / flying / ability ids, with a `default` fallback
-    (numbered clones like "Husk 2" fall back to the base name).
-  * **World-map ties**: a unit's power adds `round(power / powerPerDamage)` (3)
-    ability damage; a fatigue-forced fight opens with an AMBUSH - one extra enemy
-    phase before round 1 (no tag ticks, no round counter).
+    unit name its init / speed / flying / ability ids (party characters: exactly
+    TWO), with a `default` fallback (numbered clones like "Husk 2" fall back to the
+    base name).
+  * **World-map ties**: an ENEMY's power adds `round(power / powerPerDamage)` (3)
+    ability damage; a party unit instead fights with its RESOLVED abilities - base
+    def + unlocked upgrade nodes (`def.abilityDefs`, from src/upgrades.js; the
+    engine's `abilityFor(unit, id)` serves them, the battle bar reads them too).
+    The Stasis "damage" debuff arrives as `partyDamageMod`, a flat penalty to
+    party ability damage. A fatigue-forced fight opens with an AMBUSH - one extra
+    enemy phase before round 1 (no tag ticks, no round counter).
   * **Presentation**: the engine is pure state; everything visual goes through
     callbacks (onChange / onFloater / onLog / onAnim / onEnd). The view draws
     movement / cast ranges as hex-outline rings (bright over a dark backing, pulsing;
@@ -238,6 +248,42 @@ the AUTO-simulation and must be re-measured against interactive play.
     instantly).
 * **Balance is RAW**: ability numbers are first guesses; the difficulty ladder was
   tuned for the auto-simulation and needs re-measuring against interactive play.
+
+## Ability upgrades - how the party grows (src/upgrades.js + src/config/upgrades.js)
+
+Party units have no power stat: every reward that used to raise power now unlocks
+one node of an ability's UPGRADE TREE, and the ability itself gets stronger.
+
+* **Trees** (`config/upgrades.js`): one directed graph per ability id, keyed
+  `ABILITY_UPGRADES[abilityId][nodeId]`. A node lists `requires` (ALL parents must
+  be unlocked; multi-parent capstones merge branches; none = a root) and its
+  effects: `add` {damage, heal, buffX}, `castZoneAdd` / `dmgZoneAdd` / `tagZoneAdd`
+  offset lists, `pushDistAdd`, and `flags` - booleans for upgrade-specific ability
+  logic the engine can branch on (reserved for the unique upgrades to come). Every
+  current ability has a 5-node tree (2 roots, 2 mids, 1 two-parent capstone) mixing
+  numeric bumps with cast / effect shape growth. Texts:
+  `upgrade.<ability>.<node>.name/.desc` in the locales. The plan is 16+ characters
+  x 2 abilities = 32+ trees; a tree is found purely by ability id.
+* **Resolution** (`src/upgrades.js`, pure functions): a unit carries
+  `upgrades: ["ability:node", ...]`; `resolveAbility(id, unlocked)` folds the
+  unlocked nodes over the base def in tree order (order-independent),
+  `resolvedAbilitiesFor(unit)` feeds the combat engine, `availableUpgrades(unit)`
+  is the unlockable pool (parents all unlocked, not yet taken), `treeLayout`
+  drives the UI's SVG graphs.
+* **Rewards**: after a won battle the game drafts ONE random available upgrade per
+  living unit (`game.upgradeOffers()`) and the player unlocks exactly one of the
+  offers (a Colony grants `rewardPicks` such choices back to back; offers re-drawn
+  before each, so freshly opened children can appear). The same chooser serves the
+  shop's Training / Relic options (pay first, then pick); the scholar event and
+  the black market unlock a RANDOM available upgrade directly.
+* **Sim proxy**: the legacy auto-resolve still compares power numbers, so a party
+  unit's hidden `power` = `battle.simPower.base + perUpgrade x unlocked count`,
+  refreshed on every unlock. Nothing displays it; interactive combat ignores it.
+* **UI**: the roster's DETAIL WINDOW (start screen, below the grid; hover a card
+  to preview) shows portrait, backstory (`unit.<Name>.story`), and per ability its
+  description (`ability.<id>.desc`) plus the tree as an SVG (owned / open / locked
+  node states). The party panel shows two ability CHIPS per unit (icon + name,
+  "+n" = unlocked count, tooltip lists them) where the power rating used to sit.
 
 ## Scenarios - hand-authored maps (the tutorial series, src/scenarios/)
 
@@ -298,7 +344,7 @@ everything downstream (renderer, HUD, combat) sees an ordinary, just small, map.
   the accelerated Stasis clock (configPatch: lineSpeed 1, witherEvery 1) and a
   single scripted Colony ("Rot Chorus", arriveTurn 6, maxHp curse) make the
   time pressure the lesson - dawdle and the island rots under your feet; a weak
-  (1 chevron) and a strong (4 chevrons) fight teach reading danger marks; goal
+  (0 chevrons) and a strong (2 chevrons) fight teach reading danger marks; goal
   type 'seed'. 4 hint cards; last map of the chain (no Next). The old seeded
   NPE (`?npe=1`, `NPE_SEED`) is REMOVED - the scenario series replaced it.
 
@@ -315,7 +361,7 @@ cinematic drives the shared WebGL renderer) and the `combatDelegate` /
 Data shapes:
 
 ```
-unit   = { name, icon, hp, maxHp, power, alive }
+unit   = { name, icon, hp, maxHp, upgrades: ['ability:node'], power (sim proxy only), alive }
 hex    = { q, r, ring, key, type, biome, passable, supplyCost, encounter, isStart,
            isSeed, isColony, revealed, visited, x, y }
 state  = { status, party, supplies, maxSupplies, turn, position, shortestPathLength,
@@ -327,7 +373,7 @@ stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }
 
 1. Should fog ever re-cover tiles (line of sight), or stay permanent? Currently permanent.
 2. Is "supplies" the resource we want, or days / food / something tied to combat?
-3. Party HP never grows, only power, and power is a mild multiplier. Is that the
+3. Party HP never grows, only abilities do (through the upgrade trees). Is that the
    pacing we want, or should HP / healing scale too?
 4. Map variants: branching lanes? Bigger fields? Multiple Seeds?
 5. How is combat balance measured now that fights are interactive? The planned tool

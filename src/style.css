@@ -196,7 +196,6 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .unit .info { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .unit .name-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .unit .name { font-size: 15px; font-weight: 600; }
-.unit .power { font-family: var(--mono); font-size: 13px; color: var(--accent); white-space: nowrap; }
 .unit .hp { font-family: var(--mono); font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .unit .bar {
   position: relative; height: 12px; border-radius: 3px; margin-top: 5px; overflow: hidden;
@@ -617,7 +616,70 @@ button.small { padding: 2px 8px; font-size: 12px; }
 .rc-name { font-weight: 600; font-size: 14px; margin-top: 2px; text-align: center; }
 .rc-stats { display: flex; gap: 10px; font-family: var(--mono); font-size: 12px; }
 .rc-hp { color: #8fd47a; }
-.rc-power { color: var(--accent); }
+.rc-abs { letter-spacing: 0.1em; }
+
+/* ----- unit detail window (below the roster grid) ----------------------- */
+/* Left column: portrait + backstory. Then one section per ability: name,
+   description and its upgrade tree (an SVG graph). */
+.unit-detail {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) 1fr 1fr;
+  gap: 14px;
+  margin: 14px 0 10px;
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.unit-detail:empty { display: none; }
+@media (max-width: 860px) { .unit-detail { grid-template-columns: 1fr; } }
+.ud-left { display: flex; flex-direction: column; gap: 6px; }
+.ud-portrait {
+  width: 84px; height: 84px; border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 50px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+.ud-name { font-weight: 700; font-size: 16px; }
+.ud-hp { font-family: var(--mono); font-size: 12px; }
+.ud-story { font-size: 12.5px; line-height: 1.45; color: var(--muted); }
+.ud-ability {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.ud-ab-head { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.ud-ab-icon { font-size: 18px; }
+.ud-ab-desc { font-size: 12px; line-height: 1.4; color: var(--muted); }
+.ability-tree { width: 100%; height: auto; margin-top: auto; }
+.ability-tree line { stroke: rgba(255, 255, 255, 0.28); stroke-width: 1.5; }
+.ability-tree .ut-node circle { fill: rgba(255, 255, 255, 0.08); stroke: rgba(255, 255, 255, 0.3); stroke-width: 1.5; }
+.ability-tree .ut-node text {
+  fill: var(--muted); font-size: 9px; text-anchor: middle;
+  font-family: var(--sans, sans-serif);
+}
+.ability-tree .ut-node.owned circle { fill: rgba(143, 212, 122, 0.35); stroke: #8fd47a; }
+.ability-tree .ut-node.owned text { fill: #b9e8ab; }
+.ability-tree .ut-node.open circle { stroke: var(--accent); }
+.ability-tree .ut-node.open text { fill: var(--text); }
+.ability-tree .ut-node.locked { opacity: 0.55; }
+
+/* Ability chips in the party panel (where the power rating used to sit) */
+.ab-chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 1px 0 2px; }
+.ab-chip {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 10.5px; line-height: 1;
+  padding: 2px 5px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.ab-chip b { color: var(--accent); font-family: var(--mono); font-size: 10px; }
 .rc-tag {
   position: absolute; top: 6px; right: 6px;
   font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase;

@@ -2,11 +2,12 @@
 //  UNIT CONFIG - the player's party and everything about how units fight.
 //  (Part of the config split: world.js / encounters.js / units.js / config.js)
 //
-//  POWER SCALE (since 2026-08-27): every power number in the game lives on a
-//  x3 scale, so that a single upgrade is a small step rather than a doubling.
-//  The damage multiplier divides the power difference by battle.powerStep (3)
-//  before using it as an exponent, so "3 power" here reads like "1 power" did
-//  before. Keep the two in sync if you ever rescale again.
+//  POWER is an ENEMY-ONLY number now (on the x3 scale since 2026-08-27; the
+//  damage multiplier divides differences by battle.powerStep (3)). The party
+//  has no power: player units grow through ability upgrade trees instead
+//  (config/upgrades.js). The auto-resolve simulation still needs a party
+//  number to compare against enemy power, so it derives a proxy from the
+//  upgrade count - battle.simPower below.
 // =====================================================================
 
 export const UNITS = {
@@ -21,19 +22,20 @@ export const UNITS = {
     size: 3,
     hpSegment: 10,            // one bar segment per this many HP
     // Everyone the player can take along, shown in the start-screen roster grid
-    // (the first `size` are the default party). Stats on the x3 power scale;
-    // hp doubles as maxHp when a character joins.
+    // (the first `size` are the default party). hp doubles as maxHp when a
+    // character joins; a character's ABILITIES live in config/abilities.js
+    // (UNIT_COMBAT) and their upgrade trees in config/upgrades.js.
     roster: [
-      { name: 'Vanguard', icon: '🛡️', hp: 40, power: 3 },
-      { name: 'Archer', icon: '🏹', hp: 28, power: 3 },
-      { name: 'Mystic', icon: '🔮', hp: 22, power: 3 },
-      { name: 'Warden', icon: '⚔️', hp: 36, power: 3 },
-      { name: 'Stonestep', icon: '🗿', hp: 52, power: 0 },
-      { name: 'Emberwright', icon: '🔥', hp: 24, power: 6 },
-      { name: 'Lampbearer', icon: '🏮', hp: 30, power: 3 },
-      { name: 'Skywatcher', icon: '🪶', hp: 20, power: 6 },
-      { name: 'Tinker', icon: '🔧', hp: 28, power: 3 },
-      { name: 'Duskblade', icon: '🗡️', hp: 16, power: 9 },
+      { name: 'Vanguard', icon: '🛡️', hp: 40 },
+      { name: 'Archer', icon: '🏹', hp: 28 },
+      { name: 'Mystic', icon: '🔮', hp: 22 },
+      { name: 'Warden', icon: '⚔️', hp: 36 },
+      { name: 'Stonestep', icon: '🗿', hp: 52 },
+      { name: 'Emberwright', icon: '🔥', hp: 24 },
+      { name: 'Lampbearer', icon: '🏮', hp: 30 },
+      { name: 'Skywatcher', icon: '🪶', hp: 20 },
+      { name: 'Tinker', icon: '🔧', hp: 28 },
+      { name: 'Duskblade', icon: '🗡️', hp: 16 },
     ],
   },
 
@@ -49,20 +51,23 @@ export const UNITS = {
     // point in between moves the number a little. Only the final damage is rounded.
     powerBase: 1.15,
     powerStep: 3,
-    // Danger preview - the chevrons above a revealed fight. NOT the combat maths: this
-    // is only what the player is shown before deciding to walk in. The rank is
-    //   base ^ ((total enemy power - total living party power) / powerStep)
-    //   * (enemy count / living party count)
-    // rounded to a whole number of chevrons. Even numbers on both sides give 1 chevron.
-    // maxChevrons only caps how many are DRAWN, so the stack stays readable on screen.
-    danger: { base: 1.2, powerStep: 3, maxChevrons: 8 },
+    // The AUTO-RESOLVE simulation's stand-in for party strength (the party has no
+    // power of its own any more): a unit simulates at base + perUpgrade * its
+    // unlocked upgrade count. Only the fallback simulation reads this; the
+    // interactive combat fights with the upgraded abilities themselves.
+    simPower: { base: 3, perUpgrade: 2 },
+    // Danger preview - the chevrons above a revealed fight. ABSOLUTE, not relative
+    // to the party: reading whether a fight is takeable is the player's job.
+    // Regular fights show 0..2 chevrons by the band their TOTAL enemy power falls
+    // into (0 below bands[0], 1 from bands[0], 2 from bands[1]); a Stasis Colony
+    // always shows `colony`, the Stasis Seed always shows `seed`.
+    danger: { bands: [12, 36], colony: 3, seed: 5, maxChevrons: 8 },
     // Player units hit harder the closer they are to death ("playing carefully"):
     // damage *= 1 + desperation * (1 - hp / maxHp). 0 = off, 0.5 = up to +50% at 1 HP.
     desperation: 0.5,
     // Enemy target choice: weight grows with the target's remaining HP fraction,
     // raised to this exponent (0 = pick uniformly at random).
     healthyTargetBias: 2,
-    victoryPower: 3,          // power awarded to a chosen unit after winning a battle
     victorySupplies: 5,       // supplies salvaged after winning any battle (incl. Stasis)
     maxRounds: 100,           // safety cap for the simulation loop
     // Regular enemy groups. Difficulty is a function of the RING (distance from the

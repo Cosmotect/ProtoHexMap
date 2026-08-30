@@ -152,18 +152,32 @@ fs.mkdirSync(OUT, { recursive: true });
   await page.evaluate(() => window.__battle.debugResolve(true));
   await page.waitForFunction(() => !document.getElementById('dialog').classList.contains('hidden'), null, { timeout: 25000 });
   const rewardBtn = await page.evaluate(() => [...document.querySelectorAll('#dialog-actions button')].map((b) => b.textContent).join('|'));
-  // The reward text is built from config (battle.victoryPower), so read it rather than
-  // hardcoding a number that a balance pass will change.
-  const victoryPower = await page.evaluate(() => window.game.config.battle.victoryPower);
-  if (!rewardBtn.includes(`+${victoryPower} power`)) problems.push('battle report lacks the reward button: ' + rewardBtn);
+  if (!/unlock/i.test(rewardBtn)) problems.push('battle report lacks the upgrade reward button: ' + rewardBtn);
   const transcript = await page.evaluate(() => document.getElementById('dialog-body').textContent);
   if (/\{(attacker|defender|dmg)\}/.test(transcript)) problems.push('battle transcript shows raw placeholders');
   await page.evaluate(() => { document.querySelector('#dialog-actions button').click(); });
   await page.waitForTimeout(150);
-  const chooser = await page.evaluate(() => document.getElementById('dialog-title').textContent);
-  if (!/Lessons/.test(chooser)) problems.push('power-up chooser did not open after the battle: ' + chooser);
+  // The upgrade chooser: one offered tree node per living unit, plus Skip.
+  const chooser = await page.evaluate(() => ({
+    title: document.getElementById('dialog-title').textContent,
+    buttons: document.querySelectorAll('#dialog-actions button').length,
+    living: window.game.livingUnits().length,
+  }));
+  if (!/Lessons/.test(chooser.title)) problems.push('upgrade chooser did not open after the battle: ' + JSON.stringify(chooser));
+  if (chooser.buttons !== chooser.living + 1) problems.push(`upgrade chooser should offer ${chooser.living} upgrades + Skip, got ${chooser.buttons}`);
   await page.screenshot({ path: path.join(OUT, '01e-reward-chooser.png') });
-  await dismissDialog();
+  // Picking the first offer unlocks a real tree node on a party unit.
+  await page.evaluate(() => { document.querySelector('#dialog-actions button').click(); });
+  await page.waitForTimeout(200);
+  const unlocked = await page.evaluate(() => ({
+    total: window.game.state.party.reduce((a, u) => a + (u.upgrades?.length ?? 0), 0),
+    refShape: window.game.state.party.every((u) => (u.upgrades ?? []).every((r) => /^[a-z]+:[a-z]+$/.test(r))),
+    chips: document.querySelectorAll('#party-units .ab-chip').length,
+    marked: document.querySelectorAll('#party-units .ab-chip b').length,
+  }));
+  if (unlocked.total !== 1 || !unlocked.refShape) problems.push('the reward pick did not unlock exactly one tree node: ' + JSON.stringify(unlocked));
+  if (unlocked.chips !== 6) problems.push(`party panel should show 2 ability chips per unit (6), got ${unlocked.chips}`);
+  if (unlocked.marked !== 1) problems.push('the unlocked upgrade is not counted on its ability chip: ' + JSON.stringify(unlocked));
   // Closing the last window flies the camera back out to the world map.
   await page.waitForFunction(() => window.__cinematic.mode() === 'idle', null, { timeout: 25000 }).catch(() => problems.push('did not fly back out after the reward chooser'));
 
@@ -432,6 +446,26 @@ fs.mkdirSync(OUT, { recursive: true });
     taken: document.querySelectorAll('.roster-card.taken').length,
   }));
   if (!roster.open || roster.cards !== 10 || roster.taken !== 3) problems.push('roster grid wrong: ' + JSON.stringify(roster));
+  // The unit detail window below the grid: portrait + story on the left, TWO
+  // ability sections with their 5-node upgrade trees drawn as SVG.
+  const detail = await page.evaluate(() => ({
+    sections: document.querySelectorAll('#unit-detail .ud-ability').length,
+    nodes: document.querySelectorAll('#unit-detail .ut-node').length,
+    edges: document.querySelectorAll('#unit-detail .ability-tree line').length,
+    story: (document.querySelector('#unit-detail .ud-story')?.textContent ?? '').length > 20,
+    name: document.querySelector('#unit-detail .ud-name')?.textContent,
+  }));
+  if (detail.sections !== 2 || detail.nodes !== 10) problems.push('unit detail should show 2 abilities x 5 tree nodes: ' + JSON.stringify(detail));
+  if (detail.edges < 8) problems.push('upgrade trees are missing their edges: ' + JSON.stringify(detail));
+  if (!detail.story) problems.push('unit detail lacks a backstory: ' + JSON.stringify(detail));
+  // Hovering another roster card previews that character in the detail window.
+  await page.evaluate(() => {
+    const c = [...document.querySelectorAll('.roster-card')].find((x) => x.textContent.includes('Duskblade'));
+    c.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+  });
+  await page.waitForTimeout(100);
+  const hoverName = await page.evaluate(() => document.querySelector('#unit-detail .ud-name')?.textContent);
+  if (hoverName !== 'Duskblade') problems.push('hovering a roster card did not preview it: ' + hoverName);
   await page.screenshot({ path: path.join(OUT, '32-roster.png') });
   await page.evaluate(() => { [...document.querySelectorAll('.roster-card')].find((c) => c.textContent.includes('Stonestep')).click(); });
   await page.waitForTimeout(300);
@@ -624,13 +658,17 @@ fs.mkdirSync(OUT, { recursive: true });
       colonyDist: g.stasis.colonies[0]?.distance,
       weakRank: g.dangerRank(g.hexAt(-2, 0)),
       strongRank: g.dangerRank(g.hexAt(-1, 3)),
+      seedRank: g.dangerRank(g.map.seed),
       lineSpeed: g.config.stasis.lineSpeed,
       witherEvery: g.config.stasis.witherEvery,
     };
   });
   if (scn3.id !== 'tutorial3' || scn3.seedTitle !== 'Stasis Sprout' || !scn3.seedRevealed) problems.push('tutorial3 seed wrong: ' + JSON.stringify(scn3));
   if (scn3.colonies !== 1 || scn3.colonyDist !== 6) problems.push('tutorial3 scripted colony wrong: ' + JSON.stringify(scn3));
-  if (scn3.weakRank !== 1 || scn3.strongRank < 3) problems.push('tutorial3 danger ranks wrong: ' + JSON.stringify(scn3));
+  // Absolute chevrons: the skirmish sits below the first band (0), the wall in
+  // the second (2); the Seed always wears the fixed seed count.
+  if (scn3.weakRank !== 0 || scn3.strongRank !== 2) problems.push('tutorial3 danger ranks wrong: ' + JSON.stringify(scn3));
+  if (scn3.seedRank !== 5) problems.push('the Seed should always wear 5 chevrons: ' + JSON.stringify(scn3));
   if (scn3.lineSpeed !== 1 || scn3.witherEvery !== 1) problems.push('tutorial3 configPatch not applied: ' + JSON.stringify(scn3));
   await page.screenshot({ path: path.join(OUT, '65-withering-start.png') });
   // Dismiss whatever hint cards are open (start shows two).

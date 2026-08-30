@@ -4,7 +4,8 @@ import { createRng } from './rng.js';
 import { generateMap, setType, setBiome } from './map.js';
 import { buildScenarioMap, cloneEnemies } from './scenarios/scenario.js';
 import { hexKey, neighbors, hexesInRange, hexDistance } from './hex.js';
-import { simulateBattle, makeEnemies, makeRegulars, renameDuplicates, regularUnitPower } from './battle.js';
+import { simulateBattle, makeEnemies, makeRegulars, renameDuplicates } from './battle.js';
+import { availableUpgrades, unlockUpgrade, upgradeCount } from './upgrades.js';
 import { EVENTS, LORE_IDS } from './events.js';
 import { t, tn } from './i18n.js';
 
@@ -67,8 +68,11 @@ export class Game {
       // The starting party is the first `party.size` entries of the roster, so a
       // character's stats are defined once (config/units.js, party.roster).
       // A scenario may fix its own party instead.
+      // `upgrades` holds the unit's unlocked ability tree nodes ("ability:node"
+      // refs); `power` is only the auto-resolve SIMULATION's strength proxy,
+      // derived from the upgrade count (refreshSimPower) - nothing displays it.
       party: (scenario?.party ?? (config.party.roster ?? []).slice(0, config.party.size ?? 3))
-        .map((u) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.hp, power: u.power, alive: true, isPlayer: true })),
+        .map((u) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.hp, upgrades: [], power: config.battle.simPower.base, alive: true, isPlayer: true })),
       supplies,
       maxSupplies: scenario?.maxSupplies ?? supplies,
       turn: 0,
@@ -214,34 +218,19 @@ export class Game {
 
   livingUnits() { return this.state.party.filter((u) => u.alive); }
 
-  // Danger rank of a battle tile, shown as chevrons above the marker (config.battle.danger):
-  //   base ^ ((total enemy power - total living party power) / powerStep)
-  //   * (enemy count / living party count)
-  // rounded. Both halves matter: the first says how much harder each enemy hits, the
-  // second how many more of them there are - and being outnumbered is what actually
-  // kills a party. Equal power and equal numbers = 1 chevron.
-  // On Stasis tiles the active debuffs are counted in where they move power or numbers
-  // (party power loss, extra enemies); the max-HP debuff moves neither, so it does not
-  // show here. maxChevrons caps only the drawing, not the maths.
+  // Danger rank of a battle tile, shown as chevrons above the marker
+  // (config.battle.danger). ABSOLUTE, deliberately not relative to the party:
+  // judging whether a fight is takeable is the player's job. Regular fights
+  // show 0..2 chevrons by the band their total enemy power falls into; a
+  // Stasis Colony always shows danger.colony, the Seed always danger.seed.
   dangerRank(hex) {
     if (!hex.enemies) return 0;
-    const living = this.livingUnits();
-    if (!living.length) return 0;
-    let enemyPower = hex.enemies.reduce((a, e) => a + e.power, 0);
-    let enemyCount = hex.enemies.length;
-    let partyPower = living.reduce((a, u) => a + u.power, 0);
-    const cfgDebuffs = this.config.stasis.debuffs;
-    for (const id of this.activeDebuffsFor(hex)) {
-      if (id === 'power') partyPower -= cfgDebuffs.power.amount * living.length;
-      else if (id === 'extraEnemies') {
-        const n = cfgDebuffs.extraEnemies.count;
-        enemyPower += n * regularUnitPower(this.config.battle, hex.ring);
-        enemyCount += n;
-      }
-    }
     const d = this.config.battle.danger;
-    const rank = Math.pow(d.base, (enemyPower - partyPower) / d.powerStep) * (enemyCount / living.length);
-    return Math.max(0, Math.min(d.maxChevrons ?? 8, Math.round(rank)));
+    if (hex.isSeed) return d.seed;
+    if (hex.isColony) return d.colony;
+    const total = hex.enemies.reduce((a, e) => a + e.power, 0);
+    const rank = (d.bands ?? []).filter((threshold) => total >= threshold).length;
+    return Math.min(d.maxChevrons ?? 8, rank);
   }
   deadUnits() { return this.state.party.filter((u) => !u.alive); }
 
@@ -250,7 +239,7 @@ export class Game {
   setPartyUnit(index, def) {
     const s = this.state;
     if (s.turn !== 0 || s.status !== 'playing' || !s.party[index] || !def) return false;
-    s.party[index] = { name: def.name, icon: def.icon, hp: def.hp, maxHp: def.hp, power: def.power, alive: true, isPlayer: true };
+    s.party[index] = { name: def.name, icon: def.icon, hp: def.hp, maxHp: def.hp, upgrades: [], power: this.config.battle.simPower.base, alive: true, isPlayer: true };
     this.addLog('log.joined', { name: { name: def.name } });
     this.emit('change');
     return true;
@@ -597,12 +586,12 @@ export class Game {
     if (this.state.supplies < this.shopCost(id)) return 'supplies';
     if (id === 'spareParts' && !this.deadUnits().length) return 'useless';
     if (id === 'rest' && this.state.fatigue === 0 && this.livingUnits().every((u) => u.hp >= u.maxHp)) return 'useless';
-    if ((id === 'upgrade' || id === 'relic') && !this.livingUnits().length) return 'useless';
+    if ((id === 'upgrade' || id === 'relic') && !this.hasUpgradeOffers()) return 'useless';
     return null;
   }
 
   // Buys one option of the shop the party stands in. "unitIndex" is needed by the
-  // options that target a unit (upgrade, relic, spareParts). Each option sells once.
+  // options that target a unit (spareParts). Each option sells once.
   shopBuy(item, unitIndex) {
     const s = this.state;
     const shop = this.config.shop;
@@ -627,11 +616,11 @@ export class Game {
       const n = this.revealBlob(cfg.blobSize, cfg.blobMaxDistance);
       this.addLog('log.shop.map', { cost, n });
     } else if (item === 'upgrade' || item === 'relic') {
-      const u = s.party[unitIndex];
-      if (!u || !u.alive) return false;
+      // Pays for ONE ability upgrade pick; the UI opens the same chooser as a
+      // battle reward right after this returns true.
+      if (!this.hasUpgradeOffers()) return false;
       s.supplies -= cost;
-      u.power += shop.upgradeAmount;
-      this.addLog(item === 'relic' ? 'log.shop.relic' : 'log.shop.upgraded', { name: { name: u.name }, power: u.power, cost });
+      this.addLog(item === 'relic' ? 'log.shop.relic' : 'log.shop.upgraded', { cost });
     } else if (item === 'rumors') {
       s.supplies -= cost;
       const hidden = [...this.map.hexes.values()].filter((h) => !h.revealed && h.encounter === 'battle');
@@ -671,18 +660,23 @@ export class Game {
     hex.enemies = null;
 
     // Stasis debuffs: temporarily weaken the party and/or reinforce the enemy for
-    // this one fight. Damage taken stays after the fight; max HP and power come back.
+    // this one fight. Damage taken stays after the fight; max HP comes back.
+    // The "damage" debuff travels on the context: the interactive engine takes it
+    // as a flat ability-damage penalty (damageMod), while the auto-resolve
+    // simulation approximates it by lowering the party's sim power proxy.
     const debuffs = this.activeDebuffsFor(hex);
     const cfgDebuffs = this.config.stasis.debuffs;
     const saved = s.party.map((u) => ({ maxHp: u.maxHp, power: u.power }));
+    let damageMod = 0;
     for (const id of debuffs) {
       if (id === 'maxHp') {
         for (const u of s.party) {
           u.maxHp = Math.max(1, Math.round(u.maxHp * (1 - cfgDebuffs.maxHp.fraction)));
           u.hp = Math.min(u.hp, u.maxHp);
         }
-      } else if (id === 'power') {
-        for (const u of s.party) u.power -= cfgDebuffs.power.amount;
+      } else if (id === 'damage') {
+        damageMod += cfgDebuffs.damage.amount;
+        for (const u of s.party) u.power -= cfgDebuffs.damage.amount * (this.config.battle.powerStep ?? 3);
       } else if (id === 'extraEnemies') {
         enemies.push(...makeRegulars(this.rng, this.config.battle, hex.ring, cfgDebuffs.extraEnemies.count));
         renameDuplicates(enemies);
@@ -697,7 +691,7 @@ export class Game {
     if (enemies.title) this.addLog('log.battle.stasis', { title: { name: enemies.title }, who, first });
     else this.addLog('log.battle', { who, first });
 
-    return { hex, forced, opts, enemies, debuffs, saved };
+    return { hex, forced, opts, enemies, debuffs, saved, damageMod };
   }
 
   finishCombat(ctx, result) {
@@ -736,10 +730,12 @@ export class Game {
     this.addLog(result.won ? 'log.victory' : 'log.defeat', { n: result.rounds });
 
     // The victory reward is decided BEFORE the dialog goes out: the window reads it
-    // while it is being built (a regression once hid the power-up chooser because the
-    // reward was only set after the dialog event fired).
-    if (result.won && this.config.battle.victoryPower > 0 && this.livingUnits().length) {
-      result.reward = this.config.battle.victoryPower;
+    // while it is being built (a regression once hid the reward chooser because the
+    // reward was only set after the dialog event fired). The reward is ability
+    // upgrade PICKS; the offers themselves are drawn fresh at each pick, so a
+    // Colony's several picks see the children a previous pick just opened.
+    if (result.won && this.hasUpgradeOffers()) {
+      result.reward = 'upgrade';
       // Clearing a Colony grants several picks (config.stasis.rewardPicks).
       result.rewardPicks = hex.isColony ? this.config.stasis.rewardPicks : 1;
     }
@@ -864,11 +860,13 @@ export class Game {
         return;
       }
       case 'power': {
-        const living = this.livingUnits();
+        // The scholar's lesson: one random living unit unlocks one random
+        // available ability upgrade (nothing left to learn = nothing happens).
+        const living = this.livingUnits().filter((u) => availableUpgrades(u).length);
         if (living.length) {
           const u = this.rng.pick(living);
-          u.power += cfg.scholarPower;
-          effect = t('effect.power', { name: tn(u.name), n: cfg.scholarPower, power: u.power });
+          const pick = this.unlockRandomUpgrade(u);
+          effect = t('effect.power', { name: tn(u.name), upgrade: t(`upgrade.${pick.abilityId}.${pick.nodeId}.name`) });
         } else {
           effect = t('effect.power.none');
         }
@@ -887,7 +885,7 @@ export class Game {
       }
       case 'blackMarket': {
         // The choice happens in the UI; game.blackMarketDeal(index) applies it.
-        effect = t('effect.blackMarket', { n: cfg.blackMarketPower });
+        effect = t('effect.blackMarket');
         this.addLog('log.effect', { effect });
         this.emit('dialog', { kind: 'blackmarket', title, text, effect });
         return;
@@ -951,26 +949,63 @@ export class Game {
     return true;
   }
 
-  // Called by the dialog after a won battle.
-  grantVictoryPower(index) {
-    const u = this.state.party[index];
-    const n = this.config.battle.victoryPower;
-    if (!u || !u.alive || !n) return false;
-    u.power += n;
-    this.addLog('log.learned', { name: { name: u.name }, n, power: u.power });
+  // ----- ability upgrades (the party's only way to grow) -----------------
+  // The reward screen: ONE random upgrade offered per living unit, drawn from
+  // everything currently unlockable across the unit's ability trees; the
+  // player picks one offer to actually unlock. Newly opened children join the
+  // pool on the NEXT reward, because the pool is re-read every time.
+  upgradeOffers() {
+    const out = [];
+    this.state.party.forEach((u, index) => {
+      if (!u.alive) return;
+      const pool = availableUpgrades(u);
+      if (!pool.length) return;
+      out.push({ index, ...this.rng.pick(pool) });
+    });
+    return out;
+  }
+  hasUpgradeOffers() {
+    return this.state.party.some((u) => u.alive && availableUpgrades(u).length > 0);
+  }
+
+  // Keeps the auto-resolve simulation's strength proxy in step with the
+  // unit's real growth. Nothing displays this number.
+  refreshSimPower(u) {
+    const sp = this.config.battle.simPower;
+    u.power = sp.base + upgradeCount(u) * sp.perUpgrade;
+  }
+
+  // Called by the reward dialog with one of upgradeOffers()'s entries.
+  applyUpgradePick(offer) {
+    const u = this.state.party[offer.index];
+    if (!u || !u.alive || !unlockUpgrade(u, offer.ref)) return false;
+    this.refreshSimPower(u);
+    this.addLog('log.learned', { name: { name: u.name }, upgrade: { key: `upgrade.${offer.abilityId}.${offer.nodeId}.name` } });
     this.emit('change');
     return true;
+  }
+
+  // Unlocks a RANDOM available upgrade for the unit (scholar / black market).
+  // Returns the unlocked entry, or null when the unit has nothing left.
+  unlockRandomUpgrade(u) {
+    const pool = availableUpgrades(u);
+    if (!pool.length) return null;
+    const pick = this.rng.pick(pool);
+    unlockUpgrade(u, pick.ref);
+    this.refreshSimPower(u);
+    return pick;
   }
 
   blackMarketDeal(index) {
     const u = this.state.party[index];
     const cfg = this.config.events;
     if (!u || !u.alive) return false;
+    const pick = this.unlockRandomUpgrade(u);
+    if (!pick) return false;
     const loss = Math.max(1, Math.round(u.maxHp * cfg.blackMarketHpFraction));
     u.maxHp = Math.max(1, u.maxHp - loss);
     u.hp = Math.min(u.hp, u.maxHp);
-    u.power += cfg.blackMarketPower;
-    this.addLog('log.blackMarket', { name: { name: u.name }, loss, n: cfg.blackMarketPower, power: u.power });
+    this.addLog('log.blackMarket', { name: { name: u.name }, loss, upgrade: { key: `upgrade.${pick.abilityId}.${pick.nodeId}.name` } });
     this.emit('change');
     return true;
   }

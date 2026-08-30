@@ -69,15 +69,17 @@ export const COMBAT_TAGS = {
 // (uphill steps cost 2), flying ignores height and glides over anything.
 export const UNIT_COMBAT = {
   default: { init: 5, speed: 4, flying: false, abilities: ['strike'] },
-  // party roster
-  Vanguard: { init: 5, speed: 4, flying: false, abilities: ['strike', 'shove', 'guard'] },
+  // party roster - exactly TWO abilities per character: each drives its own
+  // upgrade tree (config/upgrades.js), and the roster's detail window and the
+  // party panel are laid out for the pair.
+  Vanguard: { init: 5, speed: 4, flying: false, abilities: ['strike', 'shove'] },
   Archer: { init: 7, speed: 4, flying: false, abilities: ['volley', 'lance'] },
   Mystic: { init: 4, speed: 3, flying: false, abilities: ['burst', 'mend'] },
   Warden: { init: 6, speed: 4, flying: false, abilities: ['strike', 'guard'] },
   Stonestep: { init: 3, speed: 3, flying: false, abilities: ['strike', 'shove'] },
   Emberwright: { init: 5, speed: 3, flying: false, abilities: ['burst', 'strike'] },
   Lampbearer: { init: 6, speed: 4, flying: false, abilities: ['mend', 'bolt'] },
-  Skywatcher: { init: 8, speed: 5, flying: true, abilities: ['volley'] },
+  Skywatcher: { init: 8, speed: 5, flying: true, abilities: ['volley', 'lance'] },
   Tinker: { init: 5, speed: 4, flying: false, abilities: ['shove', 'bolt'] },
   Duskblade: { init: 9, speed: 5, flying: false, abilities: ['strike', 'lance'] },
   // regular enemies

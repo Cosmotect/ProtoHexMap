@@ -20,14 +20,18 @@
 //  collisions, falls, crush chains and void edges, height changes, tag
 //  placement with on-destroy / on-expire / periodic casts, high/low ground
 //  damage modifiers, and the outcome-scoring enemy AI.
-//  Added for Everlands: a unit's world-map POWER gives bonus ability damage
-//  (config.combat.powerPerDamage), and a fatigue-forced fight opens with an
-//  ambush enemy phase before round 1.
+//  Added for Everlands: an ENEMY's world-map power gives bonus ability damage
+//  (config.combat.powerPerDamage); PARTY units instead fight with their
+//  UPGRADED ability defs (def.abilityDefs, resolved by src/upgrades.js from
+//  the unit's unlocked tree nodes); partyDamageMod is a flat penalty to the
+//  party's ability damage (the Stasis "damage" debuff); and a fatigue-forced
+//  fight opens with an ambush enemy phase before round 1.
 // =====================================================================
 import { DIRS, K, PK, addK, hexDist, rotOff, aimRot, abRotFor, rotDir, boardTiles } from './bhex.js';
 import { abilityById, tagDefById, combatStatsFor } from '../../config/abilities.js';
 
 export function createBattle({ config, radius, heights, party, enemies, partyKeys, enemyKeys, forced,
+                               partyDamageMod = 0,
                                onChange, onFloater, onLog, onAnim, onEnd }) {
   const CFG = config.combat;
   const R = radius;
@@ -37,6 +41,9 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   const isVoid = (k) => CFG.voidEdges && !tilePass(k);
   const activeTiles = () => tiles;
   const abById = abilityById;
+  // A unit's view of an ability: its own resolved (upgraded) def when it has
+  // one, the base table otherwise (enemies, tag-triggered casts).
+  const abFor = (u, id) => (u && u.abilityDefs && u.abilityDefs[id]) || abilityById(id);
 
   let idc = 1;
   const nid = () => idc++;
@@ -60,6 +67,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       init: cs.init, speed: cs.speed, flying: !!cs.flying,
       maxHp: def.maxHp ?? def.hp, hp: def.hp,
       abilityIds: [...cs.abilities],
+      abilityDefs: def.abilityDefs ?? null,
       pos, isEnemy, idx: i, partyIndex: def.partyIndex ?? null,
       startPos: pos, moveLocked: false, done: false, tagTicked: false,
       stunned: false, shield: false, critBuff: false, haste: 0, summoned: false,
@@ -86,8 +94,10 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   const curP = () => sb.units.find((u) => u.uid === sb.activeUid && !u.isEnemy && u.hp > 0);
   const speedFloor = (u) => Math.min(u.speed, CFG.minSpeed);
   const effSpeed = (u) => Math.max(speedFloor(u), u.speed + (u.haste || 0), 0);
-  // Bonus ability damage from the unit's world-map power.
+  // Bonus ability damage from the unit's world-map power (enemies only in
+  // practice: party defs carry no power). partyDamageMod hits party casts.
   const powBonus = (c) => (c && c.power ? Math.round(c.power / (CFG.powerPerDamage || 3)) : 0);
+  const dmgMod = (c) => (c && c.isEnemy === false ? -partyDamageMod : 0);
 
   // ----- live / simulated effect state (hex-box 10-battle-effects) -------
   function liveSt() { return { sim: false, units: sb.units, tags: sb.tags, heights: sb.heights, deathQueue: sb.deathQueue, rec: null }; }
@@ -260,7 +270,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       const tgt = u || bt;
       if (!tgt) { if (!st.sim) floater(dt, '✸', ab.color); continue; }
       if (ab.damage > 0) {
-        let dmg = ab.damage + powBonus(caster), lbl = '';
+        let dmg = Math.max(0, ab.damage + powBonus(caster) + dmgMod(caster)), lbl = '';
         if (u) {
           const hd = stH(st, caster.pos) - stH(st, dt);
           if (hd >= 2 && CFG.highBonus > 0) { dmg += CFG.highBonus; lbl = 'HIGH'; }
@@ -597,7 +607,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     const res = reach(e);
     let best = null;
     for (const abId of e.abilityIds) {
-      const ab = abById(abId); if (!ab) continue;
+      const ab = abFor(e, abId); if (!ab) continue;
       if (!(ab.damage > 0 || ab.heal > 0 || ab.pushZone.length || ab.tagId || ab.hZone.length)) continue;
       for (const startK of Object.keys(res.d)) {
         if (startK !== e.pos && !canStop(res, startK)) continue;
@@ -671,7 +681,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     const uu = unitAt(k);
     if (!sb.selAb && uu && !uu.isEnemy && uu.uid !== c.uid && !uu.done) { select(uu); return; }
     if (sb.selAb) {
-      const ab = abById(sb.selAb);
+      const ab = abFor(c, sb.selAb);
       const target = ab && sb.aimMap ? sb.aimMap[k] : null;
       if (target != null) {
         sb.busy = true;
@@ -711,7 +721,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     const c = curP(); if (!c) return;
     if (sb.selAb === abId) { sb.selAb = null; sb.aimMap = null; }
     else {
-      const ab = abById(abId);
+      const ab = abFor(c, abId);
       if (!ab || !c.abilityIds.includes(abId)) return;
       sb.selAb = abId; sb.aimMap = buildAim(c, ab);
     }
@@ -747,6 +757,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     state: sb,
     clickTile, selectAbility, endTurn, activate: (uid) => { const u = sb.units.find((x) => x.uid === uid && !x.isEnemy && x.hp > 0 && !x.done); if (u && sb.phase === 'player' && !sb.busy) select(u); },
     abilityById: abById,
+    abilityFor: abFor,   // (unit, id) - the unit's UPGRADED def where it has one
     curPlayer: curP,
     reachFor: () => sb.reach,
     debugResolve,
