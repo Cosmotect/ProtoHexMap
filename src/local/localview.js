@@ -168,7 +168,12 @@ export class LocalMapView {
       this.buildCampfire();
       this.placeCampParty(party ?? []);
     } else {
-      this.placeUnits(party ?? [], enemies ?? [], rng);
+      // These are the REAL starting positions, not stage dressing: beginBattle()
+      // reuses them rather than rolling again, so the units the player sees as
+      // the clouds part are the ones the fight starts with. (Rolling twice was
+      // why everybody jumped a moment after landing.)
+      this.placement = this.placeUnits(party ?? [], enemies ?? [], rng, recipe?.spawns ?? null);
+      this.placedCounts = { party: (party ?? []).length, enemies: (enemies ?? []).length };
     }
     this.buildCamera();
     return this.map;
@@ -493,12 +498,27 @@ export class LocalMapView {
     this.tokens = [];
   }
 
-  // Re-places both sides for the actual battle and reports the layout the
-  // engine needs: who stands where, and each tile's elevation level.
+  // Reports the layout the engine needs: who stands where, and each tile's
+  // elevation level.
+  //
+  // The tokens are normally ALREADY on the board - build() put them there while
+  // the camera was still diving, and they are what the player sees the moment
+  // the clouds part. So the default path re-uses that placement and touches
+  // nothing. Only when the board does not match the fight being started (the
+  // campfire layout, or a battle begun without a fly-in, e.g. the Nomads event)
+  // are the tokens cleared and placed afresh.
   beginBattle({ party, enemies }) {
-    this.clearUnits();
-    const rng = this.rng ?? { random: Math.random };
-    const placement = this.placeUnits(party, enemies, rng, this.recipe?.spawns ?? null);
+    const matches = this.placement
+      && this.placedCounts?.party === party.length
+      && this.placedCounts?.enemies === enemies.length;
+    let placement = this.placement;
+    if (!matches) {
+      this.clearUnits();
+      const rng = this.rng ?? { random: Math.random };
+      placement = this.placeUnits(party, enemies, rng, this.recipe?.spawns ?? null);
+      this.placement = placement;
+      this.placedCounts = { party: party.length, enemies: enemies.length };
+    }
     const heights = {};
     for (const tile of this.map.hexes.values()) heights[tile.key] = tile.elevation ?? 0;
     return { ...placement, heights };
@@ -911,6 +931,8 @@ export class LocalMapView {
     this.campfire = null;
     this.campSeats = null;
     this.layout = null;
+    this.placement = null;      // the next arena rolls its own starting positions
+    this.placedCounts = null;
     // portraitCache is deliberately kept: the traverse above disposes the
     // per-sprite materials but never the textures, and one small texture per
     // glyph is worth reusing for the whole session.

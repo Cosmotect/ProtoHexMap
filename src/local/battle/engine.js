@@ -31,7 +31,7 @@ import { DIRS, K, PK, addK, hexDist, rotOff, aimRot, abRotFor, rotDir, boardTile
 import { abilityById, tagDefById, combatStatsFor } from '../../config/abilities.js';
 
 export function createBattle({ config, radius, heights, party, enemies, partyKeys, enemyKeys, forced,
-                               partyDamageMod = 0,
+                               partyDamageMod = 0, deferOpening = false,
                                onChange, onFloater, onLog, onAnim, onEnd }) {
   const CFG = config.combat;
   const R = radius;
@@ -750,11 +750,25 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     for (const u of sb.units) if (u.hp > 0) sArrive(st, u);
     flushDeaths(st);
   }
-  if (sb.ambush) { blog('AMBUSH - the enemy strikes first'); startEnemyPhase(); }
-  else startPlayerPhase();
+  // The fight is BUILT above and OPENED here. The two are separable because the
+  // caller may want to build it behind a transition (so the HUD is already the
+  // battle's when the clouds part) but not let a fatigue ambush swing at the
+  // party while the screen is still covered: `deferOpening` holds the opening
+  // enemy phase back until start() is called. A normal fight opens with
+  // startPlayerPhase(), which animates nothing, so it never needs deferring.
+  let opened = false;
+  function start() {
+    if (opened) return;
+    opened = true;
+    if (sb.ambush) { blog('AMBUSH - the enemy strikes first'); startEnemyPhase(); }
+    else startPlayerPhase();
+  }
+  if (deferOpening && sb.ambush) emit();   // the bar reads "enemy phase" while it waits
+  else start();
 
   return {
     state: sb,
+    start,
     clickTile, selectAbility, endTurn, activate: (uid) => { const u = sb.units.find((x) => x.uid === uid && !x.isEnemy && x.hp > 0 && !x.done); if (u && sb.phase === 'player' && !sb.busy) select(u); },
     abilityById: abById,
     abilityFor: abFor,   // (unit, id) - the unit's UPGRADED def where it has one

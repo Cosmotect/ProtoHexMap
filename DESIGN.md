@@ -190,6 +190,26 @@ balance must be re-measured against interactive play.
   `flyOutMs`). The climb out starts from wherever the player left the arena camera.
   A recipe hook (`applyRecipe` in localmap.js, fed by `hex.recipe`) is reserved for
   future handcrafted arenas and runs before the swap.
+* **Everything changes at the peak** (2026-08-29). The cinematic offers callers two
+  moments, and which one a job belongs to is the rule of the whole transition:
+  * `onSwap` - the swap point, screen fully clouded. EVERY change of game state or
+    of the interface goes here: `body.local-mode` on and off, the battle bar, the
+    start screen's HUD, the encounter itself starting, the arena being torn down on
+    the way out. Nothing the player can see is allowed to change anywhere else.
+  * `onArrived` - the camera has landed. Only "hand control over" belongs here.
+  The one thing that would break the rule is a fatigue AMBUSH: it opens with an
+  enemy phase, and animations are not state - played at the swap they would happen
+  behind the clouds. So `createBattle({ deferOpening: true })` builds the fight at
+  the swap (the HUD is the battle's before the clouds part) and holds only that
+  opening back until `battle.start()` on arrival. A normal fight opens with
+  `startPlayerPhase()`, which animates nothing, and needs no deferring.
+  `cinematic.inArena()` is "the arena is on screen, or the dive is past its swap
+  and committed to it" - the test callers use before starting an encounter.
+* **Unit placement happens once**. `build()` (during the dive) places both sides on
+  their REAL starting tiles and remembers them; `beginBattle()` re-uses that layout
+  instead of rolling again, and only re-places when the board does not match the
+  fight being started (the campfire layout, or a fight begun without a dive).
+  Rolling twice was why every unit visibly jumped a moment after the camera landed.
 * **The combat engine** (`local/battle/engine.js` + `bhex.js`; definitions in
   `src/config/abilities.js`, deliberately NOT in the settings window):
   * **Player phase - one simultaneous turn**: select any unit and reposition it

@@ -28,19 +28,36 @@ export function createCombatCinematic({ renderer, config, container, onModeChang
   let flight = null;          // { saved, hexPos, onSwap, onDone, swapped }
   window.__localView = localView;   // for debugging / automated tests
 
-  // Every place that used to write `mode = '...'` now goes through here, so
-  // callers get exactly one notification when we actually arrive on / leave
-  // the local map (the arena), covering the campfire start screen AND any
-  // encounter alike - not just interactive battles (see body.local-mode in
-  // main.js). 'in' and 'out' are still mid-flight over the world, not local.
-  function setMode(next) {
-    const wasLocal = mode === 'local';
-    mode = next;
-    const isLocal = mode === 'local';
-    if (isLocal !== wasLocal) onModeChange?.(isLocal);
+  // `mode` is where the FLIGHT is; `localUi` is what the HUD has been told.
+  // They are deliberately separate, because the two should not change at the
+  // same moment: the flight only reaches 'local' when the camera lands, but the
+  // HUD has to have finished changing by then. Everything that changes state or
+  // the interface is fired at the SWAP POINT instead - the peak of the cloud
+  // effect, where the screen is fully covered and nothing can be seen popping.
+  let localUi = false;
+  function setMode(next) { mode = next; }
+  function notifyLocal(v) {
+    if (v === localUi) return;
+    localUi = v;
+    onModeChange?.(v);
+  }
+
+  // Called on the first frame past the swap point, in both directions: hand the
+  // caller its one chance to change the world while the clouds hide everything.
+  function fireSwap(toLocal) {
+    if (flight.swapped) return;
+    flight.swapped = true;
+    notifyLocal(toLocal);
+    const fn = flight.onSwap;
+    flight.onSwap = null;
+    if (fn) fn();
   }
 
   function isActive() { return mode !== 'idle'; }
+  // "The arena is what the screen is showing, or is about to be." True from the
+  // swap point of a fly-in onwards - which is exactly when callers are allowed
+  // to start an encounter, even though the camera is still coming down.
+  function inArena() { return mode === 'local' || (mode === 'in' && !!flight?.swapped); }
 
   // Saves the world camera so the fly-out can put everything back exactly.
   function saveWorldCamera() {
@@ -62,7 +79,9 @@ export function createCombatCinematic({ renderer, config, container, onModeChang
   }
 
   // ----- fly IN: world -> local ------------------------------------------
-  // opts: { worldHex, baseColor, party, enemies, seed, recipe, onArrived }
+  // opts: { worldHex, baseColor, party, enemies, seed, recipe, onSwap, onArrived }
+  //   onSwap    fires at the peak of the clouds: change game state and the HUD here
+  //   onArrived fires when the camera lands: hand control to the player here
   function flyIn(opts) {
     if (isActive()) return false;
     const saved = saveWorldCamera();
@@ -87,6 +106,7 @@ export function createCombatCinematic({ renderer, config, container, onModeChang
       camStart: renderer.camera.position.clone(),
       targetStart: renderer.controls.target.clone(),
       fovStart: renderer.camera.fov,
+      onSwap: opts.onSwap,
       onArrived: opts.onArrived,
       swapped: false,
     };
@@ -117,12 +137,15 @@ export function createCombatCinematic({ renderer, config, container, onModeChang
       swapped: true,
     };
     setMode('local');
+    notifyLocal(true);   // no flight to hide anything behind: switch at once
     renderer.overrideFrame = frame;
     localView.activate();
     return true;
   }
 
   // ----- fly OUT: local -> world -------------------------------------------
+  // `onDone` fires at the PEAK of the clouds, not when the camera settles: by
+  // the time the world map is visible again the HUD is already the world's.
   function flyOut({ onDone } = {}) {
     if (mode !== 'local') return false;
     // The climb starts from where the player ACTUALLY left the camera, not from
@@ -135,7 +158,7 @@ export function createCombatCinematic({ renderer, config, container, onModeChang
       fov: localView.camera.fov,
     };
     localView.deactivate();
-    flight.onDone = onDone;
+    flight.onSwap = onDone;
     flight.swapped = false;
     setMode('out');
     t0 = performance.now();
@@ -153,6 +176,7 @@ export function createCombatCinematic({ renderer, config, container, onModeChang
     localView.dispose();
     flight = null;
     setMode('idle');
+    notifyLocal(false);
   }
 
   // ----- the per-frame timeline ---------------------------------------------
@@ -190,7 +214,9 @@ export function createCombatCinematic({ renderer, config, container, onModeChang
         setFov(renderer.camera, flight.fovStart + (80 - flight.fovStart) * k);
         renderer.renderer.render(renderer.scene, renderer.camera);
       } else {
-        if (!flight.swapped) { flight.swapped = true; }
+        // THE PEAK. The screen is fully clouded: the game state and the HUD
+        // change here, so nothing is ever seen switching.
+        fireSwap(true);
         // Falling out of the clouds above the arena, braking into the final pose.
         const k = easeOutCubic((t - swapT) / (1 - swapT));
         const from = localView.overheadCameraPose();
@@ -225,6 +251,9 @@ export function createCombatCinematic({ renderer, config, container, onModeChang
       setFov(localView.camera, from.fov + (to.fov - from.fov) * k);
       localView.render();
     } else {
+      // THE PEAK, going the other way: the HUD goes back to the world map and
+      // the arena is torn down while the clouds still cover everything.
+      if (!flight.swapped) { fireSwap(false); localView.dispose(); }
       const k = easeOutCubic((t - swapT) / (1 - swapT));
       renderer.camera.position.lerpVectors(flight.hexPos, flight.saved.position, k);
       addShake(renderer.camera.position, shake);
@@ -234,15 +263,14 @@ export function createCombatCinematic({ renderer, config, container, onModeChang
       renderer.renderer.render(renderer.scene, renderer.camera);
     }
     if (t >= 1) {
+      // Nothing but the camera is left to do: the state changed at the peak.
       renderer.overrideFrame = null;
       fx.hide();
       renderer.renderer.domElement.style.filter = '';
       restoreWorldCamera(flight.saved);
       localView.dispose();
-      const done = flight.onDone;
       flight = null;
       setMode('idle');
-      if (done) done();
     }
     return true;
   }
@@ -265,7 +293,7 @@ export function createCombatCinematic({ renderer, config, container, onModeChang
     localView.resize(w / h);
   });
 
-  return { flyIn, flyOut, startScreen, abort, isActive, mode: () => mode, localView };
+  return { flyIn, flyOut, startScreen, abort, isActive, inArena, mode: () => mode, localView };
 }
 
 // ----- the fullscreen cloud overlay -------------------------------------------

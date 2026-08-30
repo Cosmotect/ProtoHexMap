@@ -163,10 +163,10 @@ function openRosterFor(slotIndex) {
 function beginJourney() {
   if (!startScreen) return;
   startScreen = false;
-  ui.setStartScreen(false);
-  cinematic.localView.disablePicking();
-  cinematic.flyOut({ onDone: () => ui.update(game) });
-  ui.update(game);
+  cinematic.localView.disablePicking();   // no more roster clicks while we climb
+  // The roster panel and the "Begin journey" button turn back into the world
+  // map's HUD at the peak of the clouds, not the moment the button is pressed.
+  cinematic.flyOut({ onDone: () => { ui.setStartScreen(false); ui.update(game); } });
 }
 
 // ----- interactive combat (src/local/battle/) --------------------------------
@@ -237,6 +237,10 @@ function beginInteractiveBattle(ctx) {
     enemyKeys: placement.enemyKeys,
     forced: ctx.forced,
     partyDamageMod: ctx.damageMod ?? 0,   // the Stasis "damage" debuff
+    // Built now (at the peak of the transition, so the HUD is already the
+    // battle's when the clouds part) but a fatigue ambush does not swing until
+    // battle.start() - otherwise its opening blow lands behind the clouds.
+    deferOpening: true,
     onChange: () => { view.syncBattle(); ui.updateBattle(); syncPartyPanel(); },
     onFloater: (k, text, color) => view.addFloater(k, text, color),
     onLog: () => {},   // the floaters carry the story; a combat log can come later
@@ -274,9 +278,13 @@ function abortBattle() {
   ui.setBattleMode(null);
 }
 
-// Starts the dive; `resume` runs the actual encounter once the camera lands.
+// Starts the dive. The work is split across the two moments the cinematic
+// offers: `onSwap` at the peak of the clouds (everything that changes state or
+// the HUD, so nothing is seen switching) and `onArrived` when the camera lands
+// (handing control to the player).
 function startCombatDive(hex, resume) {
   const enemies = (hex.enemies ?? []).map((e) => ({ ...e }));
+  let turnBack = false;
   return cinematic.flyIn({
     worldHex: hex,
     baseColor: renderer.targetColorFor(hex).getHex(),
@@ -285,10 +293,14 @@ function startCombatDive(hex, resume) {
     seed: game.seed,
     recipe: hex.recipe ?? null,   // future: handcrafted arena recipes live on the hex
     neighbors: worldNeighborsFor(hex),
-    onArrived: () => {
+    onSwap: () => {
       // The wither may have eaten the encounter while we were in the air.
       if (COMBAT_TYPES.has(hex.encounter)) resume();
-      else cinematic.flyOut({});
+      else turnBack = true;
+    },
+    onArrived: () => {
+      if (turnBack) cinematic.flyOut({});
+      else if (battle) battle.start();
     },
   });
 }
@@ -405,7 +417,15 @@ function startRun(seed, opts = {}) {
   // in between should not happen; refusing makes the fight auto-resolve safely.
   game.combatDelegate = (ctx) => {
     if (battle) return false;
-    if (cinematic.mode() === 'local') { beginInteractiveBattle(ctx); return true; }
+    // The arena is on screen, or the dive has passed its swap point and is
+    // committed to it: build the fight now. If the camera has already landed
+    // there is nothing left to wait for, so it opens immediately; mid-flight it
+    // waits for onArrived (see startCombatDive).
+    if (cinematic.inArena()) {
+      beginInteractiveBattle(ctx);
+      if (cinematic.mode() === 'local') battle?.start();
+      return true;
+    }
     if (cinematic.isActive()) return false;
     return cinematic.flyIn({
       worldHex: ctx.hex,
@@ -415,7 +435,9 @@ function startRun(seed, opts = {}) {
       seed: game.seed,
       recipe: ctx.hex.recipe ?? null,
       neighbors: worldNeighborsFor(ctx.hex),
-      onArrived: () => beginInteractiveBattle(ctx),
+      // Same split: the fight is built under the clouds, and swings on landing.
+      onSwap: () => beginInteractiveBattle(ctx),
+      onArrived: () => { if (battle) battle.start(); },
     });
   };
 
