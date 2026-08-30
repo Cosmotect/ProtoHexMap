@@ -746,6 +746,25 @@ button.small { padding: 2px 8px; font-size: 12px; }
   padding: 1px 4px;
 }
 
+/* Tooltip for a status badge on a unit's plaque (src/local/localview.js).
+   Positioned from the plaque's projected screen box, so it follows the camera. */
+.status-tip {
+  position: fixed;
+  z-index: 45;                /* above the floaters, below the HUD dialogs */
+  pointer-events: none;
+  max-width: 260px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: var(--panel-bg);
+  border: 1px solid rgba(255, 209, 102, 0.5);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.status-tip .st-name { font-weight: 600; color: var(--accent); }
+.status-tip .st-desc { color: var(--text); }
+.status-tip .st-turns { color: var(--muted); font-family: var(--mono); font-size: 11px; margin-top: 2px; }
+
 /* Floating combat text over the arena (damage numbers, statuses). */
 .battle-floaters {
   position: fixed; inset: 0;

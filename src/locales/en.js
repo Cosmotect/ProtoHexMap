@@ -56,6 +56,19 @@ export const en = {
   'fatiguebar.title': 'Fatigue: one box per step since the last reset. A box lights up when you take that step; its number is the chance of being dragged into an encounter on the step after it.',
   'fatiguebar.box': 'Step {step}: {pct}% chance of a forced encounter',
 
+  // ----- unit statuses (the badges on a unit's plaque, src/local/localview.js) -----
+  'status.shield.name': 'Shield',
+  'status.shield.desc': 'Blocks the next hit or push entirely, then breaks.',
+  'status.crit.name': 'Charged',
+  'status.crit.desc': 'The next damaging ability this unit casts hits every target critically.',
+  'status.stun.name': 'Stunned',
+  'status.stun.desc': 'Loses its next activation: no move, no ability.',
+  'status.haste.name': 'Hastened {n}',
+  'status.haste.desc': 'Moves {n} tiles further than usual.',
+  'status.slow.name': 'Slowed {n}',
+  'status.slow.desc': 'Moves {n} tiles less than usual (never below the minimum speed).',
+  'status.turns': '{n} {n:turn|turns} left',
+
   'party.title': 'Party',
   'party.hp': '{hp} / {max} HP',
   'party.disabled': 'DISABLED',

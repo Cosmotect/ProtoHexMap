@@ -214,6 +214,24 @@ balance must be re-measured against interactive play.
   panel and on the field. One sprite rather than two stacked ones is also what
   keeps the plaque centred over the unit - two of different widths never were.
   Sizes live in the `PLAQUE` constant, deliberately not in the settings window.
+  The frame is gold for the party and red for enemies - the fastest read of which
+  side a token belongs to. Plaque sprites opt out of the scene's distance fog and
+  of the renderer's ACES tone mapping (`fog: false, toneMapped: false`): both are
+  for the 3D set, and together they were washing the portraits out to a flat grey.
+  * **Status badges**: a unit's statuses (shield, charge, stun, haste / slow) are
+    drawn as small icons on the numbers row, right-aligned, and each records the
+    box it occupies. Hovering one shows a tooltip with its name and effect, read
+    from the locale tables (`status.<id>.name` / `.desc`). The hit test does not
+    raycast: a sprite always faces the camera and is never rolled, so projecting
+    its centre plus one half-width along the camera's right vector gives the exact
+    screen rectangle, and the badge boxes map into it linearly - cheaper, and it
+    survives the camera moving.
+  * **Durations**: the corner number on a badge is drawn ONLY for a status that
+    really has one. None of today's do - a shield is spent by the next hit, a stun
+    by the next activation - so no number appears. When durations arrive, put a
+    remaining-turns count on the engine's unit as `statusTurns[<id>]` and the
+    badges start counting by themselves; `STATUSES` in localview.js is the table
+    that maps engine fields to badges.
 * **Unit placement happens once**. `build()` (during the dive) places both sides on
   their REAL starting tiles and remembers them; `beginBattle()` re-uses that layout
   instead of rolling again, and only re-places when the board does not match the

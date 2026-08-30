@@ -12,6 +12,7 @@ import { MapControls } from 'three/addons/controls/MapControls.js';
 import { generateLocalMap, pickRandomTiles, applyElevationWave, neutralElevation } from './localmap.js';
 import { COMBAT_CONFIG } from '../config/abilities.js';
 import { createRng } from '../rng.js';
+import { t, hasKey } from '../i18n.js';
 
 const SQRT3 = Math.sqrt(3);
 const deg = (d) => (d * Math.PI) / 180;
@@ -43,7 +44,13 @@ const PLAQUE = {
   worldWidth: 1.9,          // how wide the whole plaque is in world units
   worldY: 1.05,             // how high above the token's base it floats (clears the head)
   plateFill: 'rgba(10, 14, 24, 0.78)',
-  plateStroke: 'rgba(255, 209, 102, 0.75)',
+  plateStroke: 'rgba(255, 209, 102, 0.75)',      // the party's gold frame
+  plateStrokeEnemy: 'rgba(226, 71, 75, 0.9)',    // enemies get a red one, readable at a glance
+  badge: 20,                // a status icon's box on the numbers row
+  badgeGap: 3,
+  badgeFill: 'rgba(255, 255, 255, 0.10)',
+  badgeTextSize: 9,         // the turns-remaining number in its corner
+  badgeTextBg: 'rgba(8, 11, 18, 0.9)',
   iconFill: 'rgba(255, 255, 255, 0.08)',
   iconStroke: 'rgba(255, 255, 255, 0.16)',
   textColor: '#94a0b8',     // --muted
@@ -58,6 +65,51 @@ const PLAQUE = {
 // Overall canvas size follows from the layout above.
 PLAQUE.w = PLAQUE.pad * 2 + PLAQUE.icon + PLAQUE.gap + PLAQUE.bar;
 PLAQUE.h = PLAQUE.pad * 2 + PLAQUE.icon;
+
+// The statuses a unit can carry, in the order they are shown. `turnsOf` reads a
+// remaining-turns count IF the engine has one for that status - none of today's
+// do (a shield is spent by the next hit, a stun by the next activation), so no
+// number is drawn. The moment durations exist, put them on the unit as
+// `statusTurns[<id>]` and the badge starts counting on its own.
+// `amount` is the status's magnitude where it has one (haste is +N / -N speed).
+const STATUSES = [
+  { id: 'shield', icon: '🛡', on: (u) => !!u.shield },
+  { id: 'crit', icon: '⚡', on: (u) => !!u.critBuff },
+  { id: 'stun', icon: '💫', on: (u) => !!u.stunned },
+  { id: 'haste', icon: '💨', on: (u) => (u.haste ?? 0) > 0, amount: (u) => u.haste },
+  { id: 'slow', icon: '🐌', on: (u) => (u.haste ?? 0) < 0, amount: (u) => u.haste },
+];
+// HUD sprites must not be dimmed by the world: the scene's distance fog and the
+// renderer's ACES tone mapping are for the 3D set, and both were washing the
+// portraits out to a flat grey. Opting a sprite out of the two makes it read
+// exactly as its canvas was drawn.
+const SPRITE_MAT = (tex) => ({ map: tex, transparent: true, depthTest: false, fog: false, toneMapped: false });
+
+function statusesFor(unit) {
+  if (!unit) return [];
+  const out = [];
+  for (const st of STATUSES) {
+    if (!st.on(unit)) continue;
+    out.push({
+      id: st.id,
+      icon: st.icon,
+      turns: Number(unit.statusTurns?.[st.id]) || 0,
+      amount: st.amount ? st.amount(unit) : null,
+    });
+  }
+  return out;
+}
+
+// A status tooltip: its name, then what it does. Both come from the locale
+// tables (status.<id>.name / .desc); `amount` fills the {n} of the ones that
+// have a magnitude, and a real duration adds a line of its own.
+function statusTipHtml(hs) {
+  const n = hs.amount == null ? '' : (hs.amount > 0 ? `+${hs.amount}` : String(hs.amount));
+  const name = t(`status.${hs.id}.name`, { n });
+  const desc = t(`status.${hs.id}.desc`, { n });
+  const turns = hs.turns > 0 && hasKey('status.turns') ? `<div class="st-turns">${t('status.turns', { n: hs.turns })}</div>` : '';
+  return `<div class="st-name">${name}</div><div class="st-desc">${desc}</div>${turns}`;
+}
 
 export class LocalMapView {
   constructor(webglRenderer, domElement, config) {
@@ -380,7 +432,7 @@ export class LocalMapView {
       tex.colorSpace = THREE.SRGBColorSpace;
       this.portraitCache.set(glyph, tex);
     }
-    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial(SPRITE_MAT(tex)));
     sprite.scale.setScalar(0.42);
     sprite.position.set(0, 1.0, 0);
     sprite.renderOrder = 10;   // always drawn on top, never buried in a tile
@@ -398,13 +450,13 @@ export class LocalMapView {
   // same track, same green, the same switch to the danger red below half HP, and
   // the same dark segment line every `party.hpSegment` HP, so one bar is read the
   // same way in both places.
-  makeUnitPlaque(glyph) {
+  makeUnitPlaque(glyph, { enemy = false } = {}) {
     const cv = document.createElement('canvas');
     cv.width = PLAQUE.w * PLAQUE.dpr;
     cv.height = PLAQUE.h * PLAQUE.dpr;
     const tex = new THREE.CanvasTexture(cv);
     tex.colorSpace = THREE.SRGBColorSpace;
-    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial(SPRITE_MAT(tex)));
     sprite.scale.set(PLAQUE.worldWidth, PLAQUE.worldWidth * (PLAQUE.h / PLAQUE.w), 1);
     sprite.position.set(0, PLAQUE.worldY, 0);   // straight up from the token's axis
     sprite.renderOrder = 10;                    // always on top, never buried in a tile
@@ -413,20 +465,29 @@ export class LocalMapView {
     sprite.userData.ctx = g;
     sprite.userData.tex = tex;
     sprite.userData.glyph = glyph ?? '';
+    sprite.userData.enemy = !!enemy;
     sprite.userData.hp = undefined;
     sprite.userData.maxHp = undefined;
+    sprite.userData.statusKey = undefined;
+    sprite.userData.hotspots = [];   // status boxes, in canvas design units (hover -> tooltip)
     return sprite;
   }
 
   // Redraws a plaque for the given hp/maxHp - a no-op if neither changed since
   // the last call, so this is safe to call from every syncBattle().
-  updateUnitPlaque(plaque, hp, maxHp) {
+  updateUnitPlaque(plaque, hp, maxHp, unit = null) {
     if (!plaque) return;
     const clampedHp = Math.max(0, hp ?? 0);
     const safeMax = Math.max(0, maxHp ?? 0);
-    if (plaque.userData.hp === clampedHp && plaque.userData.maxHp === safeMax) return;
+    const statuses = statusesFor(unit);
+    // One string standing for the whole status row: cheap to compare, so the
+    // canvas is only redrawn when something the player can see actually changed.
+    const statusKey = statuses.map((s2) => `${s2.id}:${s2.turns}:${s2.amount ?? ''}`).join(',');
+    if (plaque.userData.hp === clampedHp && plaque.userData.maxHp === safeMax
+        && plaque.userData.statusKey === statusKey) return;
     plaque.userData.hp = clampedHp;
     plaque.userData.maxHp = safeMax;
+    plaque.userData.statusKey = statusKey;
 
     const P = PLAQUE;
     const g = plaque.userData.ctx;
@@ -436,8 +497,8 @@ export class LocalMapView {
     g.fillStyle = P.plateFill;
     roundRect(g, 1, 1, P.w - 2, P.h - 2, P.plateRadius);
     g.fill();
-    g.strokeStyle = P.plateStroke;
-    g.lineWidth = 2;
+    g.strokeStyle = plaque.userData.enemy ? P.plateStrokeEnemy : P.plateStroke;
+    g.lineWidth = plaque.userData.enemy ? 2.5 : 2;
     roundRect(g, 1, 1, P.w - 2, P.h - 2, P.plateRadius);
     g.stroke();
 
@@ -465,6 +526,41 @@ export class LocalMapView {
     g.textAlign = 'left';
     g.textBaseline = 'alphabetic';
     g.fillText(`${clampedHp} / ${safeMax}`, cx, iy + P.textSize);
+
+    // Status icons, right-aligned on the same row as the numbers. Each one
+    // records its box so a hover can find it (see statusAt / the tooltip).
+    plaque.userData.hotspots = [];
+    if (statuses.length) {
+      const bh = P.badge;
+      const by0 = iy + 1;
+      let x = cx + cw - bh;                      // laid out right to left
+      for (let i = statuses.length - 1; i >= 0; i--) {
+        const st = statuses[i];
+        g.fillStyle = P.badgeFill;
+        roundRect(g, x, by0, bh, bh, 5);
+        g.fill();
+        g.font = `${Math.round(bh * 0.68)}px ${P.emojiFont}`;
+        g.textAlign = 'center';
+        g.textBaseline = 'middle';
+        g.fillText(st.icon, x + bh / 2, by0 + bh / 2 + 1);
+        // The corner number is ONLY drawn for a status that really has a
+        // duration - inventing one would be a lie about the rules.
+        if (st.turns > 0) {
+          const r = P.badgeTextSize * 0.75;
+          g.fillStyle = P.badgeTextBg;
+          g.beginPath();
+          g.arc(x + bh - r * 0.7, by0 + bh - r * 0.7, r, 0, Math.PI * 2);
+          g.fill();
+          g.fillStyle = '#ffffff';
+          g.font = `700 ${P.badgeTextSize}px ${P.monoFont}`;
+          g.fillText(String(st.turns), x + bh - r * 0.7, by0 + bh - r * 0.7 + 0.5);
+        }
+        plaque.userData.hotspots.push({ id: st.id, turns: st.turns, amount: st.amount, x0: x, y0: by0, x1: x + bh, y1: by0 + bh });
+        x -= bh + P.badgeGap;
+      }
+      g.textAlign = 'left';
+      g.textBaseline = 'alphabetic';
+    }
 
     const by = iy + iw - P.barH;            // bar bottom-aligned with the icon box
     const frac = safeMax > 0 ? Math.max(0, Math.min(1, clampedHp / safeMax)) : 0;
@@ -576,7 +672,7 @@ export class LocalMapView {
       );
       body.geometry.translate(0, 0.45, 0);
       // Enemies have no emoji; their plaque's icon box shows the name's initial.
-      const plaque = this.makeUnitPlaque((u.name ?? '?').charAt(0));
+      const plaque = this.makeUnitPlaque((u.name ?? '?').charAt(0), { enemy: true });
       body.add(plaque);
       body.userData.plaque = plaque;
       this.updateUnitPlaque(plaque, u?.hp, u?.maxHp);
@@ -642,6 +738,13 @@ export class LocalMapView {
     layer.className = 'battle-floaters';
     document.body.appendChild(layer);
     this.floaterLayer = layer;
+    // The status tooltip lives in the DOM too, positioned from the plaque's
+    // projected screen box (see resolvePlaqueHover).
+    const tip = document.createElement('div');
+    tip.className = 'status-tip hidden';
+    document.body.appendChild(tip);
+    this.statusTip = tip;
+    this.hoverStatus = null;
     this.enableTilePicking(onTileClick ?? ((k) => battle.clickTile(k)));
     this.syncBattle();
   }
@@ -711,7 +814,7 @@ export class LocalMapView {
       const dead = u.hp <= 0;
       tok.visible = !dead;
       if (tok.userData.ring) tok.userData.ring.visible = !dead;
-      if (tok.userData.plaque) this.updateUnitPlaque(tok.userData.plaque, u.hp, u.maxHp);
+      if (tok.userData.plaque) this.updateUnitPlaque(tok.userData.plaque, u.hp, u.maxHp, u);
       if (dead) continue;
       if (!tok.userData.walking && tok.userData.tileKey !== u.pos) this.teleportToken(tok, u.pos);
       else {
@@ -879,6 +982,8 @@ export class LocalMapView {
     this.tagSprites = new Map();
     if (this.walk) { this.walk.tok.userData.walking = false; this.walk = null; }
     if (this.floaterLayer) { this.floaterLayer.remove(); this.floaterLayer = null; }
+    if (this.statusTip) { this.statusTip.remove(); this.statusTip = null; }
+    this.hoverStatus = null;
     this.battle = null;
     this.battleTokens = new Map();
   }
@@ -952,6 +1057,61 @@ export class LocalMapView {
   }
 
   // Called every frame while the local map is on screen.
+  // Which status badge (if any) the cursor is over, and the tooltip for it.
+  //
+  // Sprites always face the camera and are never rolled, so their screen shape
+  // is an axis-aligned rectangle: project the centre, then project a point one
+  // half-width along the camera's right vector and one half-height along its up
+  // vector, and the box follows. That is cheaper and steadier than raycasting
+  // sprites, and it gives the exact pixel box each badge occupies inside the
+  // plaque's canvas. Returns true when the cursor is on a badge.
+  resolvePlaqueHover() {
+    const tip = this.statusTip;
+    if (!tip || !this.camera || !this.pointer) return false;
+    const rect = this.domElement.getBoundingClientRect();
+    const px = ((this.pointer.x + 1) / 2) * rect.width + rect.left;
+    const py = ((-this.pointer.y + 1) / 2) * rect.height + rect.top;
+
+    const centre = new THREE.Vector3();
+    const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
+    const up = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 1);
+    const toScreen = (v) => {
+      const p = v.clone().project(this.camera);
+      return { x: ((p.x + 1) / 2) * rect.width + rect.left, y: ((-p.y + 1) / 2) * rect.height + rect.top, z: p.z };
+    };
+
+    for (const tok of this.tokens) {
+      const plaque = tok.userData.plaque;
+      if (!plaque || !tok.visible || !plaque.userData.hotspots?.length) continue;
+      plaque.getWorldPosition(centre);
+      const c = toScreen(centre);
+      if (c.z > 1) continue;                               // behind the camera
+      const e = toScreen(centre.clone().addScaledVector(right, plaque.scale.x / 2));
+      const n = toScreen(centre.clone().addScaledVector(up, plaque.scale.y / 2));
+      const halfW = Math.abs(e.x - c.x), halfH = Math.abs(n.y - c.y);
+      if (halfW < 1 || halfH < 1) continue;
+      if (px < c.x - halfW || px > c.x + halfW || py < c.y - halfH || py > c.y + halfH) continue;
+      // Inside the plaque: turn the cursor into canvas design units.
+      const u = ((px - (c.x - halfW)) / (halfW * 2)) * PLAQUE.w;
+      const v = ((py - (c.y - halfH)) / (halfH * 2)) * PLAQUE.h;
+      const hs = plaque.userData.hotspots.find((h) => u >= h.x0 && u <= h.x1 && v >= h.y0 && v <= h.y1);
+      if (!hs) continue;
+      tip.innerHTML = statusTipHtml(hs);
+      tip.classList.remove('hidden');
+      // Above the badge, clamped into the viewport.
+      const bx = c.x - halfW + ((hs.x0 + hs.x1) / 2 / PLAQUE.w) * halfW * 2;
+      const byTop = c.y - halfH + (hs.y0 / PLAQUE.h) * halfH * 2;
+      const tw = tip.offsetWidth, th = tip.offsetHeight;
+      tip.style.left = `${Math.max(6, Math.min(window.innerWidth - tw - 6, bx - tw / 2))}px`;
+      tip.style.top = `${Math.max(6, byTop - th - 8)}px`;
+      this.hoverStatus = hs.id;
+      return true;
+    }
+    tip.classList.add('hidden');
+    this.hoverStatus = null;
+    return false;
+  }
+
   update(dt) {
     this.elapsed += dt;
     if (this.controls) this.controls.update();
@@ -976,9 +1136,11 @@ export class LocalMapView {
       // the hovered tile rise and its ring go solid white (world-map feedback).
       if (this.hoverDirty && this.camera && this.pointer) {
         this.hoverDirty = false;
+        // A status badge under the cursor wins over the tile behind it.
+        const onBadge = this.resolvePlaqueHover();
         this.hoverRay = this.hoverRay ?? new THREE.Raycaster();
         this.hoverRay.setFromCamera(new THREE.Vector2(this.pointer.x, this.pointer.y), this.camera);
-        const hit = this.hoverRay.intersectObjects(this.tileMeshes ?? [], false)[0];
+        const hit = onBadge ? null : this.hoverRay.intersectObjects(this.tileMeshes ?? [], false)[0];
         this.hoverKey = hit ? hit.object.userData.key : null;
       }
       const c = this.config.colors;
