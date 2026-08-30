@@ -205,6 +205,15 @@ balance must be re-measured against interactive play.
   `startPlayerPhase()`, which animates nothing, and needs no deferring.
   `cinematic.inArena()` is "the arena is on screen, or the dive is past its swap
   and committed to it" - the test callers use before starting an encounter.
+* **The unit plaque** (`localview.js`, the `PLAQUE` block): ONE billboard over each
+  unit's head carrying the portrait, the HP numbers and the health bar together -
+  icon box on the left, "24 / 40" above a bar on the right, the arrangement of a
+  party-panel row. The bar copies `.unit .bar` from style.css exactly: same track,
+  the same green, the same switch to the danger red below half HP, and a dark
+  segment line every `party.hpSegment` HP, so a bar is read the same way in the
+  panel and on the field. One sprite rather than two stacked ones is also what
+  keeps the plaque centred over the unit - two of different widths never were.
+  Sizes live in the `PLAQUE` constant, deliberately not in the settings window.
 * **Unit placement happens once**. `build()` (during the dive) places both sides on
   their REAL starting tiles and remembers them; `beginBattle()` re-uses that layout
   instead of rolling again, and only re-places when the board does not match the

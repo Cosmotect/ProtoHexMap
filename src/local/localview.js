@@ -27,6 +27,38 @@ function roundRect(g, x, y, w, h, r) {
   g.closePath();
 }
 
+// The plaque hanging over every unit's head: the portrait, the HP numbers and
+// the health bar as ONE billboard. Sizes are design units on the canvas; only
+// worldWidth / worldY are in world space. The layout deliberately mirrors a row
+// of the party panel (src/style.css `.unit`), and the colours are that panel's.
+const PLAQUE = {
+  icon: 40,                 // the square portrait box
+  bar: 160,                 // the health bar - four times the icon's width
+  barH: 12,                 // ...at the party panel's bar height
+  gap: 7,                   // between the icon box and the right column
+  pad: 7,                   // plate padding
+  textSize: 15,
+  plateRadius: 10,
+  dpr: 3,                   // canvas oversampling, so the text stays crisp when scaled up
+  worldWidth: 1.9,          // how wide the whole plaque is in world units
+  worldY: 1.05,             // how high above the token's base it floats (clears the head)
+  plateFill: 'rgba(10, 14, 24, 0.78)',
+  plateStroke: 'rgba(255, 209, 102, 0.75)',
+  iconFill: 'rgba(255, 255, 255, 0.08)',
+  iconStroke: 'rgba(255, 255, 255, 0.16)',
+  textColor: '#94a0b8',     // --muted
+  trackFill: 'rgba(255, 255, 255, 0.10)',
+  trackStroke: 'rgba(255, 255, 255, 0.12)',
+  fillOk: '#7fb85f',
+  fillHurt: '#ff6b6b',      // --danger, as `.unit.hurt` uses below half HP
+  segColor: 'rgba(0, 0, 0, 0.55)',
+  monoFont: '"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace',
+  emojiFont: '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif',
+};
+// Overall canvas size follows from the layout above.
+PLAQUE.w = PLAQUE.pad * 2 + PLAQUE.icon + PLAQUE.gap + PLAQUE.bar;
+PLAQUE.h = PLAQUE.pad * 2 + PLAQUE.icon;
+
 export class LocalMapView {
   constructor(webglRenderer, domElement, config) {
     this.renderer = webglRenderer;
@@ -309,19 +341,20 @@ export class LocalMapView {
     );
     body.geometry.translate(0, 0.4, 0);
     body.userData.partyIndex = index;
-    // A little portrait floating over the head, so the three identical capsules
-    // can be told apart at a glance. A Sprite always faces the camera, so it
-    // stays readable however the shot is rotated.
-    if (unit?.icon) body.add(this.makePortrait(unit.icon));
-    const bar = this.makeHealthBar();
-    body.add(bar);
-    body.userData.healthBar = bar;
-    this.updateHealthBar(bar, unit?.hp, unit?.maxHp);
+    // The plaque over the head - portrait, HP numbers and health bar in one
+    // billboard - so three identical capsules can be told apart at a glance and
+    // read at a glance. A Sprite always faces the camera, so it stays legible
+    // however the shot is rotated.
+    const plaque = this.makeUnitPlaque(unit?.icon ?? '');
+    body.add(plaque);
+    body.userData.plaque = plaque;
+    this.updateUnitPlaque(plaque, unit?.hp, unit?.maxHp);
     this.attachToken(tileKey, body, c.playerGlow, (this.rng?.random() ?? Math.random()) * Math.PI * 2);
   }
 
   // The unit's glyph drawn onto a canvas and hung above it as a billboard.
   // Textures are cached per glyph: three units sharing an icon share one texture.
+  // Used for terrain TAGS; a unit gets the fuller plaque below instead.
   makePortrait(glyph) {
     this.portraitCache = this.portraitCache ?? new Map();
     let tex = this.portraitCache.get(glyph);
@@ -332,14 +365,14 @@ export class LocalMapView {
       const g = cv.getContext('2d');
       // A dark rounded plate behind the glyph: without it a light emoji
       // disappears against a pale tile.
-      g.fillStyle = 'rgba(10, 14, 24, 0.72)';
+      g.fillStyle = PLAQUE.plateFill;
       roundRect(g, 6, 6, size - 12, size - 12, 26);
       g.fill();
-      g.strokeStyle = 'rgba(255, 209, 102, 0.75)';
+      g.strokeStyle = PLAQUE.plateStroke;
       g.lineWidth = 5;
       roundRect(g, 6, 6, size - 12, size - 12, 26);
       g.stroke();
-      g.font = `${Math.round(size * 0.58)}px "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif`;
+      g.font = `${Math.round(size * 0.58)}px ${PLAQUE.emojiFont}`;
       g.textAlign = 'center';
       g.textBaseline = 'middle';
       g.fillText(glyph, size / 2, size / 2 + 2);
@@ -354,57 +387,114 @@ export class LocalMapView {
     return sprite;
   }
 
-  // A small health bar hovering just under a unit's portrait, in the same
-  // billboard cluster above its token (party AND enemies alike). Unlike the
-  // portrait it is NOT shared/cached - every unit has its own HP - but the
-  // canvas is only redrawn when the value actually changes, not every frame.
-  makeHealthBar() {
-    const w = 96, h = 20;
+  // ----- the unit plaque -------------------------------------------------
+  // ONE billboard per unit carrying the portrait, the HP numbers and the health
+  // bar together: icon on the left, "24 / 24" above a segmented bar on the
+  // right, exactly the arrangement of a row in the party panel. Being a single
+  // sprite is what guarantees the whole thing is centred over the unit - two
+  // sprites of different widths stacked on top of each other never quite were.
+  //
+  // The bar is a faithful copy of the party panel's (src/style.css, `.unit .bar`):
+  // same track, same green, the same switch to the danger red below half HP, and
+  // the same dark segment line every `party.hpSegment` HP, so one bar is read the
+  // same way in both places.
+  makeUnitPlaque(glyph) {
     const cv = document.createElement('canvas');
-    cv.width = w; cv.height = h;
+    cv.width = PLAQUE.w * PLAQUE.dpr;
+    cv.height = PLAQUE.h * PLAQUE.dpr;
     const tex = new THREE.CanvasTexture(cv);
     tex.colorSpace = THREE.SRGBColorSpace;
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
-    sprite.scale.set(0.46, 0.46 * (h / w), 1);
-    sprite.position.set(0, 0.72, 0);   // just below the portrait plate (at y 1.0)
-    sprite.renderOrder = 10;
-    sprite.userData.canvas = cv;
-    sprite.userData.ctx = cv.getContext('2d');
+    sprite.scale.set(PLAQUE.worldWidth, PLAQUE.worldWidth * (PLAQUE.h / PLAQUE.w), 1);
+    sprite.position.set(0, PLAQUE.worldY, 0);   // straight up from the token's axis
+    sprite.renderOrder = 10;                    // always on top, never buried in a tile
+    const g = cv.getContext('2d');
+    g.scale(PLAQUE.dpr, PLAQUE.dpr);            // draw in design units, render crisply
+    sprite.userData.ctx = g;
     sprite.userData.tex = tex;
+    sprite.userData.glyph = glyph ?? '';
     sprite.userData.hp = undefined;
     sprite.userData.maxHp = undefined;
     return sprite;
   }
 
-  // Redraws a health bar sprite for the given hp/maxHp - a no-op if neither
-  // changed since the last call. Colour steps from green through amber to red
-  // as the fraction empties, on a dark track (readable on any tile colour).
-  updateHealthBar(bar, hp, maxHp) {
-    if (!bar) return;
+  // Redraws a plaque for the given hp/maxHp - a no-op if neither changed since
+  // the last call, so this is safe to call from every syncBattle().
+  updateUnitPlaque(plaque, hp, maxHp) {
+    if (!plaque) return;
     const clampedHp = Math.max(0, hp ?? 0);
     const safeMax = Math.max(0, maxHp ?? 0);
-    if (bar.userData.hp === clampedHp && bar.userData.maxHp === safeMax) return;
-    bar.userData.hp = clampedHp;
-    bar.userData.maxHp = safeMax;
-    const cv = bar.userData.canvas;
-    const g = bar.userData.ctx;
-    const w = cv.width, h = cv.height;
-    g.clearRect(0, 0, w, h);
-    g.fillStyle = 'rgba(10, 14, 24, 0.72)';
-    roundRect(g, 1, 1, w - 2, h - 2, 6);
+    if (plaque.userData.hp === clampedHp && plaque.userData.maxHp === safeMax) return;
+    plaque.userData.hp = clampedHp;
+    plaque.userData.maxHp = safeMax;
+
+    const P = PLAQUE;
+    const g = plaque.userData.ctx;
+    g.clearRect(0, 0, P.w, P.h);
+
+    // The plate everything sits on.
+    g.fillStyle = P.plateFill;
+    roundRect(g, 1, 1, P.w - 2, P.h - 2, P.plateRadius);
     g.fill();
-    const pad = 3;
-    const innerW = w - pad * 2, innerH = h - pad * 2;
-    const frac = safeMax > 0 ? Math.max(0, Math.min(1, clampedHp / safeMax)) : 0;
-    g.fillStyle = 'rgba(255, 255, 255, 0.14)';
-    roundRect(g, pad, pad, innerW, innerH, 3);
+    g.strokeStyle = P.plateStroke;
+    g.lineWidth = 2;
+    roundRect(g, 1, 1, P.w - 2, P.h - 2, P.plateRadius);
+    g.stroke();
+
+    // Icon, in its own inset box on the left (the party panel's `.unit .icon`).
+    const ix = P.pad, iy = P.pad, iw = P.icon;
+    g.fillStyle = P.iconFill;
+    roundRect(g, ix, iy, iw, iw, 7);
     g.fill();
-    if (frac > 0) {
-      g.fillStyle = frac > 0.5 ? '#8fe05f' : frac > 0.25 ? '#ffd166' : '#ff4d4d';
-      roundRect(g, pad, pad, Math.max(2, innerW * frac), innerH, 3);
-      g.fill();
+    g.strokeStyle = P.iconStroke;
+    g.lineWidth = 1.5;
+    roundRect(g, ix, iy, iw, iw, 7);
+    g.stroke();
+    if (plaque.userData.glyph) {
+      g.font = `${Math.round(iw * 0.62)}px ${P.emojiFont}`;
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillText(plaque.userData.glyph, ix + iw / 2, iy + iw / 2 + 1);
     }
-    bar.userData.tex.needsUpdate = true;
+
+    // Right column: the numbers, then the bar under them.
+    const cx = ix + iw + P.gap;
+    const cw = P.bar;
+    g.fillStyle = P.textColor;
+    g.font = `600 ${P.textSize}px ${P.monoFont}`;
+    g.textAlign = 'left';
+    g.textBaseline = 'alphabetic';
+    g.fillText(`${clampedHp} / ${safeMax}`, cx, iy + P.textSize);
+
+    const by = iy + iw - P.barH;            // bar bottom-aligned with the icon box
+    const frac = safeMax > 0 ? Math.max(0, Math.min(1, clampedHp / safeMax)) : 0;
+    // Track.
+    g.fillStyle = P.trackFill;
+    roundRect(g, cx, by, cw, P.barH, 3);
+    g.fill();
+    // Fill - the party panel turns it red below half HP (`.unit.hurt`).
+    if (frac > 0) {
+      g.save();
+      roundRect(g, cx, by, cw, P.barH, 3);
+      g.clip();
+      g.fillStyle = frac < 0.5 ? P.fillHurt : P.fillOk;
+      g.fillRect(cx, by, Math.max(2, cw * frac), P.barH);
+      g.restore();
+    }
+    // Segment lines: one every hpSegment HP, drawn over the fill.
+    const seg = this.config.party?.hpSegment ?? 0;
+    if (seg > 0 && safeMax > seg) {
+      g.fillStyle = P.segColor;
+      const step = (seg / safeMax) * cw;
+      for (let x = step; x < cw - 0.5; x += step) g.fillRect(cx + x - 1, by, 2, P.barH);
+    }
+    // Track border last, so nothing paints over it.
+    g.strokeStyle = P.trackStroke;
+    g.lineWidth = 1;
+    roundRect(g, cx + 0.5, by + 0.5, cw - 1, P.barH - 1, 3);
+    g.stroke();
+
+    plaque.userData.tex.needsUpdate = true;
   }
 
   attachToken(tileKey, mesh, lightColor, phase) {
@@ -485,12 +575,11 @@ export class LocalMapView {
         new THREE.MeshStandardMaterial({ color: enemyColor, emissive: 0x330b0b, roughness: 0.45 })
       );
       body.geometry.translate(0, 0.45, 0);
-      // Enemies have no emoji; their portrait plate shows the name's initial.
-      body.add(this.makePortrait((u.name ?? '?').charAt(0)));
-      const bar = this.makeHealthBar();
-      body.add(bar);
-      body.userData.healthBar = bar;
-      this.updateHealthBar(bar, u?.hp, u?.maxHp);
+      // Enemies have no emoji; their plaque's icon box shows the name's initial.
+      const plaque = this.makeUnitPlaque((u.name ?? '?').charAt(0));
+      body.add(plaque);
+      body.userData.plaque = plaque;
+      this.updateUnitPlaque(plaque, u?.hp, u?.maxHp);
       this.attachToken(enemyKeys[i], body, enemyColor, rng.random() * Math.PI * 2);
     });
     return { partyKeys, enemyKeys };
@@ -622,7 +711,7 @@ export class LocalMapView {
       const dead = u.hp <= 0;
       tok.visible = !dead;
       if (tok.userData.ring) tok.userData.ring.visible = !dead;
-      if (tok.userData.healthBar) this.updateHealthBar(tok.userData.healthBar, u.hp, u.maxHp);
+      if (tok.userData.plaque) this.updateUnitPlaque(tok.userData.plaque, u.hp, u.maxHp);
       if (dead) continue;
       if (!tok.userData.walking && tok.userData.tileKey !== u.pos) this.teleportToken(tok, u.pos);
       else {
