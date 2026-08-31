@@ -163,6 +163,7 @@ export const CONFIG = {
     visitedTint: 1,           // multiplier applied to the colour of tiles you already stepped on
     reachableRing: 0xffd166,
     abilityAimRing: 0xff4d4d,  // tile highlight while picking a target for a unit's ability
+    enemyReachRing: 0xd0455f,  // ...and where a clicked ENEMY could walk (a readout, not a target)
     hoverRing: 0xffffff,
     player: 0xfff1c1,
     playerGlow: 0xffd166,

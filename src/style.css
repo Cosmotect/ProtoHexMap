@@ -396,10 +396,27 @@ button.small { padding: 2px 8px; font-size: 12px; }
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
 }
 .fatigue-tip b { color: var(--accent); font-family: var(--mono); }
-.fatigue-tip .tip-big { font-size: 16px; font-weight: 600; }
-.fatigue-tip .tip-big b { font-size: 20px; }
+/* What is on the tile, at the top: the size and colour the step counter used to
+   have, because it is now the line that matters most. */
+.fatigue-tip .tip-enc { font-size: 16px; font-weight: 600; color: var(--muted); margin-bottom: 3px; }
+.fatigue-tip .tip-enc + .tip-big { margin-top: 2px; }
+/* The step counter, a step quieter than before. */
+.fatigue-tip .tip-big { font-size: 14px; font-weight: 600; }
+.fatigue-tip .tip-big b { font-size: 18px; }
 .fatigue-tip .tip-step { color: var(--muted); margin-right: 10px; padding-right: 10px; border-right: 1px solid var(--panel-border); }
 .fatigue-tip .tip-step b { color: var(--text); }
+/* One block per Stasis debuff riding on this tile's fight. */
+.fatigue-tip .tip-debuff {
+  font-size: 11.5px;
+  line-height: 1.35;
+  margin: 3px 0 0;
+  padding: 3px 7px;
+  border-radius: 5px;
+  border-left: 3px solid #9a5cff;
+  background: linear-gradient(90deg, rgba(154, 92, 255, 0.28), rgba(226, 71, 75, 0.22));
+  color: #e6d8ff;
+}
+.fatigue-tip .tip-debuff b { color: #ffffff; font-family: var(--font); font-weight: 600; }
 .fatigue-tip .tip-sub { font-size: 11.5px; color: var(--muted); margin-bottom: 4px; }
 .fatigue-tip .tip-small { font-size: 12px; color: var(--muted); margin-top: 3px; }
 

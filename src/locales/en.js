@@ -482,6 +482,7 @@ export const en = {
   'battle.ui.hp': '{hp}/{max} HP',
   'battle.ui.canMove': 'Move freely - positions lock when any ability is cast.',
   'battle.ui.locked': 'Position locked. Cast an ability or end the turn.',
+  'battle.ui.nobody': 'Nobody selected - click a unit to pick it up, or an enemy to see its reach.',
   'battle.ui.enemyPhase': 'Enemy turn...',
   'battle.ui.over': 'The fight is over.',
   'battle.ui.dmg': '{n} damage',

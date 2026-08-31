@@ -335,6 +335,7 @@ export const ru = {
   'dialog.skip.sub': 'Никого не выбирать',
   'dialog.unit.sub': '{hp}/{max} HP',
   'dialog.unit.disabled': 'выведен из строя',
+  'battle.ui.nobody': 'Никто не выбран - нажмите на бойца, чтобы взять его, или на врага, чтобы увидеть его дальность.',
   'battle.title': 'Бой',
   'battle.stasis.title': 'Стазис: {title}',
   'battle.stasis.untitled': 'Бой со Стазисом',

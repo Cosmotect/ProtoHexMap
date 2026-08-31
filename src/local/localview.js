@@ -297,6 +297,12 @@ export class LocalMapView {
       this.placement = this.placeUnits(party ?? [], enemies ?? [], rng, recipe?.spawns ?? null);
       this.placedCounts = { party: (party ?? []).length, enemies: (enemies ?? []).length };
     }
+    // Right click is the arena's cancel button, so the browser's own menu must
+    // never appear over the local map. Removed again in dispose().
+    if (!this.noContextMenu) {
+      this.noContextMenu = (e) => e.preventDefault();
+      this.domElement.addEventListener('contextmenu', this.noContextMenu);
+    }
     this.buildCamera();
     return this.map;
   }
@@ -828,19 +834,40 @@ export class LocalMapView {
     this.statusTip = tip;
     this.hoverStatus = null;
     this.setCombat(true);   // the arena is now a FIGHT: plaques show HP and statuses
-    this.enableTilePicking(onTileClick ?? ((k) => battle.clickTile(k)));
+    this.enableTilePicking(onTileClick ?? ((k) => battle.clickTile(k)), () => battle.cancel());
     this.syncBattle();
   }
 
   // Same short-press-counts-as-click pattern as enablePicking, but against the
   // TILES: the engine decides what a click on a tile means.
-  enableTilePicking(onTile) {
+  //
+  // The RIGHT button is the universal cancel. It has to share the button with
+  // camera rotation, so the same short-press test applies: a right DRAG turns
+  // the arena, a right CLICK cancels one step (an aimed ability, then an
+  // inspected enemy, then the selection itself).
+  enableTilePicking(onTile, onCancel) {
     this.disableTilePicking();
     const ray = new THREE.Raycaster();
     const el = this.domElement;
     let down = null;
-    const onDown = (e) => { down = { x: e.clientX, y: e.clientY, time: performance.now() }; };
+    let rdown = null;
+    const onDown = (e) => {
+      if (e.button === 2) { rdown = { x: e.clientX, y: e.clientY }; return; }
+      if (e.button !== 0) return;
+      down = { x: e.clientX, y: e.clientY, time: performance.now() };
+    };
     const onUp = (e) => {
+      if (e.button === 2) {
+        if (!rdown) return;
+        const moved = Math.hypot(e.clientX - rdown.x, e.clientY - rdown.y);
+        rdown = null;
+        // Distance alone decides, with no time limit: a right DRAG turned the
+        // camera, anything else was a cancel. (The left button keeps its
+        // press-duration test, but a cancel must never be swallowed because a
+        // slow frame made the click "too long".)
+        if (moved <= 6 && onCancel) onCancel();
+        return;
+      }
       if (!down) return;
       const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
       const quick = performance.now() - down.time < 600;
@@ -967,6 +994,15 @@ export class LocalMapView {
       // own theme colour (used elsewhere for its icon) - gold stays reserved
       // for plain movement below.
       for (const k of Object.keys(sb.aimMap)) add(k, this.config.colors.abilityAimRing);
+    } else if (sb.inspectReach) {
+      // A clicked ENEMY: where it could walk, in its own red. Gold is the
+      // party's colour, so the two readings can never be confused.
+      const { d, occ } = sb.inspectReach;
+      const e = sb.units.find((u) => u.uid === sb.inspectUid);
+      for (const k of Object.keys(d)) {
+        if (occ.has(k) || (e && k === e.pos)) continue;
+        add(k, this.config.colors.enemyReachRing);
+      }
     } else if (sb.reach) {
       const { d, occ } = sb.reach;
       const cur = battle.curPlayer();
@@ -1259,6 +1295,10 @@ export class LocalMapView {
   }
 
   dispose() {
+    if (this.noContextMenu) {
+      this.domElement.removeEventListener('contextmenu', this.noContextMenu);
+      this.noContextMenu = null;
+    }
     this.deactivate();
     this.disablePicking();
     this.endBattle();

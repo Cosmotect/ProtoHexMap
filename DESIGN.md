@@ -240,6 +240,18 @@ tables, and a fight is fully readable off them:
   carries the same switch into the 3D side. Only in combat do the enemy roster and
   the battle bar appear, and only then do the unit plaques show anything but a
   portrait.
+* **Selecting and cancelling on the arena**. A click picks a PARTY unit up; a
+  click on an ENEMY *inspects* it - its movement range lights up in the enemies'
+  red (`colors.enemyReachRing`) instead of the party's gold, and that is all it
+  does: `sb.inspectUid` is a readout no rule reads, and the party's own selection
+  is left exactly where it was.
+  The RIGHT button is the universal cancel, one step per click: an aimed ability
+  goes down first, then the inspected enemy, then the selection itself, leaving
+  nothing selected (the battle bar says so, and a click picks a unit back up).
+  Right-drag still turns the camera, so the two are told apart by DISTANCE alone,
+  with no time limit - a cancel must never be swallowed because a slow frame made
+  the click "too long". The browser's own context menu is suppressed for the whole
+  life of the local map.
 * **The enemy roster** (top centre, in combat): one card per enemy in TURN ORDER -
   the engine's own ordering, initiative high to low and ties by spawn index - with
   its portrait, name, ability icons (hover for what each does), HP and a segmented

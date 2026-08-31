@@ -344,6 +344,16 @@ export function createUI(config, handlers) {
     if (s.status !== 'playing') { els.tip.classList.add('hidden'); return; }
     const canGo = game.canMoveTo(hex);
     const parts = [];
+    // What is on the tile comes first and reads loudest - it is the thing the
+    // player is pointing at. The step counter follows underneath.
+    if (hex.revealed && hex.encounter) {
+      parts.push(`<div class="tip-enc">${escapeHtml(game.labelFor(hex.encounter))}</div>`);
+      // A Stasis Seed or an active Colony carries debuffs into its fight: spell
+      // each one out, so the cost of walking in is on the tile itself.
+      for (const id of game.activeDebuffsFor(hex)) {
+        parts.push(`<div class="tip-debuff"><b>${escapeHtml(tc(`debuff.${id}.name`, config))}</b> ${escapeHtml(tc(`debuff.${id}.desc`, config))}</div>`);
+      }
+    }
     if (canGo) {
       const next = game.fatigueAfterNextStep();
       const forced = game.forcedChanceFor(hex); // null = nothing to force here
@@ -356,15 +366,6 @@ export function createUI(config, handlers) {
         parts.push(`<div class="tip-big">${stepTag}</div>`);
       }
       parts.push(`<div class="tip-small">${t('tip.after', { next, now: s.fatigue })}</div>`);
-    }
-    if (hex.revealed && hex.encounter) {
-      const rule = game.fatigueResetRule(hex.encounter);
-      const note = game.fatigueResetNote(hex.encounter);
-      const label = game.labelFor(hex.encounter);
-      const ruleText = rule === 'always' ? t('tip.reset.always', { label })
-        : rule === 'optional' ? (note ? t('tip.reset.optional.note', { label, note }) : t('tip.reset.optional', { label }))
-        : t('tip.reset.never', { label });
-      parts.push(`<div class="tip-small">${escapeHtml(ruleText)}</div>`);
     }
     // A shop the party has already entered lists what it still sells, from any distance.
     if (hex.revealed && hex.encounter === 'shop' && hex.shop?.seen) {
@@ -541,7 +542,7 @@ export function createUI(config, handlers) {
       const dead = u.hp <= 0;
       const pct = Math.max(0, Math.min(100, (u.hp / u.maxHp) * 100));
       const segPct = (config.party.hpSegment / u.maxHp) * 100;
-      const cls = `${dead ? 'dead' : ''} ${!dead && pct < 50 ? 'hurt' : ''} ${u.uid === sb.activeUid ? 'active' : ''}`;
+      const cls = `${dead ? 'dead' : ''} ${!dead && pct < 50 ? 'hurt' : ''} ${u.uid === sb.activeUid ? 'active' : ''} ${u.uid === sb.inspectUid ? 'inspected' : ''}`;
       const chips = (u.abilityIds ?? []).map((id) => {
         const ab = battleRef.abilityById(id);
         if (!ab) return '';
@@ -580,6 +581,11 @@ export function createUI(config, handlers) {
           <span class="ab-icon">${ab.icon}</span><small>${escapeHtml(ab.name)}</small>${num ? `<span class="ab-num">${num}</span>` : ''}
         </button>`;
       }).join('');
+      $('btn-end-turn').disabled = !!sb.busy;
+    } else if (sb.phase === 'player' && !sb.over) {
+      // The player right-clicked their way out of every selection.
+      els.battleActive.innerHTML = `<span class="muted">${escapeHtml(t('battle.ui.nobody'))}</span>`;
+      els.battleAbilities.innerHTML = '';
       $('btn-end-turn').disabled = !!sb.busy;
     } else {
       els.battleActive.innerHTML = `<span class="muted">${t(sb.over ? 'battle.ui.over' : 'battle.ui.enemyPhase')}</span>`;

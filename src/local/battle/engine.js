@@ -53,6 +53,10 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     units: [], uidc: 0, tags: {}, heights: { ...heights },
     round: 1, phase: 'player', activeUid: null,
     enemyQ: [], eqi: 0, selAb: null, aimMap: null, reach: null,
+    // Inspecting an ENEMY: purely a readout, it changes nothing about the turn.
+    // The party's own selection is untouched, so the player can look at what a
+    // creature can reach and then carry on with the unit they had picked.
+    inspectUid: null, inspectReach: null,
     busy: false, over: null, deathQueue: [], ambush: !!forced,
   };
 
@@ -491,6 +495,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   function startPlayerPhase() {
     blog('- ROUND ' + sb.round + ' -');
     sb.phase = 'player'; sb.selAb = null; sb.aimMap = null; sb.activeUid = null;
+    sb.inspectUid = null; sb.inspectReach = null;   // a new round, a fresh board
     for (const u of sb.units) if (!u.isEnemy && u.hp > 0) {
       u.done = false; u.moveLocked = false; u.startPos = u.pos; u.tagTicked = false;
     }
@@ -512,12 +517,46 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     refreshReach();
     emit();
   }
+
+  // ----- inspecting an enemy ---------------------------------------------
+  // Shows where a creature could walk. It is a readout only: no rule reads
+  // inspectUid, and the party's own selection is left exactly as it was.
+  function inspect(uid) {
+    const e = sb.units.find((u) => u.uid === uid && u.isEnemy && u.hp > 0);
+    if (!e) return;
+    sb.inspectUid = e.uid;
+    sb.inspectReach = reach(e, e.pos);
+    emit();
+  }
+  function clearInspect() {
+    if (sb.inspectUid == null) return false;
+    sb.inspectUid = null; sb.inspectReach = null;
+    return true;
+  }
+
+  // The universal cancel (right click on the arena), one step at a time:
+  //   aiming an ability  -> put the ability down
+  //   inspecting an enemy -> stop inspecting
+  //   a unit selected     -> deselect it, leaving nothing selected
+  // Returns true when it actually cancelled something.
+  function cancel() {
+    if (sb.over || sb.busy || sb.phase !== 'player') return false;
+    if (sb.selAb) { sb.selAb = null; sb.aimMap = null; emit(); return true; }
+    if (clearInspect()) { emit(); return true; }
+    if (sb.activeUid != null) {
+      sb.activeUid = null; sb.reach = null;
+      emit();
+      return true;
+    }
+    return false;
+  }
   // Runs after a unit's cast resolves: lock strayed units, finish the caster,
   // hand selection over - or end the phase if everyone has now acted.
   function afterCast(c) {
     c.done = true;
     for (const u of sb.units) if (!u.isEnemy && u.hp > 0 && u.pos !== u.startPos) u.moveLocked = true;
     sb.selAb = null; sb.aimMap = null; sb.reach = null;
+    sb.inspectUid = null; sb.inspectReach = null;   // the board moved; the readout is stale
     if (sb.over) return;
     const next = sb.units.find((x) => !x.isEnemy && x.hp > 0 && !x.done);
     if (next) select(next);
@@ -534,6 +573,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   }
   function startEnemyPhase() {
     sb.phase = 'enemy'; sb.activeUid = null; sb.selAb = null; sb.aimMap = null; sb.reach = null;
+    sb.inspectUid = null; sb.inspectReach = null;
     sb.enemyQ = sb.units.filter((u) => u.isEnemy && u.hp > 0).sort((a, b) => b.init - a.init || a.idx - b.idx);
     sb.eqi = -1; emit();
     stepEnemy();
@@ -676,10 +716,20 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   function clickTile(k) {
     if (sb.over || sb.busy) return;
     if (sb.phase !== 'player') return;
-    const c = curP(); if (!c) return;
     if (!inMap(k)) return;
     const uu = unitAt(k);
-    if (!sb.selAb && uu && !uu.isEnemy && uu.uid !== c.uid && !uu.done) { select(uu); return; }
+    const c = curP();
+    // Nothing selected (the player cancelled their way out): a click picks a
+    // unit back up, or inspects an enemy.
+    if (!c) {
+      if (uu && !uu.isEnemy && !uu.done) { clearInspect(); select(uu); }
+      else if (uu && uu.isEnemy) inspect(uu.uid);
+      return;
+    }
+    // An enemy is a readout, never a move target - unless an ability is aimed
+    // at it, which the aim map below handles.
+    if (!sb.selAb && uu && uu.isEnemy) { inspect(uu.uid); return; }
+    if (!sb.selAb && uu && !uu.isEnemy && uu.uid !== c.uid && !uu.done) { clearInspect(); select(uu); return; }
     if (sb.selAb) {
       const ab = abFor(c, sb.selAb);
       const target = ab && sb.aimMap ? sb.aimMap[k] : null;
@@ -769,7 +819,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   return {
     state: sb,
     start,
-    clickTile, selectAbility, endTurn, activate: (uid) => { const u = sb.units.find((x) => x.uid === uid && !x.isEnemy && x.hp > 0 && !x.done); if (u && sb.phase === 'player' && !sb.busy) select(u); },
+    clickTile, selectAbility, endTurn, inspect, cancel, activate: (uid) => { const u = sb.units.find((x) => x.uid === uid && !x.isEnemy && x.hp > 0 && !x.done); if (u && sb.phase === 'player' && !sb.busy) select(u); },
     abilityById: abById,
     abilityFor: abFor,   // (unit, id) - the unit's UPGRADED def where it has one
     curPlayer: curP,
