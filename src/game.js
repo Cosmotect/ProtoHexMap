@@ -11,7 +11,7 @@ import { t, tn } from './i18n.js';
 
 // How many flavour (lore) lines each window can draw from. The lines themselves live
 // in the locale tables as flavour.<kind>.<n>; one is picked per window, seeded.
-const FLAVOUR_POOL = { battle: 4, treasure: 4, shop: 13, acolyte: 3, camp: 3 };
+const FLAVOUR_POOL = { battle: 4, combatIntro: 6, treasure: 4, shop: 13, acolyte: 3, camp: 3 };
 
 
 export class Game {
@@ -691,7 +691,10 @@ export class Game {
     if (enemies.title) this.addLog('log.battle.stasis', { title: { name: enemies.title }, who, first });
     else this.addLog('log.battle', { who, first });
 
-    return { hex, forced, opts, enemies, debuffs, saved, damageMod };
+    // `lore` and `title` are for the Local Map Info panel: what this fight IS,
+    // shown while it is being played rather than only in the report afterwards.
+    return { hex, forced, opts, enemies, debuffs, saved, damageMod,
+             title: enemies.title ?? null, lore: this.pickFlavour('combatIntro') };
   }
 
   finishCombat(ctx, result) {
@@ -1151,6 +1154,26 @@ export class Game {
     this.addLog('log.debugReveal');
     this.emit('change');
   }
+}
+
+// The hue the fatigue bar paints the box for `step` (see config.fatigueBar):
+// green while the step costs nothing, then yellow to red across the range of
+// non-zero chances the table actually holds. Shared, so the world map can paint
+// the ring of a reachable tile the colour of the box that step will fill.
+export function fatigueStepHue(config, step) {
+  const fb = config.fatigueBar;
+  const byStep = config.fatigue.byStep || {};
+  const keys = Object.keys(byStep).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+  const maxStep = keys.length ? keys[keys.length - 1] : 0;
+  const pcts = [];
+  for (let i = 1; i <= maxStep; i++) pcts.push(lerpTable(byStep, i));
+  const pct = lerpTable(byStep, step);
+  if (pct <= 0) return fb.hueSafe;
+  const risky = pcts.filter((p) => p > 0);
+  const lo = risky.length ? Math.min(...risky) : 0;
+  const hi = risky.length ? Math.max(...risky) : 1;
+  const k = hi > lo ? (pct - lo) / (hi - lo) : 0;
+  return fb.hueLow + (fb.hueHigh - fb.hueLow) * k;
 }
 
 // Generic "table with interpolation" lookup, used for fatigue and enemy scaling.

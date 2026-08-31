@@ -64,6 +64,11 @@ export function createUI(config, handlers) {
     battleActive: $('battle-active'),
     battleAbilities: $('battle-abilities'),
     enemyRoster: $('enemy-roster'),
+    localInfo: $('local-info'),
+    liTitle: $('li-title'),
+    liDesc: $('li-desc'),
+    liEffects: $('li-effects'),
+    liSep2: $('li-sep2'),
   };
 
   // ----- buttons -----------------------------------------------------
@@ -519,14 +524,36 @@ export function createUI(config, handlers) {
   // The local map's COMBAT sub-state. `in-combat` is the name the design uses
   // for it; `battle-mode` is the same flag under the name the older CSS knows.
   // Both are only ever on while `local-mode` is (the arena is on screen).
-  function setBattleMode(battle) {
+  // `info` (optional) describes the fight for the Local Map Info panel:
+  //   { title, lore, debuffs } - the enemy group's name, a locale key for the
+  //   lore line, and the Stasis debuff ids riding on this arena.
+  function setBattleMode(battle, info = null) {
     battleRef = battle ?? null;
     document.body.classList.toggle('battle-mode', !!battleRef);
     document.body.classList.toggle('in-combat', !!battleRef);
     els.battleBar.classList.toggle('hidden', !battleRef);
-    els.enemyRoster.classList.toggle('hidden', !battleRef);
-    if (!battleRef) els.enemyRoster.innerHTML = '';
-    if (battleRef) updateBattle();
+    els.localInfo.classList.toggle('hidden', !battleRef);
+    if (!battleRef) { els.enemyRoster.innerHTML = ''; els.liEffects.innerHTML = ''; }
+    else { fillLocalInfo(info); updateBattle(); }
+  }
+
+  // Top half of the Local Map Info panel: what this fight is, and the effects
+  // hanging over the arena. The enemy roster below it is redrawn every turn by
+  // updateBattle(); this part is written once, when the fight opens.
+  function fillLocalInfo(info) {
+    const i = info ?? {};
+    els.liTitle.textContent = i.title ? tn(i.title) : t('localinfo.title');
+    els.liDesc.textContent = i.lore ? t(i.lore) : '';
+    els.liDesc.classList.toggle('hidden', !i.lore);
+    // Debuffs today, buffs later: both render as one block with a name and a
+    // line of effect, the buff variant in the party-panel green.
+    const effects = (i.debuffs ?? []).map((id) =>
+      `<div class="li-effect"><b>${escapeHtml(tc(`debuff.${id}.name`, config))}</b><span>${escapeHtml(tc(`debuff.${id}.desc`, config))}</span></div>`);
+    els.liEffects.innerHTML = effects.join('');
+    // No effects: the whole block and one of the two separators go away, so the
+    // panel does not carry an empty gap.
+    els.liEffects.classList.toggle('hidden', !effects.length);
+    els.liSep2.classList.toggle('hidden', !effects.length);
   }
 
   // The enemy roster across the top: one card per enemy, in TURN ORDER - the

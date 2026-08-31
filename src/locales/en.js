@@ -356,6 +356,11 @@ export const en = {
   'battle.stasis.title': 'Stasis: {title}',
   'battle.stasis.untitled': 'Stasis battle',
   'battle.debuffs': 'Stasis debuffs:',
+
+  // The Local Map Info panel (right side of the arena).
+  'localinfo.title': 'Skirmish',
+  'localinfo.enemies': 'Enemies',
+  'localinfo.none': 'Nothing is riding on this ground.',
   'battle.supplies': '+{n} supplies salvaged from the field.',
   'battle.supplies.partial': '+{got} supplies salvaged (of {n} - the packs are full).',
 
@@ -445,6 +450,15 @@ export const en = {
   'flavour.battle.2': 'One of them clutched a scrap of alloy etched with Forge script. Stolen, most likely. It goes into a pack without a word.',
   'flavour.battle.3': 'Afterwards the land is quiet in the ordinary way: wind, insects, a far-off stream spilling over the rim into the ether. The good kind of quiet.',
   'flavour.battle.4': 'Scavenger birds arrive before the dust settles. Out here nothing stays unclaimed for long, and the party does not linger to watch.',
+
+  // Read BEFORE the blow lands, in the Local Map Info panel - so these describe
+  // the moment the two sides see each other, not the aftermath.
+  'flavour.combatIntro.1': 'They were waiting where the ground goes soft. No banners, no warning - only the sound of something heavy shifting its weight.',
+  'flavour.combatIntro.2': 'The air here tastes of struck flint. Whatever holds this ground has held it a long time, and does not mean to share.',
+  'flavour.combatIntro.3': 'A ring of dead grass marks the edge of their patience. The party steps over it anyway.',
+  'flavour.combatIntro.4': 'Somewhere below the rim the ether turns, slow as oil. Up here, the fight starts the way fights always do: too fast to talk about.',
+  'flavour.combatIntro.5': 'They come apart from the rock in pieces that were never rock. There is a moment to choose a footing, and then there is not.',
+  'flavour.combatIntro.6': 'No words are offered. None would help. The party spreads out and takes the ground it can hold.',
   'flavour.treasure.1': 'The cache is old army issue, from a war nobody can place. The layers keep their secrets by outliving everyone who knew them.',
   'flavour.treasure.2': 'Whoever sealed this meant to return: boots hung to dry, a letter half written. The ether takes some travellers mid-sentence.',
   'flavour.treasure.3': 'A child\'s drawing is folded between the ration tins: a flat world with edges, drawn by someone who had never seen the rim. The party leaves it where it lay.',

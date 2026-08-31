@@ -68,10 +68,18 @@
         </div>
       </div>
 
-      <!-- Enemy roster (top centre, in combat only): one card per enemy, in turn
-           order. Same shape as a party-panel row: portrait, name, ability chips,
-           HP and a segmented bar. src/ui.js fills it from the combat engine. -->
-      <div class="top-center enemy-roster hidden" id="enemy-roster"></div>
+      <!-- Local Map Info (right side, in combat only): what this fight is, the
+           buffs and debuffs riding on it, then the enemy roster - one card per
+           enemy in turn order. src/ui.js fills it from the combat engine. -->
+      <div class="panel right-mid local-info hidden" id="local-info">
+        <div class="li-title" id="li-title"></div>
+        <div class="li-desc" id="li-desc"></div>
+        <div class="li-sep"></div>
+        <div class="li-effects" id="li-effects"></div>
+        <div class="li-sep" id="li-sep2"></div>
+        <div class="li-roster-label" data-i18n="localinfo.enemies">Enemies</div>
+        <div class="enemy-roster" id="enemy-roster"></div>
+      </div>
 
       <div class="panel left-mid party" id="party">
         <div class="party-title" data-i18n="party.title">Party</div>

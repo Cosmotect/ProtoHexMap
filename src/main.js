@@ -255,7 +255,7 @@ function beginInteractiveBattle(ctx) {
   });
   window.__battle = battle;   // for debugging / automated tests
   view.bindBattle(battle);
-  ui.setBattleMode(battle);
+  ui.setBattleMode(battle, { title: ctx.title, lore: ctx.lore, debuffs: ctx.debuffs });
   // The guide may have a card for the first fight (scenario maps).
   tutorial.onEvent('combatStart', {}, game);
 }

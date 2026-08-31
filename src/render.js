@@ -5,9 +5,68 @@ import * as THREE from 'three';
 import { MapControls } from 'three/addons/controls/MapControls.js';
 import { tween, cancelTween, Ease, updateTweens } from './tween.js';
 import { hexDistance } from './hex.js';
+import { fatigueStepHue } from './game.js';
 
 const SQRT3 = Math.sqrt(3);
 const deg = (d) => (d * Math.PI) / 180;
+
+// ----- cost decals ---------------------------------------------------------
+// The "-2 HP" / "-3 SP" text painted flat on a reachable tile. Tuned here on
+// purpose rather than in Settings: these are drawing details, not game rules.
+const DECAL = {
+  canvasW: 256,          // texture size; the plane below decides the world size
+  canvasH: 150,
+  fontSize: 62,          // px inside that canvas
+  lineGap: 8,            // px between the HP and SP lines
+  widthFactor: 1.35,     // plane width as a multiple of the tile radius
+  lift: 0.035,           // how far above the tile top it floats (z-fighting)
+  sat: 78,               // HSL saturation/lightness of the text
+  light: 58,
+  stroke: 'rgba(6, 8, 14, 0.85)',
+  strokeWidth: 8,
+  // Green until the step costs a tenth of the pool, red once it costs it all.
+  hueSafe: 135,
+  hueMid: 52,
+  hueHigh: 2,
+};
+
+// Green -> yellow -> red by how much of the pool this step eats. `frac` is
+// cost / pool, so 1 means "this single step takes everything you have".
+function decalHue(frac) {
+  const f = Math.max(0, Math.min(1, frac));
+  return f <= 0.5
+    ? DECAL.hueSafe + (DECAL.hueMid - DECAL.hueSafe) * (f / 0.5)
+    : DECAL.hueMid + (DECAL.hueHigh - DECAL.hueMid) * ((f - 0.5) / 0.5);
+}
+
+// One canvas per (text, colour) pair, drawn on demand. Lines are
+// [{ text, hue }] - HP and SP each carry their own colour, because the party
+// can be flush with supplies and one hit from losing somebody.
+function makeDecalTexture(lines) {
+  const c = document.createElement('canvas');
+  c.width = DECAL.canvasW;
+  c.height = DECAL.canvasH;
+  const g = c.getContext('2d');
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.font = `700 ${DECAL.fontSize}px "IBM Plex Mono", ui-monospace, monospace`;
+  g.lineJoin = 'round';
+  const lh = DECAL.fontSize + DECAL.lineGap;
+  const top = DECAL.canvasH / 2 - ((lines.length - 1) * lh) / 2;
+  lines.forEach((ln, i) => {
+    const y = top + i * lh;
+    // A dark outline first, so the text survives sand, grass and snow alike.
+    g.lineWidth = DECAL.strokeWidth;
+    g.strokeStyle = DECAL.stroke;
+    g.strokeText(ln.text, DECAL.canvasW / 2, y);
+    g.fillStyle = `hsl(${ln.hue} ${DECAL.sat}% ${DECAL.light}%)`;
+    g.fillText(ln.text, DECAL.canvasW / 2, y);
+  });
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
 
 export class MapRenderer {
   constructor(container, config) {
@@ -116,6 +175,13 @@ export class MapRenderer {
     tileGeo.translate(0, 0.5, 0); // bottom of the tile sits on y = 0
     if (orientation === 'flat') tileGeo.rotateY(Math.PI / 6);
     this.tileGeo = tileGeo;
+
+    // The plate the cost text is painted on: flat, inside the ring, and yawed
+    // to the camera every frame so the writing is never upside down.
+    const dw = radius * DECAL.widthFactor;
+    const decalGeo = new THREE.PlaneGeometry(dw, (dw * DECAL.canvasH) / DECAL.canvasW);
+    decalGeo.rotateX(-Math.PI / 2);
+    this.decalGeo = decalGeo;
 
     const ringStart = orientation === 'flat' ? 0 : Math.PI / 6;
     const ringGeo = new THREE.RingGeometry(radius * 0.78, radius * 0.93, 6, 1, ringStart);
@@ -290,6 +356,12 @@ export class MapRenderer {
       this.scene.remove(rec.mesh, rec.ring);
       rec.mesh.material.dispose();
       rec.ring.material.dispose();
+      if (rec.decal) {
+        this.scene.remove(rec.decal);
+        if (rec.decal.material.map) rec.decal.material.map.dispose();
+        rec.decal.material.dispose();
+        rec.decal = null;
+      }
       if (rec.marker) {
         this.setChevrons(rec, 0);
         this.scene.remove(rec.marker);
@@ -528,17 +600,64 @@ export class MapRenderer {
   syncState() {
     const game = this.game;
     this.reachable = new Set(game.reachable().map((h) => h.key));
+    // Every reachable tile is the SAME next step, so they all share the colour
+    // of the box that step will fill in the fatigue bar: green while the walk
+    // is free, then yellow and on into red.
+    const hue = fatigueStepHue(this.config, game.state.fatigueSteps + 1);
+    this.reachHue = hue;
+    if (!this.reachColor) this.reachColor = new THREE.Color();
+    this.reachColor.setHSL(hue / 360, 0.72, 0.55);   // matches the fbox border
+    // Pools the step costs are measured against: the supplies on hand, and the
+    // unit closest to dying (climb damage hits everybody, so that unit decides
+    // whether the climb is survivable).
+    const living = game.livingUnits();
+    const lowHp = living.length ? Math.min(...living.map((u) => u.hp)) : 0;
     for (const rec of this.tiles.values()) {
       const animating = rec.colorTween && !rec.colorTween.done;
       if (rec.hex.revealed && !animating) {
         rec.mesh.material.color.copy(this.targetColorFor(rec.hex));
       }
       rec.ring.visible = this.reachable.has(rec.hex.key);
+      this.syncCostDecal(rec, game.state.supplies, lowHp);
       // The marker on the party's own tile floats up so the token does not cut through it.
       rec.markerLiftTarget = rec.hex === game.state.position ? 1.1 : 0;
       // Danger chevrons above revealed battles: how much stronger the enemies are.
       if (rec.marker) this.setChevrons(rec, rec.hex.revealed ? game.dangerRank(rec.hex) : 0);
     }
+  }
+
+  // "-2 HP" / "-3 SP" flat on a tile the party can step onto, when stepping
+  // there actually costs that. The texture is rebuilt only when the words or
+  // the colours change, so this is cheap to call from syncState().
+  syncCostDecal(rec, supplies, lowHp) {
+    const hex = rec.hex;
+    const hp = hex.hpCost ?? 0;
+    const sp = hex.supplyCost ?? 0;
+    const show = rec.ring.visible && hex.revealed && (hp > 0 || sp > 0);
+    if (!show) {
+      if (rec.decal) rec.decal.visible = false;
+      return;
+    }
+    const lines = [];
+    if (hp > 0) lines.push({ text: `-${hp} HP`, hue: Math.round(decalHue(lowHp > 0 ? hp / lowHp : 1)) });
+    if (sp > 0) lines.push({ text: `-${sp} SP`, hue: Math.round(decalHue(supplies > 0 ? sp / supplies : 1)) });
+    const key = lines.map((l) => `${l.text}@${l.hue}`).join('|');
+    if (!rec.decal) {
+      rec.decal = new THREE.Mesh(this.decalGeo, new THREE.MeshBasicMaterial({
+        transparent: true, depthWrite: false, toneMapped: false,
+      }));
+      rec.decal.renderOrder = 3;   // above the tile and its ring
+      rec.decal.position.set(hex.x, 0, -hex.y);
+      this.scene.add(rec.decal);
+    }
+    if (rec.decalKey !== key) {
+      rec.decalKey = key;
+      const old = rec.decal.material.map;
+      rec.decal.material.map = makeDecalTexture(lines);
+      rec.decal.material.needsUpdate = true;
+      if (old) old.dispose();
+    }
+    rec.decal.visible = true;
   }
 
   // ===================================================================
@@ -768,11 +887,20 @@ export class MapRenderer {
 
     const c = this.config.colors;
     const hoverKey = this.hover?.key;
+    // Which way the camera looks, flattened onto the ground - the yaw every
+    // flat decal copies so its text faces the viewer.
+    const camYaw = Math.atan2(
+      this.camera.position.x - this.controls.target.x,
+      this.camera.position.z - this.controls.target.z
+    );
     for (const rec of this.tiles.values()) {
       // Rings on reachable tiles pulse; the hovered one goes solid white.
       if (rec.ring.visible) {
         const isHover = rec.hex.key === hoverKey;
-        rec.ring.material.color.set(isHover ? c.hoverRing : c.reachableRing);
+        // Not the flat `reachableRing` any more: the ring wears the colour of
+        // the fatigue box this step will fill (syncState works it out).
+        if (isHover) rec.ring.material.color.set(c.hoverRing);
+        else rec.ring.material.color.copy(this.reachColor ?? new THREE.Color(c.reachableRing));
         rec.ring.material.opacity = isHover ? 1 : 0.45 + 0.35 * (0.5 + 0.5 * Math.sin(this.elapsed / 260 + rec.phase));
         const targetLift = isHover ? 0.12 : 0;
         rec.lift += (targetLift - rec.lift) * Math.min(1, dt / 60);
@@ -781,6 +909,12 @@ export class MapRenderer {
       }
       rec.mesh.position.y = rec.lift;
       rec.ring.position.y = rec.height + 0.02 + rec.lift;
+      // The cost text rides the tile and turns with the camera, so it always
+      // reads left to right however the map is spun.
+      if (rec.decal && rec.decal.visible) {
+        rec.decal.position.y = rec.height + DECAL.lift + rec.lift;
+        rec.decal.rotation.y = camYaw;
+      }
 
       // Encounter markers slowly spin and bob; chevrons stack above them.
       if (rec.marker && rec.marker.visible) {

@@ -340,6 +340,10 @@ export const ru = {
   'battle.stasis.title': 'Стазис: {title}',
   'battle.stasis.untitled': 'Бой со Стазисом',
   'battle.debuffs': 'Проклятия Стазиса:',
+
+  'localinfo.title': 'Стычка',
+  'localinfo.enemies': 'Противники',
+  'localinfo.none': 'На этой земле ничего не висит.',
   'battle.victory': 'Победа через {n} {n:раунд|раунда|раундов}.',
   'battle.defeat': 'Поражение через {n} {n:раунд|раунда|раундов}.',
   'battle.partyFirst': 'Отряд ударил первым.',

@@ -84,7 +84,18 @@ balance must be re-measured against interactive play.
   Stasis / acolyte / camp always reset, shop / event optionally, treasure never.
   The **fatigue bar** (top centre) draws one box per step, coloured by its percentage,
   filling as the party walks and emptying on a reset; hovering a reachable tile shows
-  the forced chance and the fatigue after the step.
+  the forced chance and the fatigue after the step. The world map's reachable-tile
+  rings wear that same colour: every reachable tile is the SAME next step, so
+  `fatigueStepHue(config, fatigueSteps + 1)` gives one hue for all of them and the
+  ring answers "how tired does this step make us" without a number.
+* **Cost decals** (`render.js`, the `DECAL` block). A reachable tile that charges
+  health or supplies to step onto says so on its own surface: "-5 HP" / "-10 SP"
+  painted on a flat plane just above the tile top, yawed to the camera every frame
+  so the text is never upside down. Each line is coloured on its own - green through
+  yellow to red by `cost / pool`, where the supply pool is what is in the packs and
+  the HP pool is the LOWEST living unit's health, because climb damage hits everyone
+  and that unit decides whether the climb is survivable. The canvas is rebuilt only
+  when the words or the colours change.
 * **The Stasis** (`config.stasis`) - the win condition and the clock:
   * One **Seed** on ring >= `seedMinRing` ('half' = floor(radius/2)); destroying it
     wins the run. `colonyCount` (4) future **Colony** sites; their only placement rule
@@ -252,12 +263,28 @@ tables, and a fight is fully readable off them:
   with no time limit - a cancel must never be swallowed because a slow frame made
   the click "too long". The browser's own context menu is suppressed for the whole
   life of the local map.
-* **The enemy roster** (top centre, in combat): one card per enemy in TURN ORDER -
-  the engine's own ordering, initiative high to low and ties by spawn index - with
-  its portrait, name, ability icons (hover for what each does), HP and a segmented
-  bar. It is deliberately the party panel's row turned on its side, and it shares
-  that panel's actual bar CSS rather than a copy of it, so a health bar is drawn and
-  read identically wherever it appears.
+* **Local Map Info** (`#local-info`, right side, in combat): the arena's answer to
+  the party panel on the left. Top to bottom: the fight's NAME (the enemy group's
+  `title` from the bestiary, or a generic "Skirmish"), a lore line drawn from the
+  `combatIntro` flavour pool - written for the moment before the first blow, not
+  the aftermath - a separator, then one block per BUFF or DEBUFF riding on this
+  arena (today the Stasis debuffs, in the world map's purple-red; the `.buff`
+  variant is green and waits for the first buff source), a separator, and the
+  enemy roster. With no effects the block and its separator both go away, so the
+  panel never carries an empty gap. `ui.setBattleMode(battle, info)` fills it once
+  when the fight opens, from `{ title, lore, debuffs }` on the combat ctx.
+* **The enemy roster** (inside the panel above, in combat): one card per enemy in
+  TURN ORDER - the engine's own ordering, initiative high to low and ties by spawn
+  index - with its portrait, name, ability icons (hover for what each does), HP and
+  a segmented bar. It is deliberately the party panel's row, stacked vertically on
+  the opposite side of the screen, and it shares that panel's actual bar CSS rather
+  than a copy of it, so a health bar is drawn and read identically wherever it
+  appears. It is redrawn every turn by `updateBattle()`.
+* **The Enter button is a WORLD-MAP control.** It is hidden for the whole local map
+  (`.local-mode:not(.start-screen) #statusbar`), not just while a fight runs, so it
+  cannot surface behind a reward popup; it comes back with the fatigue bar and the
+  party panel at the peak of the flight home. The campfire start screen is the one
+  exception - its "Begin journey" button lives in that same slot.
 * **The unit plaque** (`localview.js`, the `PLAQUE` block): ONE billboard over each
   unit's head carrying the portrait, the HP numbers and the health bar together -
   icon box on the left, "24 / 40" above a bar on the right, the arrangement of a

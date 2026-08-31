@@ -84,6 +84,7 @@ const PLAQUE = {
   badgeTextSize: 9,         // the turns-remaining number in its corner
   badgeTextBg: 'rgba(8, 11, 18, 0.9)',
   iconFill: 'rgba(255, 255, 255, 0.08)',
+  glyphColor: '#f2f5fb',    // the portrait glyph itself - NEVER the box's wash
   iconStroke: 'rgba(255, 255, 255, 0.16)',
   textColor: '#94a0b8',     // --muted
   trackFill: 'rgba(255, 255, 255, 0.10)',
@@ -468,6 +469,7 @@ export class LocalMapView {
       g.lineWidth = 5;
       roundRect(g, 6, 6, size - 12, size - 12, 26);
       g.stroke();
+      g.fillStyle = PLAQUE.glyphColor;   // not the plate's dark wash (see updateUnitPlaque)
       g.font = `${Math.round(size * 0.58)}px ${PLAQUE.emojiFont}`;
       g.textAlign = 'center';
       g.textBaseline = 'middle';
@@ -596,6 +598,11 @@ export class LocalMapView {
     roundRect(g, ix, iy, iw, iw, 7);
     g.stroke();
     if (plaque.userData.glyph) {
+      // fillStyle is still the icon box's 8%-alpha wash at this point. A colour
+      // emoji ignores it, but anything that falls back to a monochrome face -
+      // an enemy's plain initial, or an emoji without a colour glyph - would be
+      // drawn at 8% opacity and all but vanish. Set it explicitly.
+      g.fillStyle = P.glyphColor;
       g.font = `${Math.round(iw * 0.62)}px ${P.emojiFont}`;
       g.textAlign = 'center';
       g.textBaseline = 'middle';
