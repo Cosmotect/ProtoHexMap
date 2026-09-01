@@ -86,37 +86,12 @@ export const UNIT_COMBAT = {
   Skywatcher: { init: 8, speed: 5, flying: true, abilities: ['volley', 'lance'] },
   Tinker: { init: 5, speed: 4, flying: false, abilities: ['shove', 'bolt'] },
   Duskblade: { init: 9, speed: 5, flying: false, abilities: ['strike', 'lance'] },
-  // regular enemies (the bestiary lives in config/units.js battle.enemyTypes -
-  // name, shape, colour, hp, power; the COMBAT half of a creature is here)
-  Raider: { init: 6, speed: 4, flying: false, abilities: ['strike'] },
-  Drifter: { init: 5, speed: 4, flying: false, abilities: ['volley'] },
-  Husk: { init: 4, speed: 3, flying: false, abilities: ['strike'] },
-  Stalker: { init: 7, speed: 5, flying: false, abilities: ['lance'] },
-  Brute: { init: 3, speed: 3, flying: false, abilities: ['strike', 'shove'] },
-  Ravager: { init: 8, speed: 5, flying: false, abilities: ['lance', 'strike'] },
-  // Stasis pools (colonies + bosses); unknown names use `default`
-  'Forge Tyrant': { init: 6, speed: 4, flying: false, abilities: ['strike', 'burst'] },
-  "Tyrant's Shadow": { init: 7, speed: 5, flying: false, abilities: ['lance'] },
-  'Warden of the Rim': { init: 5, speed: 4, flying: false, abilities: ['strike', 'shove'] },
-  'Choir Husk': { init: 4, speed: 3, flying: false, abilities: ['strike'] },
-  'Ether Leviathan': { init: 6, speed: 3, flying: true, abilities: ['burst', 'bolt'] },
-  'Pale Stalker': { init: 8, speed: 5, flying: false, abilities: ['lance'] },
-  'Dark Stalker': { init: 8, speed: 5, flying: false, abilities: ['strike', 'shove'] },
-  'Forge Hound': { init: 7, speed: 5, flying: false, abilities: ['strike'] },
-  'Rim Sentry': { init: 4, speed: 3, flying: false, abilities: ['strike', 'guard'] },
-  'Ether Spawn': { init: 6, speed: 4, flying: true, abilities: ['bolt'] },
-  'Stalker Shade': { init: 7, speed: 5, flying: false, abilities: ['strike'] },
-  'Colony Warden': { init: 5, speed: 3, flying: false, abilities: ['strike', 'guard'] },
-  'Warden Servitor': { init: 4, speed: 4, flying: false, abilities: ['strike'] },
-  'Brood Husk': { init: 4, speed: 3, flying: false, abilities: ['strike'] },
-  'Pale Sentinel': { init: 6, speed: 3, flying: false, abilities: ['volley'] },
-  'Dark Sentinel': { init: 6, speed: 3, flying: false, abilities: ['bolt'] },
-  'Stasis Mote': { init: 8, speed: 5, flying: true, abilities: ['strike'] },
-  'Colony Anchor': { init: 3, speed: 2, flying: false, abilities: ['burst', 'shove'] },
-  'Anchor Tether': { init: 5, speed: 4, flying: false, abilities: ['strike'] },
-  'Rot Chorister': { init: 5, speed: 4, flying: false, abilities: ['strike'] },
-  'Rot Chorus': { init: 5, speed: 4, flying: false, abilities: ['strike'] },
-  'Stasis Brood': { init: 5, speed: 4, flying: false, abilities: ['strike'] },
+  // NOTE: enemies are NOT listed here any more. Since 2026-09-01 a bestiary row
+  // in config/units.js (battle.enemyTypes) carries a creature's init, speed,
+  // flying and abilities alongside its body and numbers, so an enemy is defined
+  // in exactly ONE place and the Settings window can invent a new one. This
+  // table is now the PARTY's, plus `default` as the last-resort fallback for a
+  // hand-authored def that names neither.
 };
 
 // Combat stats for a unit by its display name ("Husk 2" -> "Husk").

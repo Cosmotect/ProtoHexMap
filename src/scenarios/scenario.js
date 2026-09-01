@@ -146,6 +146,12 @@ export function cloneEnemies(list, cfg = null) {
       power: e.power ?? type?.power ?? 0,
       shape: e.shape ?? type?.shape ?? 'octahedron',
       color: e.color ?? type?.color ?? 0xe2474b,
+      // The bestiary row's combat half travels too, so a scripted creature
+      // fights like its wild cousin unless the script says otherwise.
+      init: e.init ?? type?.init,
+      speed: e.speed ?? type?.speed,
+      flying: e.flying ?? type?.flying,
+      abilityIds: e.abilities ?? type?.abilities,
       alive: true,
     };
   });

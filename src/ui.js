@@ -6,6 +6,16 @@ import { t, tn } from './i18n.js';
 import { playFatigueStep, playFatigueClear, clearStaggerMs } from './audio.js';
 import { unitAbilityIds, upgradeTree, treeLayout, upgradeRef } from './upgrades.js';
 import { ABILITIES } from './config/abilities.js';
+import { statusesFor, badgeNumber } from './status.js';
+
+// A status badge's hover text, in plain text (the overhead plaque builds the
+// same thing as HTML - see statusTipHtml in src/local/localview.js).
+function statusTipText(hs) {
+  const n = hs.amount == null ? '' : (hs.amount > 0 ? `+${hs.amount}` : String(hs.amount));
+  const parts = [t(`status.${hs.id}.name`, { n }), t(`status.${hs.id}.desc`, { n })];
+  if (hs.turns > 0) parts.push(t('status.turns', { n: hs.turns }));
+  return parts.filter(Boolean).join(' - ');
+}
 
 // Display name of an ability (locale key with the config name as fallback).
 // An ability's hover text: its name, what it does, and the numbers that matter.
@@ -69,6 +79,7 @@ export function createUI(config, handlers) {
     liDesc: $('li-desc'),
     liEffects: $('li-effects'),
     liSep2: $('li-sep2'),
+    partyLines: $('party-lines'),
   };
 
   // ----- buttons -----------------------------------------------------
@@ -301,7 +312,7 @@ export function createUI(config, handlers) {
       els.enter.title = action.reason || (action.kind === 'camp' ? tc('status.camp.title', config) : t('status.enter.title'));
       els.enter.classList.toggle('camp', action.kind === 'camp');
     }
-    els.party.innerHTML = s.party.map((u) => unitCard(u, config)).join('');
+    els.party.innerHTML = s.party.map((u, i) => unitCard(u, config, i)).join('');
     // Keep an open dialog in sync (e.g. shop prices after a purchase).
     if (dialogRefresh) dialogRefresh(game);
     els.supplies.textContent = `${s.supplies} / ${s.maxSupplies}`;
@@ -515,6 +526,41 @@ export function createUI(config, handlers) {
   // Shown instead of the status bar while a fight runs. Everything is read off
   // the combat engine's state on every updateBattle() call; the buttons talk
   // straight back to the engine (selectAbility / endTurn).
+  // ----- the party panel's pointer line ------------------------------------
+  // Hovering a party card draws a line from it to that unit's body in the arena
+  // - the same idea (and the same SVG layer) as the tutorial's green pointer,
+  // so the two read as one language. Only on the local map: on the world map the
+  // party is one token and the line would point at all three at once.
+  let hoverParty = null;
+  els.party.addEventListener('pointerover', (e) => {
+    const card = e.target.closest('.unit[data-party]');
+    const idx = card ? Number(card.dataset.party) : null;
+    if (idx === hoverParty) return;
+    setHoverParty(idx);
+  });
+  els.party.addEventListener('pointerleave', () => setHoverParty(null));
+  function setHoverParty(idx) {
+    hoverParty = idx;
+    els.party.querySelectorAll('.unit').forEach((el) => el.classList.toggle('pointed', Number(el.dataset.party) === idx));
+    if (idx == null) els.partyLines.innerHTML = '';
+  }
+  // Redrawn every frame: the camera moves, the units walk, and the card can be
+  // re-rendered under the cursor by any HP change.
+  function drawPartyLine() {
+    if (hoverParty == null || !document.body.classList.contains('local-mode')) { els.partyLines.innerHTML = ''; return; }
+    const view = handlers.getLocalView && handlers.getLocalView();
+    const end = view?.partyTokenScreen ? view.partyTokenScreen(hoverParty) : null;
+    const card = els.party.querySelector(`.unit[data-party="${hoverParty}"]`);
+    if (!end || !card) { els.partyLines.innerHTML = ''; return; }
+    const a = card.getBoundingClientRect();
+    const start = rectEdgeToward(a, end.x, end.y);
+    // The SVG lives inside the zoomed HUD; the projections are in viewport
+    // pixels, so both ends are divided by the UI scale.
+    const z = uiScale();
+    els.partyLines.innerHTML = `<line x1="${start.x / z}" y1="${start.y / z}" x2="${end.x / z}" y2="${end.y / z}"></line><circle cx="${end.x / z}" cy="${end.y / z}" r="4"></circle>`;
+  }
+  (function partyLineTick() { drawPartyLine(); requestAnimationFrame(partyLineTick); })();
+
   let battleRef = null;
   $('btn-end-turn').addEventListener('click', () => { if (battleRef) battleRef.endTurn(); });
   els.battleAbilities.addEventListener('click', (e) => {
@@ -570,22 +616,36 @@ export function createUI(config, handlers) {
       const pct = Math.max(0, Math.min(100, (u.hp / u.maxHp) * 100));
       const segPct = (config.party.hpSegment / u.maxHp) * 100;
       const cls = `${dead ? 'dead' : ''} ${!dead && pct < 50 ? 'hurt' : ''} ${u.uid === sb.activeUid ? 'active' : ''} ${u.uid === sb.inspectUid ? 'inspected' : ''}`;
+      // Ability icons hang UNDER the portrait, stacked, so the card's left edge
+      // reads as "who this is and what it can do" in one column.
       const chips = (u.abilityIds ?? []).map((id) => {
         const ab = battleRef.abilityById(id);
         if (!ab) return '';
         return `<span class="ab-chip" title="${escapeAttr(abilityTip(id, ab))}">${ab.icon}</span>`;
       }).join('');
+      // The same status badges the overhead plaque draws, from the same table
+      // (src/status.js), parked to the right of the name and HP.
+      const badges = statusesFor(u).map((hs) => {
+        const num = badgeNumber(hs);
+        return `<span class="e-status-badge" title="${escapeAttr(statusTipText(hs))}">${hs.icon}${num ? `<i>${num}</i>` : ''}</span>`;
+      }).join('');
       // The initial stands in for a portrait: enemies carry no emoji.
       const initial = (u.name ?? '?').charAt(0);
       return `<div class="eunit ${cls.trim()}">
-        <div class="e-icon">${escapeHtml(initial)}</div>
-        <div class="e-info">
-          <div class="e-name">${escapeHtml(tn(u.name))}</div>
+        <div class="e-side">
+          <div class="e-icon">${escapeHtml(initial)}</div>
           <div class="ab-chips">${chips}</div>
-          <span class="e-hp">${t('party.hp', { hp: Math.max(0, u.hp), max: u.maxHp })}</span>
+        </div>
+        <div class="e-info">
+          <div class="e-head">
+            <div class="e-text">
+              <div class="e-name">${escapeHtml(tn(u.name))}</div>
+              <span class="e-hp">${t('party.hp', { hp: Math.max(0, u.hp), max: u.maxHp })}</span>
+            </div>
+            <div class="e-status">${badges}</div>
+          </div>
           <div class="bar"><div class="fill" style="width:${pct}%"></div><div class="segs" style="--seg:${segPct}%"></div></div>
         </div>
-        <div class="e-order">${i + 1}</div>
       </div>`;
     }).join('');
   }
@@ -800,7 +860,7 @@ function resolveValue(v) {
 // One row of the party panel. Where the power rating used to sit, the unit's
 // two abilities are shown; "+n" counts that ability's unlocked upgrades, and
 // the tooltip lists them by name.
-function unitCard(u, config) {
+function unitCard(u, config, index) {
   const pct = Math.max(0, Math.min(100, (u.hp / u.maxHp) * 100));
   const segPct = (config.party.hpSegment / u.maxHp) * 100;
   const cls = !u.alive ? 'dead' : pct < 50 ? 'hurt' : '';
@@ -810,13 +870,19 @@ function unitCard(u, config) {
     const owned = (u.upgrades ?? []).filter((r) => r.startsWith(`${id}:`));
     const names = owned.map((r) => t(`upgrade.${r.replace(':', '.')}.name`)).join(', ');
     const tip = `${abilityName(id)}${names ? ` - ${names}` : ''}`;
-    return `<span class="ab-chip" title="${escapeAttr(tip)}">${ab.icon} ${escapeHtml(abilityName(id))}${owned.length ? `<b>+${owned.length}</b>` : ''}</span>`;
+    return `<span class="ab-chip" title="${escapeAttr(tip)}">${ab.icon}${owned.length ? `<b>+${owned.length}</b>` : ''}</span>`;
   }).join('');
-  return `<div class="unit ${cls}">
-    <div class="icon">${u.icon}</div>
+  // Same shape as an enemy card in the Local Map Info panel (.eunit): portrait
+  // with its abilities stacked under it on the left, name over HP on the right,
+  // bar across the bottom. `data-party` is the index the pointer line needs to
+  // find this unit's token in the arena.
+  return `<div class="unit ${cls}" data-party="${index}">
+    <div class="u-side">
+      <div class="icon">${u.icon}</div>
+      <div class="ab-chips">${chips}</div>
+    </div>
     <div class="info">
       <div class="name-row"><span class="name">${escapeHtml(tn(u.name))}</span></div>
-      <div class="ab-chips">${chips}</div>
       <span class="hp">${u.alive ? t('party.hp', { hp: u.hp, max: u.maxHp }) : t('party.disabled')}</span>
       <div class="bar"><div class="fill" style="width:${pct}%"></div><div class="segs" style="--seg:${segPct}%"></div></div>
     </div>
@@ -824,6 +890,18 @@ function unitCard(u, config) {
 }
 
 // ----- small helpers -------------------------------------------------
+// Where a line from the rectangle's centre towards (tx, ty) leaves the rectangle.
+// (The tutorial's pointer does the same thing for its card - src/tutorial.js.)
+function rectEdgeToward(r, tx, ty) {
+  const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+  const dx = tx - cx, dy = ty - cy;
+  if (dx === 0 && dy === 0) return { x: cx, y: cy };
+  const sx = dx !== 0 ? (r.width / 2) / Math.abs(dx) : Infinity;
+  const sy = dy !== 0 ? (r.height / 2) / Math.abs(dy) : Infinity;
+  const k = Math.min(sx, sy);
+  return { x: cx + dx * k, y: cy + dy * k };
+}
+
 // Current UI scale (the --ui-scale variable applied to #hud). Shared with the guide.
 export function uiScale() {
   const v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--ui-scale'));

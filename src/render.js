@@ -16,14 +16,14 @@ const deg = (d) => (d * Math.PI) / 180;
 const DECAL = {
   canvasW: 256,          // texture size; the plane below decides the world size
   canvasH: 150,
-  fontSize: 62,          // px inside that canvas
-  lineGap: 8,            // px between the HP and SP lines
-  widthFactor: 1.35,     // plane width as a multiple of the tile radius
+  fontSize: 64,          // px inside that canvas
+  lineGap: 10,            // px between the HP and SP lines
+  widthFactor: 1,     // plane width as a multiple of the tile radius
   lift: 0.035,           // how far above the tile top it floats (z-fighting)
   sat: 78,               // HSL saturation/lightness of the text
   light: 58,
-  stroke: 'rgba(6, 8, 14, 0.85)',
-  strokeWidth: 8,
+  stroke: 'rgba(6, 8, 14, 0.55)',
+  strokeWidth: 2,
   // Green until the step costs a tenth of the pool, red once it costs it all.
   hueSafe: 135,
   hueMid: 52,

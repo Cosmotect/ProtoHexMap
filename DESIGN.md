@@ -155,6 +155,17 @@ balance must be re-measured against interactive play.
   (World, Encounters, Units, General, Audio). The form is generated from the config's
   shape, changes apply immediately, persist in localStorage over the file defaults,
   and every row / tab has a reset. Map, terrain and party values apply on the next run.
+  The **Units tab is hand-built** instead, because the enemy system is a system of
+  ENTRIES and the generator can only edit values, never add or remove one. It holds
+  four editors: the party roster, the bestiary (one row per creature, with a shape
+  dropdown and a validated ability list), the groups (a title plus a comma-separated
+  line-up of bestiary ids, red the moment an id is not real), and the pools - a
+  checkbox per group for each ring band, for the Stasis Seed and for the Colonies.
+  Rows can be added, renamed and deleted, so a whole new enemy can be invented and
+  put into a fight without opening a file. These editors save the WHOLE collection
+  as one override (`battle.enemyTypes`, not `battle.enemyTypes.husk.hp`), since an
+  add or a delete is a change to the collection; that is why they carry one "reset
+  this table" button rather than the per-row reset the generated forms use.
 * **Languages** (`i18n.js`): every user-facing string is a key in a flat per-language
   table (`locales/`); only languages registered in i18n.js are selectable (English
   now). `t(key, params)` / `tn(name)`, `data-i18n` for static HTML, plurals
@@ -183,11 +194,16 @@ balance must be re-measured against interactive play.
 Since 2026-08-31 nothing about an enemy is rolled unit by unit. There are three
 tables, and a fight is fully readable off them:
 
-* **`battle.enemyTypes`** - the bestiary. One entry per creature, deliberately just
-  five things: `name`, `shape` (its 3D body), `color`, `hp`, `power`. A creature's
-  COMBAT half - initiative, speed, flying, which abilities it casts - stays in
-  `config/abilities.js` (`UNIT_COMBAT`, keyed by the same name), because those are
-  rules rather than description.
+* **`battle.enemyTypes`** - the bestiary. One entry per creature, and since
+  2026-09-01 that entry is the WHOLE creature: `name`, `shape` (its 3D body),
+  `color`, `hp`, `power`, plus the combat half - `init`, `speed`, `flying`,
+  `abilities`. It used to be split, with the combat half in `UNIT_COMBAT`
+  (config/abilities.js) keyed by name; that split meant a creature invented in the
+  Settings window could only ever be a nameless `default`, so the combat fields
+  moved here and `UNIT_COMBAT` is now the PARTY's table plus a `default` fallback.
+  A row that omits the four combat fields still falls through to `UNIT_COMBAT` by
+  name, so older hand-authored content keeps working (`makeInstance` in
+  local/battle/engine.js takes the definition's value where it has one).
   The shapes come from `SHAPES` in `src/local/localview.js`: `box sphere cone
   cylinder capsule prism pyramid spike tetrahedron octahedron icosahedron
   dodecahedron torus torusKnot diamond shard slab star`. Adding a name there makes
@@ -275,11 +291,26 @@ tables, and a fight is fully readable off them:
   when the fight opens, from `{ title, lore, debuffs }` on the combat ctx.
 * **The enemy roster** (inside the panel above, in combat): one card per enemy in
   TURN ORDER - the engine's own ordering, initiative high to low and ties by spawn
-  index - with its portrait, name, ability icons (hover for what each does), HP and
-  a segmented bar. It is deliberately the party panel's row, stacked vertically on
-  the opposite side of the screen, and it shares that panel's actual bar CSS rather
-  than a copy of it, so a health bar is drawn and read identically wherever it
-  appears. It is redrawn every turn by `updateBattle()`.
+  index. The card reads in two columns: the portrait with the creature's ability
+  icons stacked UNDER it on the left (hover one for what it does), then the name
+  over the HP with its status badges beside them, and the segmented bar across the
+  bottom. There is deliberately no turn-order number: the order is the order the
+  cards are in. It shares the party panel's actual bar CSS rather than a copy of
+  it, so a health bar is drawn and read identically wherever it appears. Redrawn
+  every turn by `updateBattle()`.
+* **The party panel** (left) is the same card, mirrored, and it STAYS on the local
+  map - who is on the field and how hurt they are matters most while the fight is
+  running. Its frame is the party green where the enemies' is red. Hovering a card
+  turns that frame gold and draws a dashed pointer from it to that unit's body in
+  the arena (`#party-lines`, the same SVG idea as the tutorial's green pointer;
+  `localView.partyTokenScreen(partyIndex)` projects the body). The line is gold
+  rather than green so it is never confused with a guide pointer on screen at the
+  same time.
+* **Status badges** come from ONE table, `src/status.js`, read by both the overhead
+  plaque (drawn on a canvas) and the enemy card (drawn in HTML) - a status can
+  never mean one thing in the arena and another in the panel. A badge shows a
+  number in its corner only when the status really has a duration; none of today's
+  do, and inventing one would be a lie about the rules.
 * **The Enter button is a WORLD-MAP control.** It is hidden for the whole local map
   (`.local-mode:not(.start-screen) #statusbar`), not just while a fight runs, so it
   cannot surface behind a reward popup; it comes back with the fatigue bar and the

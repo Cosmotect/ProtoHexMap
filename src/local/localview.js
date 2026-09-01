@@ -13,6 +13,7 @@ import { generateLocalMap, pickRandomTiles, applyElevationWave, neutralElevation
 import { COMBAT_CONFIG } from '../config/abilities.js';
 import { createRng } from '../rng.js';
 import { t, hasKey } from '../i18n.js';
+import { statusesFor, badgeNumber } from '../status.js';
 
 const SQRT3 = Math.sqrt(3);
 const deg = (d) => (d * Math.PI) / 180;
@@ -70,7 +71,7 @@ const PLAQUE = {
   barH: 12,                 // ...at the party panel's bar height
   gap: 7,                   // between the icon box and the right column
   pad: 7,                   // plate padding
-  textSize: 15,
+  textSize: 21,              // the "24 / 40" numbers (was 15; +40% so they read from the map)
   plateRadius: 10,
   dpr: 3,                   // canvas oversampling, so the text stays crisp when scaled up
   worldWidth: 1.9,          // how wide the whole plaque is in world units
@@ -104,39 +105,12 @@ PLAQUE.h = PLAQUE.pad * 2 + PLAQUE.icon;
 PLAQUE.iconOnlyW = PLAQUE.pad * 2 + PLAQUE.icon;
 PLAQUE.iconOnlyH = PLAQUE.h;
 
-// The statuses a unit can carry, in the order they are shown. `turnsOf` reads a
-// remaining-turns count IF the engine has one for that status - none of today's
-// do (a shield is spent by the next hit, a stun by the next activation), so no
-// number is drawn. The moment durations exist, put them on the unit as
-// `statusTurns[<id>]` and the badge starts counting on its own.
-// `amount` is the status's magnitude where it has one (haste is +N / -N speed).
-const STATUSES = [
-  { id: 'shield', icon: '🛡', on: (u) => !!u.shield },
-  { id: 'crit', icon: '⚡', on: (u) => !!u.critBuff },
-  { id: 'stun', icon: '💫', on: (u) => !!u.stunned },
-  { id: 'haste', icon: '💨', on: (u) => (u.haste ?? 0) > 0, amount: (u) => u.haste },
-  { id: 'slow', icon: '🐌', on: (u) => (u.haste ?? 0) < 0, amount: (u) => u.haste },
-];
 // HUD sprites must not be dimmed by the world: the scene's distance fog and the
 // renderer's ACES tone mapping are for the 3D set, and both were washing the
 // portraits out to a flat grey. Opting a sprite out of the two makes it read
 // exactly as its canvas was drawn.
 const SPRITE_MAT = (tex) => ({ map: tex, transparent: true, depthTest: false, fog: false, toneMapped: false });
 
-function statusesFor(unit) {
-  if (!unit) return [];
-  const out = [];
-  for (const st of STATUSES) {
-    if (!st.on(unit)) continue;
-    out.push({
-      id: st.id,
-      icon: st.icon,
-      turns: Number(unit.statusTurns?.[st.id]) || 0,
-      amount: st.amount ? st.amount(unit) : null,
-    });
-  }
-  return out;
-}
 
 // A status tooltip: its name, then what it does. Both come from the locale
 // tables (status.<id>.name / .desc); `amount` fills the {n} of the ones that
@@ -631,13 +605,18 @@ export class LocalMapView {
         g.fillStyle = P.badgeFill;
         roundRect(g, x, by0, bh, bh, 5);
         g.fill();
+        // Same trap as the portrait glyph: fillStyle is still the badge box's
+        // 10%-alpha wash here, and a status icon that falls back to a monochrome
+        // face would be drawn at 10% opacity. Set the glyph colour explicitly.
+        g.fillStyle = P.glyphColor;
         g.font = `${Math.round(bh * 0.68)}px ${P.emojiFont}`;
         g.textAlign = 'center';
         g.textBaseline = 'middle';
         g.fillText(st.icon, x + bh / 2, by0 + bh / 2 + 1);
         // The corner number is ONLY drawn for a status that really has a
         // duration - inventing one would be a lie about the rules.
-        if (st.turns > 0) {
+        const num = badgeNumber(st);
+        if (num) {
           const r = P.badgeTextSize * 0.75;
           g.fillStyle = P.badgeTextBg;
           g.beginPath();
@@ -645,7 +624,7 @@ export class LocalMapView {
           g.fill();
           g.fillStyle = '#ffffff';
           g.font = `700 ${P.badgeTextSize}px ${P.monoFont}`;
-          g.fillText(String(st.turns), x + bh - r * 0.7, by0 + bh - r * 0.7 + 0.5);
+          g.fillText(num, x + bh - r * 0.7, by0 + bh - r * 0.7 + 0.5);
         }
         plaque.userData.hotspots.push({ id: st.id, turns: st.turns, amount: st.amount, x0: x, y0: by0, x1: x + bh, y1: by0 + bh });
         x -= bh + P.badgeGap;
@@ -1070,6 +1049,20 @@ export class LocalMapView {
     w.tok.userData.walking = false;
     this.teleportToken(w.tok, w.anim.u.pos);   // snap exactly onto the engine's tile
     w.done();
+  }
+
+  // Where a PARTY unit is on screen, in viewport pixels - the anchor the party
+  // panel draws its pointer line to (src/ui.js). Matched by the unit's index in
+  // game.state.party, which is what the panel knows about; returns null while
+  // the arena is not up, or when the unit is behind the camera.
+  partyTokenScreen(partyIndex) {
+    if (!this.camera || !this.renderer) return null;
+    const tok = this.tokens.find((m) => m.userData.partyIndex === partyIndex);
+    if (!tok) return null;
+    const v = new THREE.Vector3(tok.position.x, tok.position.y + 0.35, tok.position.z).project(this.camera);
+    if (v.z > 1) return null;
+    const r = this.renderer.domElement.getBoundingClientRect();
+    return { x: r.left + ((v.x + 1) / 2) * r.width, y: r.top + ((1 - v.y) / 2) * r.height };
   }
 
   // Floating combat text over a tile (damage, heals, statuses). Pure DOM: a span

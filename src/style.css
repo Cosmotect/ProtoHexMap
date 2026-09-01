@@ -528,6 +528,59 @@ button.small { padding: 2px 8px; font-size: 12px; }
 .settings-cell .cell-reset { display: none; padding: 1px 5px; }
 .settings-cell.changed input { border-color: var(--accent); }
 .settings-cell.changed .cell-reset { display: inline-block; }
+
+/* ----- the Units tab's record editors (src/settings.js) -------------------
+   The bestiary, the groups and the roster are tables you can ADD to and DELETE
+   from, so each one carries its own buttons rather than the per-row reset the
+   generated forms use: the whole collection is one override, so the whole
+   table is what resets. */
+.settings-records .rt-note, .settings-pools .rt-note { margin: 0 0 8px; font-size: 11px; line-height: 1.45; }
+/* `input.rt-id`, not `.rt-id`: the generic `.settings-matrix input[type="text"]`
+   rule above carries an attribute selector and would otherwise win and squeeze
+   the id to 54px, clipping every long name. */
+.settings-records input.rt-id { width: 122px; font-family: var(--mono); font-size: 11.5px; }
+.settings-records .rt-index { color: var(--muted); font-family: var(--mono); font-size: 11px; padding-right: 8px; }
+.settings-records select {
+  font: inherit; font-size: 12px; color: var(--text);
+  background: rgba(0, 0, 0, 0.35); border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px; padding: 3px 4px;
+}
+/* An id that is not in the bestiary (or not a real ability): a typo here would
+   otherwise only show up much later, as a creature missing from a fight. */
+.settings-records input.rt-bad { border-color: var(--danger); background: rgba(226, 71, 75, 0.12); }
+.settings-records .rt-del {
+  padding: 0 6px; line-height: 1.5; color: var(--muted);
+  background: none; border: 1px solid transparent;
+}
+.settings-records .rt-del:hover { color: var(--danger); border-color: rgba(226, 71, 75, 0.5); }
+.settings-records .rt-add { margin-top: 8px; }
+.settings-records .rt-reset { margin: 8px 0 0 6px; }
+
+/* One line per pool: what it is on the left, every group as a togglable chip. */
+.settings-pools .pool-row { padding: 5px 0; border-top: 1px solid var(--panel-border); }
+.settings-pools .pool-row:first-of-type { border-top: none; }
+.settings-pools .pool-head {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; font-weight: 600; margin-bottom: 4px;
+}
+.settings-pools .pool-ring { font-family: var(--mono); font-size: 10.5px; color: var(--muted); font-weight: 400; }
+.settings-pools .pool-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.settings-pools .pool-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; padding: 2px 7px 2px 5px; border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--muted); cursor: pointer;
+}
+.settings-pools .pool-chip.on { color: var(--text); border-color: var(--accent); background: rgba(255, 209, 102, 0.14); }
+/* The pool block is a full-width thing by nature: five rows of every group id.
+   Let it take the whole grid width rather than leaving dead space beside it. */
+.settings-body.has-matrix > .settings-pools { grid-column: 1 / -1; }
+.settings-pools .pool-ring input[type="number"] {
+  width: 52px; font: inherit; font-size: 12px; color: var(--text);
+  background: rgba(0, 0, 0, 0.35); border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px; padding: 2px 5px;
+}
 .settings-row select { font: inherit; font-size: 12.5px; color: var(--text); background: rgba(0, 0, 0, 0.35); border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 6px; padding: 3px 6px; }
 .modal-box p { margin: 0 0 10px; }
 .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
@@ -718,6 +771,40 @@ button.small { padding: 2px 8px; font-size: 12px; }
 #party-units .unit { cursor: default; }
 .start-screen #party-units .unit { cursor: pointer; }
 
+/* ----- party cards ------------------------------------------------------
+   Deliberately the enemy card's shape (.eunit in the Local Map Info panel),
+   mirrored to the left side of the screen: portrait with its abilities stacked
+   under it, name over HP, bar across the bottom. The frame is the party GREEN
+   where the enemies' is red, so which side a card belongs to is never in doubt.
+   Hovering one turns the frame gold and draws a line to that unit's body in the
+   arena (#party-lines, drawn by src/ui.js). */
+#party-units { display: flex; flex-direction: column; gap: 6px; }
+#party-units .unit {
+  display: flex; align-items: flex-start; gap: 9px;
+  padding: 7px 10px; margin: 0;
+  border: 1px solid rgba(143, 224, 184, 0.5);
+  border-top: 1px solid rgba(143, 224, 184, 0.5);   /* beats the old row divider */
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+#party-units .unit.pointed { border-color: var(--accent); background: rgba(255, 209, 102, 0.10); }
+#party-units .unit.dead { opacity: 0.4; border-color: rgba(255, 255, 255, 0.14); }
+#party-units .u-side { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: none; }
+#party-units .icon { width: 38px; height: 38px; border-radius: 8px; font-size: 22px; }
+/* Under the portrait a chip carries only its icon (and its upgrade count), so
+   it becomes a square the width of the portrait. */
+#party-units .u-side .ab-chips { display: flex; flex-direction: column; gap: 3px; margin: 0; }
+#party-units .u-side .ab-chip { width: 38px; height: 22px; padding: 0; justify-content: center; font-size: 13px; cursor: help; }
+#party-units .u-side .ab-chip b { font-size: 9px; margin-left: 1px; }
+#party-units .name { font-size: 13px; }
+#party-units .hp { font-size: 11.5px; }
+
+/* The pointer line itself: gold, to match the frame it leaves, rather than the
+   tutorial's green - the two can be on screen at the same time. */
+#party-lines line { stroke: var(--accent); }
+#party-lines circle { fill: var(--accent); }
+
 /* ----- Local map (the 3D arena): world-map HUD stays off ------------------ */
 /* Supplies/fatigue/turn and the party panel only mean anything on the world
    map; body.local-mode covers the campfire start screen and every kind of
@@ -725,7 +812,9 @@ button.small { padding: 2px 8px; font-size: 12px; }
    as a bar hovering over its own token, drawn straight into the 3D scene -
    see makeHealthBar / updateHealthBar in local/localview.js. */
 .local-mode #fatigue-bar { display: none; }
-.local-mode #party { display: none; }
+/* The party panel STAYS on the local map: knowing who is on the field and how
+   badly hurt matters most while the fight is running. It is the fatigue bar and
+   the Enter button - world-map controls - that go. */
 
 /* ----- The battle bar (interactive combat on the local map) --------------- */
 /* Replaces the status bar while a fight runs; body.battle-mode flips them.
@@ -813,12 +902,43 @@ button.small { padding: 2px 8px; font-size: 12px; }
   font-family: var(--display); font-size: 16px; font-weight: 700;
   background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.16);
 }
-.enemy-roster .e-info { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 1px; }
+/* Left column of a card: the portrait, with the ability icons stacked under it
+   so "who this is / what it can do" reads top to bottom in one place. */
+.enemy-roster .e-side { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: none; }
+/* Under the portrait a chip carries only its icon, so it becomes a square the
+   width of the portrait rather than the wide name+number pill used elsewhere. */
+.enemy-roster .e-side .ab-chips { display: flex; flex-direction: column; gap: 3px; margin: 0; }
+.enemy-roster .e-side .ab-chip {
+  width: 34px; height: 22px; padding: 0;
+  justify-content: center; font-size: 13px; cursor: help;
+}
+.enemy-roster .e-info { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 3px; }
+/* Name and HP on the left, the status badges filling the space beside them. */
+.enemy-roster .e-head { display: flex; align-items: stretch; gap: 8px; }
+.enemy-roster .e-text { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 1px; }
 .enemy-roster .e-name { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .enemy-roster .e-hp { font-family: var(--mono); font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.enemy-roster .e-order {
-  font-family: var(--mono); font-size: 10px; color: var(--muted);
-  align-self: flex-start; flex: none; min-width: 14px; text-align: right;
+/* The badge strip: wraps rather than pushing the name out of the card. */
+.enemy-roster .e-status {
+  display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end;
+  gap: 3px; flex: none; max-width: 96px;
+}
+.enemy-roster .e-status-badge {
+  position: relative;
+  width: 22px; height: 22px; border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; line-height: 1;
+  background: rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  cursor: help;
+}
+/* The turns-remaining count, only drawn when the status really has a duration. */
+.enemy-roster .e-status-badge i {
+  position: absolute; right: -3px; bottom: -3px;
+  font-family: var(--mono); font-style: normal; font-size: 8px; font-weight: 700;
+  min-width: 11px; height: 11px; padding: 0 1px;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(8, 11, 18, 0.9); border-radius: 6px;
 }
 .battlebar { display: flex; align-items: center; gap: 16px; padding: 10px 16px; max-width: 92vw; }
 .battle-info { display: flex; flex-direction: column; gap: 2px; min-width: 150px; }

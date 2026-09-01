@@ -313,6 +313,9 @@ function startCombatDive(hex, resume) {
 ui = createUI(CONFIG, {
   isInputBlocked: () => tutorial.isBlocking(),
   isSubWindowOpen: () => settings.isOpen(),
+  // The arena, for the party panel's pointer line: it needs to project a unit's
+  // body into screen space, and only the local view knows where the bodies are.
+  getLocalView: () => (cinematic.isActive() ? cinematic.localView : null),
   onOpenSettings: () => { settings.open(); ui.updateBlur(); },
   onEscape: () => { if (settings.isOpen()) { settings.close(); ui.updateBlur(); } },
   onDialogClosed: () => {

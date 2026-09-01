@@ -65,12 +65,19 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   const blog = (t) => onLog && onLog(t);
 
   function makeInstance(def, isEnemy, pos, i) {
+    // The definition wins where it has an opinion: a bestiary row carries its
+    // own init / speed / flying / abilities (config/units.js), so a creature
+    // invented in the Settings window fights as written instead of falling
+    // through to UNIT_COMBAT's nameless `default`. The party, and any older
+    // hand-authored def, still reads the table by name.
     const cs = combatStatsFor(def.name);
     return {
       uid: 's' + i, name: def.name, icon: def.icon ?? null, power: def.power ?? 0,
-      init: cs.init, speed: cs.speed, flying: !!cs.flying,
+      init: def.init ?? cs.init,
+      speed: def.speed ?? cs.speed,
+      flying: !!(def.flying ?? cs.flying),
       maxHp: def.maxHp ?? def.hp, hp: def.hp,
-      abilityIds: [...cs.abilities],
+      abilityIds: [...(def.abilityIds?.length ? def.abilityIds : cs.abilities)],
       abilityDefs: def.abilityDefs ?? null,
       pos, isEnemy, idx: i, partyIndex: def.partyIndex ?? null,
       startPos: pos, moveLocked: false, done: false, tagTicked: false,

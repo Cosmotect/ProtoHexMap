@@ -121,8 +121,12 @@ export function ringBand(cfg, ring) {
   return bands[bands.length - 1];
 }
 
-// One live enemy from a bestiary id. `shape` and `color` ride along on the unit
-// so the arena can build its body without looking the type up again.
+// One live enemy from a bestiary id. `shape` and `color` ride along so the arena
+// can build its body without looking the type up again, and so do the COMBAT
+// stats (init / speed / flying / abilities) where the row has them - that is
+// what makes a creature invented in the Settings window a complete creature and
+// not a nameless `default`. A row without them leaves the fields undefined, and
+// the engine falls back to UNIT_COMBAT by name exactly as before.
 export function makeEnemyOfType(cfg, typeId) {
   const t = cfg.enemyTypes?.[typeId];
   if (!t) return null;
@@ -133,6 +137,8 @@ export function makeEnemyOfType(cfg, typeId) {
     power: t.power,
     shape: t.shape ?? 'octahedron',
     color: t.color ?? 0xe2474b,
+    init: t.init, speed: t.speed, flying: t.flying,
+    abilityIds: Array.isArray(t.abilities) && t.abilities.length ? [...t.abilities] : undefined,
     alive: true,
   };
 }

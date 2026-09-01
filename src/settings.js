@@ -8,8 +8,47 @@
 // the config objects (numbers, booleans, strings, colours, lists, nested groups).
 
 import { t, LANGUAGES, getLanguage, setLanguage } from './i18n.js';
+import { SHAPE_NAMES } from './local/localview.js';
+import { ABILITIES } from './config/abilities.js';
 
 const STORAGE_KEY = 'hexmap-settings-v1';
+
+// ----- the Units tab's hand-built editors ------------------------------------
+// The generic form generator is fine for a fixed list of numbers, but it cannot
+// ADD or REMOVE an entry, and the enemy system is a system of entries: a
+// bestiary, groups made of bestiary ids, and pools made of group ids. So the
+// Units tab is written out by hand instead, as three editors that can create
+// and delete rows. They all save the SAME way: the whole collection is stored
+// as one override (`battle.enemyTypes`, not `battle.enemyTypes.husk.hp`),
+// because an add or a delete is a change to the collection, not to one value.
+
+// The bestiary table's columns. `kind` picks the control; `options` makes it a
+// dropdown. Everything a creature is lives here - body, numbers and the combat
+// half - so one row is one whole enemy (see config/units.js).
+const BESTIARY_COLS = [
+  { key: 'name', kind: 'text', w: 118 },
+  { key: 'shape', kind: 'select', options: () => SHAPE_NAMES },
+  { key: 'color', kind: 'color' },
+  { key: 'hp', kind: 'number', w: 48 },
+  { key: 'power', kind: 'number', w: 48 },
+  { key: 'init', kind: 'number', w: 44 },
+  { key: 'speed', kind: 'number', w: 44 },
+  { key: 'flying', kind: 'bool' },
+  { key: 'abilities', kind: 'idlist', w: 130, valid: () => Object.keys(ABILITIES) },
+];
+// A brand new creature: deliberately weak and plain, so an unfinished row that
+// finds its way into a fight cannot wreck a run.
+const NEW_ENEMY = () => ({ name: 'New enemy', shape: 'octahedron', color: 0xe2474b, hp: 10, power: 2, init: 5, speed: 4, flying: false, abilities: ['strike'] });
+const NEW_GROUP = () => ({ title: 'New group', units: [] });
+const NEW_ROSTER = () => ({ name: 'New character', icon: '🙂', hp: 24 });
+const ROSTER_COLS = [
+  { key: 'name', kind: 'text', w: 118 },
+  { key: 'icon', kind: 'text', w: 44 },
+  { key: 'hp', kind: 'number', w: 48 },
+];
+// Keys of `battle` the hand-built editors own; the leftovers render as an
+// ordinary group of numbers so nothing silently disappears from the tab.
+const BATTLE_OWNED = new Set(['enemyTypes', 'enemyGroups', 'enemies', 'bosses', 'colonies']);
 
 // Which config sections live on which tab (mirrors the config files). Labels and
 // notes come from the locale tables (settings.tab.<id>, settings.note.<id>).
@@ -67,6 +106,9 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
   function fmtValue(path, value) {
     if (value === undefined) return '(none)';
     if (Array.isArray(value)) return value.join(', ');
+    // The Units tab stores whole collections (the bestiary, the groups), so a
+    // value can be an object; print it as JSON rather than "[object Object]".
+    if (value && typeof value === 'object') return JSON.stringify(value);
     const key = path.split('.').pop();
     if (kindOf(key, value, path) === 'color') return `#${Number(value).toString(16).padStart(6, '0')}`;
     return String(value);
@@ -106,7 +148,8 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
         <div class="settings-row"><span class="settings-label">${t('settings.showlog')}</span>
         <input type="checkbox" id="settings-showlog" ${getShowLog && getShowLog() ? 'checked' : ''}><span class="settings-reset"></span></div></div>`);
     }
-    for (const section of tab.sections) {
+    if (tab.id === 'units') parts.push(...renderUnitsTab());
+    else for (const section of tab.sections) {
       parts.push(MATRIX_SECTIONS.has(section)
         ? renderMatrix(section, config[section], defaults[section], section)
         : renderGroup(section, config[section], defaults[section], section));
@@ -115,7 +158,8 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
     // Tabs with a table switch from the multi-column flow to a grid, where the
     // table can be told to occupy several columns and still sit beside the
     // ordinary groups instead of below them (style.css).
-    bodyEl.classList.toggle('has-matrix', tab.sections.some((s) => MATRIX_SECTIONS.has(s)));
+    bodyEl.classList.toggle('has-matrix', tab.id === 'units' || tab.sections.some((s) => MATRIX_SECTIONS.has(s)));
+    if (tab.id === 'units') wireUnitsTab();
     bodyEl.querySelector('#settings-language')?.addEventListener('change', (e) => { setLanguage(e.target.value); render(); });
     bodyEl.querySelector('#settings-uiscale')?.addEventListener('change', (e) => { if (onSetUiScale) onSetUiScale(Number(e.target.value)); });
     bodyEl.querySelector('#settings-showlog')?.addEventListener('change', (e) => { if (onSetShowLog) onSetShowLog(e.target.checked); });
@@ -137,6 +181,219 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
         onChange(btn.dataset.reset);
       });
     });
+  }
+
+  // ===================================================================
+  //  The Units tab
+  // ===================================================================
+  function renderUnitsTab() {
+    const b = config.battle;
+    const groupIds = Object.keys(b.enemyGroups ?? {});
+    const out = [];
+
+    // The party: everything except the roster stays an ordinary group, and the
+    // roster becomes a table with the same add / delete row as the bestiary.
+    const partyScalars = {};
+    for (const [k, v] of Object.entries(config.party)) if (k !== 'roster') partyScalars[k] = v;
+    out.push(renderGroup('party', partyScalars, defaults.party, 'party'));
+    out.push(recordTable({
+      title: t('settings.units.roster'), coll: 'party.roster', obj: config.party.roster,
+      cols: ROSTER_COLS, addLabel: t('settings.units.addChar'), rowLabel: t('settings.units.character'),
+      note: t('settings.units.roster.note'), list: true,
+    }));
+
+    // The bestiary: one row per creature, everything about it on that row.
+    out.push(recordTable({
+      title: t('settings.units.bestiary'), coll: 'battle.enemyTypes', obj: b.enemyTypes,
+      cols: BESTIARY_COLS, addLabel: t('settings.units.addEnemy'), rowLabel: t('settings.units.id'),
+      note: t('settings.units.bestiary.note'), wide: true,
+    }));
+
+    // The groups: a title and a line-up of bestiary ids.
+    out.push(groupsTable(b));
+
+    // The pools: which groups a regular fight (by ring band), a Colony or the
+    // Seed may roll.
+    out.push(poolsBlock(b, groupIds));
+
+    // Whatever else lives under `battle` (the damage curve, the danger bands,
+    // the simulation numbers) keeps the plain generated form.
+    const rest = {};
+    for (const [k, v] of Object.entries(b)) if (!BATTLE_OWNED.has(k)) rest[k] = v;
+    out.push(renderGroup('battle', rest, defaults.battle, 'battle'));
+    return out;
+  }
+
+  // A table of records that can grow and shrink. `coll` is the config path of
+  // the WHOLE collection - an object keyed by id, or (with `list: true`) an
+  // array, in which case the row header is the index instead of an editable id.
+  function recordTable({ title, coll, obj, cols, addLabel, rowLabel, note, wide, list }) {
+    const entries = list ? obj.map((v, i) => [String(i), v]) : Object.entries(obj);
+    const head = `<tr><th>${escapeAttr(rowLabel)}</th>${cols.map((c) => `<th>${c.key}</th>`).join('')}<th></th></tr>`;
+    const body = entries.map(([id, rec]) => {
+      const cells = cols.map((c) => `<td>${editor(coll, id, c, rec[c.key])}</td>`).join('');
+      const header = list
+        ? `<th class="rt-index">${Number(id) + 1}</th>`
+        : `<th><input type="text" class="rt-id" data-coll="${coll}" data-row="${escapeAttr(id)}" data-field="__id" value="${escapeAttr(id)}"></th>`;
+      return `<tr>${header}${cells}<td>${delButton(coll, id, list)}</td></tr>`;
+    }).join('');
+    return `<div class="settings-group settings-matrix settings-records${wide ? ' wide' : ''}">
+      <div class="settings-group-title">${escapeAttr(title)}</div>
+      ${note ? `<p class="muted rt-note">${escapeAttr(note)}</p>` : ''}
+      <div class="settings-matrix-scroll"><table><thead>${head}</thead><tbody>${body}</tbody></table></div>
+      <button class="small rt-add" data-add="${coll}">${escapeAttr(addLabel)}</button>
+      ${resetCollButton(coll)}
+    </div>`;
+  }
+
+  // One cell's control. `data-coll` / `data-row` / `data-field` say where the
+  // value goes; the whole collection is re-saved on every change.
+  function editor(coll, row, col, value) {
+    const a = `data-coll="${coll}" data-row="${escapeAttr(row)}" data-field="${col.key}" data-kind="${col.kind}"`;
+    const w = col.w ? ` style="width:${col.w}px"` : '';
+    if (col.kind === 'bool') return `<input type="checkbox" ${a} ${value ? 'checked' : ''}>`;
+    if (col.kind === 'color') return `<input type="color" ${a} value="#${Number(value ?? 0).toString(16).padStart(6, '0')}">`;
+    if (col.kind === 'number') return `<input type="number" step="any" ${a} value="${value ?? ''}"${w}>`;
+    if (col.kind === 'select') {
+      const opts = col.options().map((o) => `<option value="${o}" ${o === value ? 'selected' : ''}>${o}</option>`).join('');
+      return `<select ${a}>${opts}</select>`;
+    }
+    if (col.kind === 'idlist') {
+      // A comma-separated list of ids, marked red the moment one of them is not
+      // a real id - a typo here would otherwise show up as a silently missing
+      // creature much later, in a fight.
+      const valid = col.valid ? col.valid() : null;
+      const arr = Array.isArray(value) ? value : [];
+      const bad = valid ? arr.some((v) => !valid.includes(v)) : false;
+      return `<input type="text" class="${bad ? 'rt-bad' : ''}" ${a} value="${escapeAttr(arr.join(', '))}"${w}>`;
+    }
+    return `<input type="text" ${a} value="${escapeAttr(String(value ?? ''))}"${w}>`;
+  }
+
+  function delButton(coll, row, list) {
+    return `<button class="small rt-del" data-del="${coll}" data-row="${escapeAttr(row)}" data-list="${list ? 1 : 0}" title="${escapeAttr(t('settings.units.remove'))}">&#215;</button>`;
+  }
+  // These editors save the collection whole, so a per-row reset makes no sense:
+  // the whole table goes back to the config file at once.
+  function resetCollButton(coll) {
+    if (!(coll in overrides)) return '';
+    return `<button class="small rt-reset" data-reset="${coll}">${t('settings.units.resetTable')}</button>`;
+  }
+
+  // The group table: a title plus the line-up. `units` accepts repeats - two
+  // huskss in a group is two husks on the arena, numbered "Husk 2".
+  function groupsTable(b) {
+    const typeIds = Object.keys(b.enemyTypes ?? {});
+    const cols = [
+      { key: 'title', kind: 'text', w: 130 },
+      { key: 'units', kind: 'idlist', w: 330, valid: () => typeIds },
+    ];
+    return recordTable({
+      title: t('settings.units.groups'), coll: 'battle.enemyGroups', obj: b.enemyGroups,
+      cols, addLabel: t('settings.units.addGroup'), rowLabel: t('settings.units.id'),
+      note: t('settings.units.groups.note'), wide: true,
+    });
+  }
+
+  // Which groups each pool may roll: one checkbox per group, per pool. A band
+  // also carries the ring it reaches out to.
+  function poolsBlock(b, groupIds) {
+    const rows = [];
+    for (const [bandId, band] of Object.entries(b.enemies.bands ?? {})) {
+      rows.push(poolRow(t('settings.units.band', { name: bandId }), `battle.enemies.bands.${bandId}.groups`, band.groups ?? [], groupIds,
+        `<span class="pool-ring">maxRing ${renderCell(`battle.enemies.bands.${bandId}.maxRing`, 'maxRing', band.maxRing, defaults.battle?.enemies?.bands?.[bandId]?.maxRing)}</span>`));
+    }
+    rows.push(poolRow(t('settings.units.seedPool'), 'battle.bosses', b.bosses ?? [], groupIds, ''));
+    rows.push(poolRow(t('settings.units.colonyPool'), 'battle.colonies', b.colonies ?? [], groupIds, ''));
+    return `<div class="settings-group settings-pools wide">
+      <div class="settings-group-title">${t('settings.units.pools')}</div>
+      <p class="muted rt-note">${escapeAttr(t('settings.units.pools.note'))}</p>
+      ${rows.join('')}
+    </div>`;
+  }
+  function poolRow(label, path, chosen, groupIds, extra) {
+    const boxes = groupIds.map((gid) => `<label class="pool-chip ${chosen.includes(gid) ? 'on' : ''}">
+      <input type="checkbox" data-pool="${path}" data-item="${gid}" ${chosen.includes(gid) ? 'checked' : ''}>${gid}</label>`).join('');
+    return `<div class="pool-row"><div class="pool-head">${escapeAttr(label)}${extra}</div><div class="pool-chips">${boxes}</div></div>`;
+  }
+
+  // ----- the Units tab's event wiring --------------------------------------
+  function wireUnitsTab() {
+    bodyEl.querySelectorAll('[data-coll]').forEach((el) => {
+      el.addEventListener('change', () => {
+        const { coll, row, field, kind } = el.dataset;
+        const c = getPath(config, coll);
+        if (field === '__id') {
+          // Renaming an id: rebuild the object so the row keeps its place in the
+          // table instead of jumping to the end.
+          const next = String(el.value).trim();
+          if (!next || next === row || next in c) { render(); return; }
+          const rebuilt = {};
+          for (const [k, v] of Object.entries(c)) rebuilt[k === row ? next : k] = v;
+          setPath(config, coll, rebuilt);
+        } else {
+          const rec = Array.isArray(c) ? c[Number(row)] : c[row];
+          if (!rec) return;
+          rec[field] = readCellValue(el, kind);
+        }
+        commitColl(coll);
+        render();
+      });
+    });
+    bodyEl.querySelectorAll('[data-del]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const coll = btn.dataset.del;
+        const c = getPath(config, coll);
+        if (btn.dataset.list === '1') c.splice(Number(btn.dataset.row), 1);
+        else delete c[btn.dataset.row];
+        commitColl(coll);
+        render();
+      });
+    });
+    bodyEl.querySelectorAll('[data-add]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const coll = btn.dataset.add;
+        const c = getPath(config, coll);
+        if (Array.isArray(c)) c.push(NEW_ROSTER());
+        else {
+          const make = coll === 'battle.enemyGroups' ? NEW_GROUP : NEW_ENEMY;
+          c[freshId(c, coll === 'battle.enemyGroups' ? 'group' : 'enemy')] = make();
+        }
+        commitColl(coll);
+        render();
+      });
+    });
+    bodyEl.querySelectorAll('[data-pool]').forEach((box) => {
+      box.addEventListener('change', () => {
+        const path = box.dataset.pool;
+        const list = getPath(config, path) ?? [];
+        const id = box.dataset.item;
+        const next = box.checked ? [...new Set([...list, id])] : list.filter((x) => x !== id);
+        setPath(config, path, next);
+        commitColl(path);
+        render();
+      });
+    });
+  }
+  function readCellValue(el, kind) {
+    if (kind === 'bool') return el.checked;
+    if (kind === 'number') return Number(el.value);
+    if (kind === 'color') return parseInt(el.value.slice(1), 16);
+    if (kind === 'idlist') return el.value.split(',').map((s) => s.trim()).filter(Boolean);
+    return el.value;
+  }
+  // "enemy1", "enemy2", ... - the first name not already taken.
+  function freshId(obj, stem) {
+    let n = 1;
+    while (`${stem}${n}` in obj) n += 1;
+    return `${stem}${n}`;
+  }
+  // Whole-collection override: an add or a delete is a change to the collection,
+  // not to one value, so the collection is what gets stored.
+  function commitColl(path) {
+    overrides[path] = deepClone(getPath(config, path));
+    saveOverrides();
+    onChange(path);
   }
 
   function renderGroup(title, obj, def, path) {
