@@ -142,6 +142,7 @@ export function createUI(config, handlers) {
   });
 
   let currentSeed = 0;
+  let lastGame = null;   // the party panel is redrawn from combat too, not only from update()
 
   // The fatigue popup follows the mouse.
   let mouse = { x: 0, y: 0 };
@@ -312,7 +313,8 @@ export function createUI(config, handlers) {
       els.enter.title = action.reason || (action.kind === 'camp' ? tc('status.camp.title', config) : t('status.enter.title'));
       els.enter.classList.toggle('camp', action.kind === 'camp');
     }
-    els.party.innerHTML = s.party.map((u, i) => unitCard(u, config, i)).join('');
+    lastGame = game;
+    renderPartyPanel();
     // Keep an open dialog in sync (e.g. shop prices after a purchase).
     if (dialogRefresh) dialogRefresh(game);
     els.supplies.textContent = `${s.supplies} / ${s.maxSupplies}`;
@@ -531,26 +533,42 @@ export function createUI(config, handlers) {
   // - the same idea (and the same SVG layer) as the tutorial's green pointer,
   // so the two read as one language. Only on the local map: on the world map the
   // party is one token and the line would point at all three at once.
-  let hoverParty = null;
-  els.party.addEventListener('pointerover', (e) => {
-    const card = e.target.closest('.unit[data-party]');
-    const idx = card ? Number(card.dataset.party) : null;
-    if (idx === hoverParty) return;
-    setHoverParty(idx);
-  });
-  els.party.addEventListener('pointerleave', () => setHoverParty(null));
-  function setHoverParty(idx) {
-    hoverParty = idx;
-    els.party.querySelectorAll('.unit').forEach((el) => el.classList.toggle('pointed', Number(el.dataset.party) === idx));
-    if (idx == null) els.partyLines.innerHTML = '';
+  // `hovered` is { kind: 'party'|'enemy', id } - the card the cursor is on. Both
+  // panels behave identically; the only difference is which lookup finds the
+  // body in the arena.
+  let hovered = null;
+  for (const [root, kind, attr] of [[els.party, 'party', 'data-party'], [els.enemyRoster, 'enemy', 'data-enemy']]) {
+    root.addEventListener('pointerover', (e) => {
+      const card = e.target.closest(`.unit[${attr}]`);
+      setHovered(card ? { kind, id: card.getAttribute(attr) } : null);
+    });
+    root.addEventListener('pointerleave', () => setHovered(null));
   }
-  // Redrawn every frame: the camera moves, the units walk, and the card can be
+  function setHovered(next) {
+    if (next?.kind === hovered?.kind && next?.id === hovered?.id) return;
+    hovered = next;
+    if (!hovered) els.partyLines.innerHTML = '';
+    markHovered();
+  }
+  // Re-applied after every redraw as well as on hover: a card can be rebuilt
+  // under the cursor by any HP change, and would otherwise lose its gold frame
+  // mid-hover.
+  function markHovered() {
+    const attr = hovered?.kind === 'party' ? 'data-party' : 'data-enemy';
+    document.querySelectorAll('#party-units .unit, #enemy-roster .unit').forEach((el) => {
+      el.classList.toggle('pointed', !!hovered && el.hasAttribute(attr) && el.getAttribute(attr) === hovered.id);
+    });
+  }
+  // Redrawn every frame: the camera moves, the units walk, and a card can be
   // re-rendered under the cursor by any HP change.
-  function drawPartyLine() {
-    if (hoverParty == null || !document.body.classList.contains('local-mode')) { els.partyLines.innerHTML = ''; return; }
+  function drawPointerLine() {
+    if (!hovered || !document.body.classList.contains('local-mode')) { els.partyLines.innerHTML = ''; return; }
     const view = handlers.getLocalView && handlers.getLocalView();
-    const end = view?.partyTokenScreen ? view.partyTokenScreen(hoverParty) : null;
-    const card = els.party.querySelector(`.unit[data-party="${hoverParty}"]`);
+    const end = hovered.kind === 'party'
+      ? view?.partyTokenScreen?.(Number(hovered.id))
+      : view?.unitTokenScreen?.(hovered.id);
+    const sel = hovered.kind === 'party' ? `#party-units .unit[data-party="${hovered.id}"]` : `#enemy-roster .unit[data-enemy="${hovered.id}"]`;
+    const card = document.querySelector(sel);
     if (!end || !card) { els.partyLines.innerHTML = ''; return; }
     const a = card.getBoundingClientRect();
     const start = rectEdgeToward(a, end.x, end.y);
@@ -559,7 +577,7 @@ export function createUI(config, handlers) {
     const z = uiScale();
     els.partyLines.innerHTML = `<line x1="${start.x / z}" y1="${start.y / z}" x2="${end.x / z}" y2="${end.y / z}"></line><circle cx="${end.x / z}" cy="${end.y / z}" r="4"></circle>`;
   }
-  (function partyLineTick() { drawPartyLine(); requestAnimationFrame(partyLineTick); })();
+  (function pointerLineTick() { drawPointerLine(); requestAnimationFrame(pointerLineTick); })();
 
   let battleRef = null;
   $('btn-end-turn').addEventListener('click', () => { if (battleRef) battleRef.endTurn(); });
@@ -616,42 +634,43 @@ export function createUI(config, handlers) {
       const pct = Math.max(0, Math.min(100, (u.hp / u.maxHp) * 100));
       const segPct = (config.party.hpSegment / u.maxHp) * 100;
       const cls = `${dead ? 'dead' : ''} ${!dead && pct < 50 ? 'hurt' : ''} ${u.uid === sb.activeUid ? 'active' : ''} ${u.uid === sb.inspectUid ? 'inspected' : ''}`;
-      // Ability icons hang UNDER the portrait, stacked, so the card's left edge
-      // reads as "who this is and what it can do" in one column.
-      const chips = (u.abilityIds ?? []).map((id) => {
+      // Exactly the party card, minus the relic slot: an enemy carries none, and
+      // an empty socket would promise loot that is not there.
+      const slots = (u.abilityIds ?? []).map((id) => {
         const ab = battleRef.abilityById(id);
-        if (!ab) return '';
-        return `<span class="ab-chip" title="${escapeAttr(abilityTip(id, ab))}">${ab.icon}</span>`;
-      }).join('');
-      // The same status badges the overhead plaque draws, from the same table
-      // (src/status.js), parked to the right of the name and HP.
-      const badges = statusesFor(u).map((hs) => {
-        const num = badgeNumber(hs);
-        return `<span class="e-status-badge" title="${escapeAttr(statusTipText(hs))}">${hs.icon}${num ? `<i>${num}</i>` : ''}</span>`;
-      }).join('');
+        return ab ? slotBox('ab', ab.icon, abilityTip(id, ab)) : slotBox('ab', null, t('slot.ability.empty'));
+      });
+      while (slots.length < 2) slots.push(slotBox('ab', null, t('slot.ability.empty')));
       // The initial stands in for a portrait: enemies carry no emoji.
       const initial = (u.name ?? '?').charAt(0);
-      return `<div class="eunit ${cls.trim()}">
-        <div class="e-side">
-          <div class="e-icon">${escapeHtml(initial)}</div>
-          <div class="ab-chips">${chips}</div>
-        </div>
-        <div class="e-info">
-          <div class="e-head">
-            <div class="e-text">
-              <div class="e-name">${escapeHtml(tn(u.name))}</div>
-              <span class="e-hp">${t('party.hp', { hp: Math.max(0, u.hp), max: u.maxHp })}</span>
-            </div>
-            <div class="e-status">${badges}</div>
-          </div>
-          <div class="bar"><div class="fill" style="width:${pct}%"></div><div class="segs" style="--seg:${segPct}%"></div></div>
-        </div>
+      return `<div class="unit ${cls.trim()}" data-enemy="${u.uid}">
+        ${unitCardBody({
+          portrait: escapeHtml(initial),
+          name: tn(u.name),
+          hpText: t('party.hp', { hp: Math.max(0, u.hp), max: u.maxHp }),
+          pct, segPct, slots: slots.join(''), statuses: statusesFor(u),
+        })}
       </div>`;
     }).join('');
+    markHovered();
   }
+  // The party panel. Its numbers come from the world-map party, but its STATUS
+  // sockets come from the combat engine's instances - shields and stuns only
+  // exist there - so it is redrawn on every engine change as well as on every
+  // world-map update.
+  function renderPartyPanel() {
+    if (!lastGame) return;
+    const live = battleRef ? battleRef.state.units : [];
+    els.party.innerHTML = lastGame.state.party
+      .map((u, i) => unitCard(u, config, i, live.find((x) => x.partyIndex === i) ?? null))
+      .join('');
+    markHovered();
+  }
+
   function updateBattle() {
     if (!battleRef) return;
     renderEnemyRoster();
+    renderPartyPanel();
     const sb = battleRef.state;
     els.battleRound.textContent = sb.ambush ? t('battle.ui.ambush') : t('battle.ui.round', { n: sb.round });
     const c = battleRef.curPlayer();
@@ -860,32 +879,87 @@ function resolveValue(v) {
 // One row of the party panel. Where the power rating used to sit, the unit's
 // two abilities are shown; "+n" counts that ability's unlocked upgrades, and
 // the tooltip lists them by name.
-function unitCard(u, config, index) {
+// ===================================================================
+//  THE UNIT CARD
+//  One shape, both sides. The party panel on the left and the enemy roster on
+//  the right draw the SAME card so a unit is read the same way whoever it
+//  belongs to; only the frame colour and the relic slot differ.
+//
+//    [portrait]  Name              [ab][ab][relic]
+//                24 / 40 HP
+//    =========== health bar, full width ===========
+//    [st][st][st][st][st][st][st]
+//
+//  Every slot is drawn even when empty: an empty slot says "something can go
+//  here", which is how the player learns a unit HAS a relic slot before ever
+//  finding a relic. Statuses are always seven, because seven is what fits.
+// ===================================================================
+const STATUS_SLOTS = 7;
+
+// One square slot. `filled` is the glyph, or null for a vacant socket.
+function slotBox(cls, filled, tip) {
+  const title = tip ? ` title="${escapeAttr(tip)}"` : '';
+  return filled
+    ? `<span class="u-slot ${cls}"${title}>${filled}</span>`
+    : `<span class="u-slot ${cls} empty"${title}></span>`;
+}
+
+// The row of status sockets under the bar. `list` comes from src/status.js, so
+// the card and the plaque over the unit's head always agree.
+function statusRow(list) {
+  const cells = [];
+  for (let i = 0; i < STATUS_SLOTS; i++) {
+    const hs = list[i];
+    cells.push(hs
+      ? `<span class="u-st" title="${escapeAttr(statusTipText(hs))}">${hs.icon}${badgeNumber(hs) ? `<i>${badgeNumber(hs)}</i>` : ''}</span>`
+      : '<span class="u-st empty"></span>');
+  }
+  return `<div class="u-statuses">${cells.join('')}</div>`;
+}
+
+// The shared body of a card. `slots` is the right-hand row (abilities, then the
+// relic for a party member); `statuses` is what src/status.js reports.
+function unitCardBody({ portrait, name, hpText, pct, segPct, slots, statuses }) {
+  return `<div class="u-top">
+      <div class="icon">${portrait}</div>
+      <div class="u-text">
+        <div class="u-name">${escapeHtml(name)}</div>
+        <span class="u-hp">${escapeHtml(hpText)}</span>
+      </div>
+      <div class="u-slots">${slots}</div>
+    </div>
+    <div class="bar"><div class="fill" style="width:${pct}%"></div><div class="segs" style="--seg:${segPct}%"></div></div>
+    ${statusRow(statuses)}`;
+}
+
+// A party member. `live` is its instance inside the combat engine when a fight
+// is running - the only place its shields and stuns exist; out of a fight there
+// is none and every status socket is simply empty.
+function unitCard(u, config, index, live) {
   const pct = Math.max(0, Math.min(100, (u.hp / u.maxHp) * 100));
   const segPct = (config.party.hpSegment / u.maxHp) * 100;
   const cls = !u.alive ? 'dead' : pct < 50 ? 'hurt' : '';
-  const chips = unitAbilityIds(u.name).map((id) => {
+  const abs = unitAbilityIds(u.name).map((id) => {
     const ab = ABILITIES[id];
-    if (!ab) return '';
+    if (!ab) return slotBox('ab', null, t('slot.ability.empty'));
     const owned = (u.upgrades ?? []).filter((r) => r.startsWith(`${id}:`));
     const names = owned.map((r) => t(`upgrade.${r.replace(':', '.')}.name`)).join(', ');
     const tip = `${abilityName(id)}${names ? ` - ${names}` : ''}`;
-    return `<span class="ab-chip" title="${escapeAttr(tip)}">${ab.icon}${owned.length ? `<b>+${owned.length}</b>` : ''}</span>`;
-  }).join('');
-  // Same shape as an enemy card in the Local Map Info panel (.eunit): portrait
-  // with its abilities stacked under it on the left, name over HP on the right,
-  // bar across the bottom. `data-party` is the index the pointer line needs to
-  // find this unit's token in the arena.
+    return slotBox('ab', `${ab.icon}${owned.length ? `<b>+${owned.length}</b>` : ''}`, tip);
+  });
+  // Two ability slots even for a unit that somehow has fewer, so every card in
+  // the panel lines up.
+  while (abs.length < 2) abs.push(slotBox('ab', null, t('slot.ability.empty')));
+  // The relic slot. Relics do not exist yet; the socket is here so the space is
+  // designed for from the start rather than bolted on later.
+  abs.push(slotBox('relic', u.relic?.icon ?? null, u.relic ? tn(u.relic.name) : t('slot.relic.empty')));
   return `<div class="unit ${cls}" data-party="${index}">
-    <div class="u-side">
-      <div class="icon">${u.icon}</div>
-      <div class="ab-chips">${chips}</div>
-    </div>
-    <div class="info">
-      <div class="name-row"><span class="name">${escapeHtml(tn(u.name))}</span></div>
-      <span class="hp">${u.alive ? t('party.hp', { hp: u.hp, max: u.maxHp }) : t('party.disabled')}</span>
-      <div class="bar"><div class="fill" style="width:${pct}%"></div><div class="segs" style="--seg:${segPct}%"></div></div>
-    </div>
+    ${unitCardBody({
+      portrait: u.icon,
+      name: tn(u.name),
+      hpText: u.alive ? t('party.hp', { hp: u.hp, max: u.maxHp }) : t('party.disabled'),
+      pct, segPct, slots: abs.join(''), statuses: statusesFor(live),
+    })}
   </div>`;
 }
 

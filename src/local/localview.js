@@ -1051,16 +1051,25 @@ export class LocalMapView {
     w.done();
   }
 
-  // Where a PARTY unit is on screen, in viewport pixels - the anchor the party
-  // panel draws its pointer line to (src/ui.js). Matched by the unit's index in
-  // game.state.party, which is what the panel knows about; returns null while
-  // the arena is not up, or when the unit is behind the camera.
+  // Where a unit is on screen, in viewport pixels - the anchor a card in the
+  // party panel or the enemy roster draws its pointer line to (src/ui.js).
+  // Returns null while the arena is not up, or when the body is behind the
+  // camera. A party member is found by its index in game.state.party (what the
+  // panel knows it by); an enemy by the engine's uid.
   partyTokenScreen(partyIndex) {
-    if (!this.camera || !this.renderer) return null;
-    const tok = this.tokens.find((m) => m.userData.partyIndex === partyIndex);
-    if (!tok) return null;
+    return this.tokenScreen(this.tokens.find((m) => m.userData.partyIndex === partyIndex));
+  }
+
+  // The same, for any unit in a running fight, by the engine's uid - what an
+  // enemy card in the Local Map Info panel knows its creature by.
+  unitTokenScreen(uid) {
+    return this.tokenScreen(this.battleTokens?.get(uid));
+  }
+
+  tokenScreen(tok) {
+    if (!tok || !this.camera || !this.renderer) return null;
     const v = new THREE.Vector3(tok.position.x, tok.position.y + 0.35, tok.position.z).project(this.camera);
-    if (v.z > 1) return null;
+    if (v.z > 1) return null;   // behind the camera
     const r = this.renderer.domElement.getBoundingClientRect();
     return { x: r.left + ((v.x + 1) / 2) * r.width, y: r.top + ((1 - v.y) / 2) * r.height };
   }

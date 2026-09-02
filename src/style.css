@@ -178,7 +178,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 }
 .swatch.marker { border-radius: 50%; }
 
-.left-mid { top: 0; bottom: 0; left: 14px; margin: auto 0; height: fit-content; min-width: 260px; }
+.left-mid { top: 0; bottom: 0; left: 14px; margin: auto 0; height: fit-content; min-width: 320px; }
 .party-title {
   font-family: var(--display);
   font-weight: 700;
@@ -201,7 +201,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 /* The health bar. The enemy roster reuses these exact rules, so a bar is drawn
    and read identically in the party panel and above the arena. */
 .unit .bar, .enemy-roster .bar {
-  position: relative; height: 12px; border-radius: 3px; margin-top: 5px; overflow: hidden;
+  position: relative; height: 18px; border-radius: 4px; margin-top: 0; overflow: hidden;
   background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.12);
 }
 .unit .bar .fill, .enemy-roster .bar .fill { position: absolute; inset: 0; width: 0; background: #7fb85f; }
@@ -210,10 +210,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   position: absolute; inset: 0;
   background: repeating-linear-gradient(to right, transparent 0, transparent calc(var(--seg) - 2px), rgba(0, 0, 0, 0.55) calc(var(--seg) - 2px), rgba(0, 0, 0, 0.55) var(--seg));
 }
-.unit.hurt .bar .fill, .enemy-roster .eunit.hurt .bar .fill { background: var(--danger); }
+.unit.hurt .bar .fill { background: var(--danger); }
 .unit.dead { opacity: 0.45; }
 .unit.dead .icon { filter: grayscale(1); }
-.unit.dead .hp { color: var(--danger); }
+.unit.dead .u-hp { color: var(--danger); }
 
 /* New player experience card */
 .input-block { position: absolute; inset: 0; pointer-events: auto; z-index: 40; }
@@ -771,36 +771,96 @@ button.small { padding: 2px 8px; font-size: 12px; }
 #party-units .unit { cursor: default; }
 .start-screen #party-units .unit { cursor: pointer; }
 
-/* ----- party cards ------------------------------------------------------
-   Deliberately the enemy card's shape (.eunit in the Local Map Info panel),
-   mirrored to the left side of the screen: portrait with its abilities stacked
-   under it, name over HP, bar across the bottom. The frame is the party GREEN
-   where the enemies' is red, so which side a card belongs to is never in doubt.
-   Hovering one turns the frame gold and draws a line to that unit's body in the
-   arena (#party-lines, drawn by src/ui.js). */
-#party-units { display: flex; flex-direction: column; gap: 6px; }
-#party-units .unit {
-  display: flex; align-items: flex-start; gap: 9px;
-  padding: 7px 10px; margin: 0;
-  border: 1px solid rgba(143, 224, 184, 0.5);
-  border-top: 1px solid rgba(143, 224, 184, 0.5);   /* beats the old row divider */
+/* ----- the unit card ----------------------------------------------------
+   ONE shape, both sides: the party panel on the left and the enemy roster on
+   the right use these same rules, so a unit reads the same way whoever it
+   belongs to. Only the frame colour differs - party green, enemy red - and only
+   a party card carries the third (relic) slot.
+
+     [portrait]  Name              [ab][ab][relic]
+                 24 / 40 HP
+     ========= health bar, full width =========
+     [st][st][st][st][st][st][st]
+
+   Every slot is drawn even when empty. A vacant socket is information: it says
+   this unit HAS a relic slot, before the player has ever found a relic. */
+#party-units, .enemy-roster { display: flex; flex-direction: column; gap: 6px; }
+#party-units .unit, .enemy-roster .unit {
+  display: flex; flex-direction: column; gap: 5px;
+  /* stretch, not the `align-items: center` the old .unit row rule sets: the bar
+     and the status row have no content width of their own and would collapse. */
+  align-items: stretch;
+  padding: 8px 10px; margin: 0;
+  border: 1px solid rgba(143, 224, 184, 0.5);      /* party green */
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.03);
   transition: border-color 0.12s ease, background 0.12s ease;
 }
-#party-units .unit.pointed { border-color: var(--accent); background: rgba(255, 209, 102, 0.10); }
-#party-units .unit.dead { opacity: 0.4; border-color: rgba(255, 255, 255, 0.14); }
-#party-units .u-side { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: none; }
-#party-units .icon { width: 38px; height: 38px; border-radius: 8px; font-size: 22px; }
-/* Under the portrait a chip carries only its icon (and its upgrade count), so
-   it becomes a square the width of the portrait. */
-#party-units .u-side .ab-chips { display: flex; flex-direction: column; gap: 3px; margin: 0; }
-#party-units .u-side .ab-chip { width: 38px; height: 22px; padding: 0; justify-content: center; font-size: 13px; cursor: help; }
-#party-units .u-side .ab-chip b { font-size: 9px; margin-left: 1px; }
-#party-units .name { font-size: 13px; }
-#party-units .hp { font-size: 11.5px; }
+.enemy-roster .unit { border-color: rgba(226, 71, 75, 0.55); }   /* enemy red */
+/* Hovering a card points at that unit's body in the arena, so the frame goes
+   gold - the colour of the line it is about to draw. */
+#party-units .unit.pointed, .enemy-roster .unit.pointed {
+  border-color: var(--accent); background: rgba(255, 209, 102, 0.10);
+}
+#party-units .unit.dead, .enemy-roster .unit.dead { opacity: 0.4; border-color: rgba(255, 255, 255, 0.14); }
+.enemy-roster .unit.active { box-shadow: 0 0 0 1px var(--accent); }
+.enemy-roster .unit.dead .icon { filter: grayscale(1); }
 
-/* The pointer line itself: gold, to match the frame it leaves, rather than the
+.u-top { display: flex; align-items: flex-start; gap: 8px; }
+.u-text { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 1px; }
+.u-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.u-hp { font-family: var(--mono); font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+#party-units .icon, .enemy-roster .icon {
+  width: 36px; height: 36px; border-radius: 8px; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 21px;
+  background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.16);
+}
+.enemy-roster .icon { font-family: var(--display); font-size: 16px; font-weight: 700; }
+
+/* The ability / relic slots: the portrait's size, so the row reads as one band. */
+.u-slots { display: flex; gap: 4px; flex: none; }
+.u-slot {
+  position: relative;
+  width: 36px; height: 36px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; line-height: 1;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  cursor: help;
+}
+.u-slot b { position: absolute; right: 2px; bottom: 0; font-family: var(--mono); font-size: 9px; color: var(--accent); }
+/* A vacant socket: dashed and sunken, clearly a place rather than a thing. */
+.u-slot.empty {
+  background: rgba(0, 0, 0, 0.25);
+  border-style: dashed;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+.u-slot.relic { border-radius: 50%; }              /* relics read as round, never as an ability */
+.u-slot.relic.empty { border-color: rgba(255, 209, 102, 0.3); }
+
+/* Status sockets under the bar: always seven, sharing the card's full width. */
+.u-statuses { display: flex; gap: 3px; }
+.u-st {
+  position: relative;
+  flex: 1 1 0; min-width: 0; height: 20px; border-radius: 5px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; line-height: 1;
+  background: rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  cursor: help;
+}
+.u-st.empty { background: rgba(0, 0, 0, 0.22); border-style: dashed; border-color: rgba(255, 255, 255, 0.10); cursor: default; }
+/* The turns-remaining count, only drawn when the status really has a duration. */
+.u-st i {
+  position: absolute; right: -2px; bottom: -3px;
+  font-family: var(--mono); font-style: normal; font-size: 8px; font-weight: 700;
+  min-width: 11px; height: 11px; padding: 0 1px;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(8, 11, 18, 0.9); border-radius: 6px;
+}
+
+/* The pointer line: gold, to match the frame it leaves, rather than the
    tutorial's green - the two can be on screen at the same time. */
 #party-lines line { stroke: var(--accent); }
 #party-lines circle { fill: var(--accent); }
@@ -832,7 +892,7 @@ button.small { padding: 2px 8px; font-size: 12px; }
    counterpart to the party panel on the left. */
 .right-mid { top: 0; bottom: 0; right: 14px; margin: auto 0; height: fit-content; }
 .local-info {
-  width: 290px;
+  width: 320px;
   max-height: 86vh;
   overflow-y: auto;
   z-index: 20;
@@ -873,73 +933,7 @@ button.small { padding: 2px 8px; font-size: 12px; }
 
 /* The enemy roster, now a column inside the panel above. Deliberately the party
    panel's row, so both sides are read the same way. */
-.enemy-roster {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  pointer-events: auto;
-}
-.enemy-roster .eunit {
-  display: flex;
-  /* Icon level with the name, exactly like a portrait in the party panel -
-     centring it leaves the card looking lopsided now the cards are tall. */
-  align-items: flex-start;
-  gap: 9px;
-  padding: 7px 10px;
-  border-radius: 10px;
-  background: var(--panel-bg);
-  border: 1px solid rgba(226, 71, 75, 0.55);   /* the plaques' red, so a card and a body match */
-  backdrop-filter: blur(6px);
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
-}
-/* Whose turn it is right now. */
-.enemy-roster .eunit.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 6px 24px rgba(0, 0, 0, 0.45); }
-.enemy-roster .eunit.dead { opacity: 0.35; }
-.enemy-roster .eunit.dead .e-icon { filter: grayscale(1); }
-.enemy-roster .e-icon {
-  width: 34px; height: 34px; border-radius: 8px; flex: none;
-  display: flex; align-items: center; justify-content: center;
-  font-family: var(--display); font-size: 16px; font-weight: 700;
-  background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.16);
-}
-/* Left column of a card: the portrait, with the ability icons stacked under it
-   so "who this is / what it can do" reads top to bottom in one place. */
-.enemy-roster .e-side { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: none; }
-/* Under the portrait a chip carries only its icon, so it becomes a square the
-   width of the portrait rather than the wide name+number pill used elsewhere. */
-.enemy-roster .e-side .ab-chips { display: flex; flex-direction: column; gap: 3px; margin: 0; }
-.enemy-roster .e-side .ab-chip {
-  width: 34px; height: 22px; padding: 0;
-  justify-content: center; font-size: 13px; cursor: help;
-}
-.enemy-roster .e-info { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 3px; }
-/* Name and HP on the left, the status badges filling the space beside them. */
-.enemy-roster .e-head { display: flex; align-items: stretch; gap: 8px; }
-.enemy-roster .e-text { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 1px; }
-.enemy-roster .e-name { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.enemy-roster .e-hp { font-family: var(--mono); font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
-/* The badge strip: wraps rather than pushing the name out of the card. */
-.enemy-roster .e-status {
-  display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end;
-  gap: 3px; flex: none; max-width: 96px;
-}
-.enemy-roster .e-status-badge {
-  position: relative;
-  width: 22px; height: 22px; border-radius: 6px;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 12px; line-height: 1;
-  background: rgba(255, 255, 255, 0.10);
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  cursor: help;
-}
-/* The turns-remaining count, only drawn when the status really has a duration. */
-.enemy-roster .e-status-badge i {
-  position: absolute; right: -3px; bottom: -3px;
-  font-family: var(--mono); font-style: normal; font-size: 8px; font-weight: 700;
-  min-width: 11px; height: 11px; padding: 0 1px;
-  display: flex; align-items: center; justify-content: center;
-  background: rgba(8, 11, 18, 0.9); border-radius: 6px;
-}
+.enemy-roster { pointer-events: auto; }
 .battlebar { display: flex; align-items: center; gap: 16px; padding: 10px 16px; max-width: 92vw; }
 .battle-info { display: flex; flex-direction: column; gap: 2px; min-width: 150px; }
 .battle-round {

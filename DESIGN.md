@@ -289,28 +289,48 @@ tables, and a fight is fully readable off them:
   enemy roster. With no effects the block and its separator both go away, so the
   panel never carries an empty gap. `ui.setBattleMode(battle, info)` fills it once
   when the fight opens, from `{ title, lore, debuffs }` on the combat ctx.
-* **The enemy roster** (inside the panel above, in combat): one card per enemy in
-  TURN ORDER - the engine's own ordering, initiative high to low and ties by spawn
-  index. The card reads in two columns: the portrait with the creature's ability
-  icons stacked UNDER it on the left (hover one for what it does), then the name
-  over the HP with its status badges beside them, and the segmented bar across the
-  bottom. There is deliberately no turn-order number: the order is the order the
-  cards are in. It shares the party panel's actual bar CSS rather than a copy of
-  it, so a health bar is drawn and read identically wherever it appears. Redrawn
-  every turn by `updateBattle()`.
-* **The party panel** (left) is the same card, mirrored, and it STAYS on the local
-  map - who is on the field and how hurt they are matters most while the fight is
-  running. Its frame is the party green where the enemies' is red. Hovering a card
-  turns that frame gold and draws a dashed pointer from it to that unit's body in
-  the arena (`#party-lines`, the same SVG idea as the tutorial's green pointer;
-  `localView.partyTokenScreen(partyIndex)` projects the body). The line is gold
-  rather than green so it is never confused with a guide pointer on screen at the
-  same time.
+* **The unit card** (`unitCardBody` in ui.js, the `#party-units, .enemy-roster`
+  rules in style.css) is ONE shape used by both panels, so a unit reads the same
+  way whoever it belongs to:
+
+      [portrait]  Name              [ab][ab][relic]
+                  24 / 40 HP
+      ========= health bar, full width =========
+      [st][st][st][st][st][st][st]
+
+  The bar sits under everything so it can span the whole card, and the status
+  sockets sit under the bar. Only two things differ between the sides: the frame
+  colour (party green, enemy red) and the relic slot, which enemies do not get -
+  an empty socket there would promise loot that is not there.
+  **Every slot is drawn even when empty.** A vacant socket is information: it
+  tells the player this unit HAS a relic slot before they have ever found a
+  relic, and that seven statuses can be carried. Ability and relic sockets are
+  the portrait's size; the seven status sockets share the card's width. Relics
+  are round, abilities square, so the two can never be misread for each other.
+  Relics themselves do not exist yet - the space is designed for from the start
+  rather than bolted on later.
+* **The enemy roster** (inside the panel above, in combat) is one card per enemy
+  in TURN ORDER - the engine's own ordering, initiative high to low and ties by
+  spawn index. There is deliberately no turn-order number: the order is the order
+  the cards are in. Redrawn every turn by `updateBattle()`.
+* **The party panel** (left) STAYS on the local map - who is on the field and how
+  hurt they are matters most while the fight is running. Its numbers come from
+  the world-map party but its STATUS sockets come from the combat engine's
+  instances (shields and stuns only exist there), so `renderPartyPanel()` runs on
+  every engine change as well as on every world-map update.
+* **Pointer lines.** Hovering ANY card - party or enemy - turns its frame gold and
+  draws a dashed pointer from it to that unit's body in the arena (`#party-lines`,
+  the same SVG idea as the tutorial's green pointer). `localView.tokenScreen`
+  projects the body; a party member is found by its index in `game.state.party`,
+  an enemy by the engine's uid. The line is gold rather than green so it is never
+  confused with a guide pointer on screen at the same time, and `markHovered()`
+  re-applies the frame after every redraw - a card can be rebuilt under the cursor
+  by any HP change.
 * **Status badges** come from ONE table, `src/status.js`, read by both the overhead
-  plaque (drawn on a canvas) and the enemy card (drawn in HTML) - a status can
-  never mean one thing in the arena and another in the panel. A badge shows a
-  number in its corner only when the status really has a duration; none of today's
-  do, and inventing one would be a lie about the rules.
+  plaque (drawn on a canvas) and the cards (drawn in HTML) - a status can never
+  mean one thing in the arena and another in the panel. A badge shows a number in
+  its corner only when the status really has a duration; none of today's do, and
+  inventing one would be a lie about the rules.
 * **The Enter button is a WORLD-MAP control.** It is hidden for the whole local map
   (`.local-mode:not(.start-screen) #statusbar`), not just while a fight runs, so it
   cannot surface behind a reward popup; it comes back with the fatigue bar and the

@@ -76,6 +76,8 @@ export const ru = {
 
   'party.title': 'Отряд',
   'party.hp': '{hp} / {max} HP',
+  'slot.ability.empty': 'Слот способности - пусто',
+  'slot.relic.empty': 'Слот реликвии - пусто',
   'party.disabled': 'ВЫВЕДЕН ИЗ СТРОЯ',
 
   // ----- hover / popup -----------------------------------------------------

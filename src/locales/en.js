@@ -71,6 +71,8 @@ export const en = {
 
   'party.title': 'Party',
   'party.hp': '{hp} / {max} HP',
+  'slot.ability.empty': 'Ability slot - empty',
+  'slot.relic.empty': 'Relic slot - empty',
   'party.disabled': 'DISABLED',
 
   // ----- hover / popup -----------------------------------------------------
