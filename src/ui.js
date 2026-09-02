@@ -88,6 +88,8 @@ export function createUI(config, handlers) {
   $('btn-reveal').addEventListener('click', () => handlers.onRevealAll());
   // Debug: ends the current local-map fight as an instant victory.
   $('btn-win-battle').addEventListener('click', () => { closeMenu(); handlers.onWinBattle && handlers.onWinBattle(); });
+  // Undoes the fight in progress back to the moment it began (a no-op outside one).
+  $('btn-restart-battle').addEventListener('click', () => { closeMenu(); handlers.onRestartBattle && handlers.onRestartBattle(); });
   $('btn-enter').addEventListener('click', () => handlers.onEnter());
   $('btn-menu').addEventListener('click', () => toggleMenu());
   $('btn-settings').addEventListener('click', () => { closeMenu(); handlers.onOpenSettings(); });
@@ -345,10 +347,13 @@ export function createUI(config, handlers) {
       return;
     }
     const canGo = game.canMoveTo(hex);
+    // The actual charge stepping here from the party's CURRENT tile would incur
+    // right now (0 for hills/mountains reached from same-or-higher ground).
+    const stepCost = game.stepCost(hex);
     let cost = '';
     if (!hex.passable) cost = t('hover.impassable');
-    else if (hex.supplyCost > 0) cost = t('hover.cost', { supplies: hex.supplyCost, hp: hex.hpCost, bonus: hex.revealBonus });
-    else if (hex.hpCost > 0) cost = t('hover.costHp', { hp: hex.hpCost });
+    else if (stepCost.supplyCost > 0) cost = t('hover.cost', { supplies: stepCost.supplyCost, hp: stepCost.hpCost, bonus: hex.revealBonus });
+    else if (stepCost.hpCost > 0) cost = t('hover.costHp', { hp: stepCost.hpCost });
     const seen = hex.terrainHeight > 0 ? t('hover.seen', { n: hex.terrainHeight }) : '';
     els.hover.textContent = `${describeHex(hex)}${cost}${seen}${canGo ? t('hover.click') : ''}`;
   }
@@ -511,6 +516,27 @@ export function createUI(config, handlers) {
           label: t('dialog.skip'), sub: t('dialog.skip.sub'),
           onClick: () => confirm({ title: t('confirm.skip.title'), text: t('battle.lessons.skip'), onYes: () => { closeDialog(); onSkip(); } }),
         }] : []),
+      ],
+    });
+  }
+
+  // The black market's second step: exactly the unit picked in chooseUnit,
+  // two (or one, if that is all it has left) random upgrade suggestions for
+  // THAT unit only - unlike chooseUpgrade, which offers one upgrade per
+  // living unit across the whole party. Nothing is spent until a suggestion
+  // is actually picked; declining here still walks away clean.
+  function chooseBlackMarketUpgrade({ game, index, offers, loss, onPick, onDecline }) {
+    const u = game.state.party[index];
+    openDialog({
+      title: t('blackmarket.pick.title'),
+      html: `<p>${t('blackmarket.pick.text', { name: tn(u.name), loss })}</p>`,
+      actions: [
+        ...offers.map((o) => ({
+          label: t(`upgrade.${o.abilityId}.${o.nodeId}.name`),
+          sub: `${abilityName(o.abilityId)} - ${t(`upgrade.${o.abilityId}.${o.nodeId}.desc`)}`,
+          onClick: () => onPick(o),
+        })),
+        { label: t('dialog.decline'), sub: t('dialog.decline.sub'), onClick: () => confirm({ title: t('confirm.walkAway.title'), text: t('confirm.walkAway.text'), onYes: onDecline }) },
       ],
     });
   }
@@ -888,7 +914,7 @@ export function createUI(config, handlers) {
     return `<svg class="ability-tree" viewBox="0 0 ${W} ${H}">${lines}${nodes}</svg>`;
   }
 
-  return { update, renderLog, setHover, showEnd, hideEnd, openDialog, closeDialog, dialogOpen, flashDialog, confirm, chooseUnit, chooseUpgrade, showBanner, buildLegend, buildFatigueBar, updateBlur, setStartScreen, setLayerSelector, openRoster, closeRoster, rosterOpen, setBattleMode, updateBattle };
+  return { update, renderLog, setHover, showEnd, hideEnd, openDialog, closeDialog, dialogOpen, flashDialog, confirm, chooseUnit, chooseUpgrade, chooseBlackMarketUpgrade, showBanner, buildLegend, buildFatigueBar, updateBlur, setStartScreen, setLayerSelector, openRoster, closeRoster, rosterOpen, setBattleMode, updateBattle };
 }
 
 // Log parameters are stored language-neutral and resolved at render time:

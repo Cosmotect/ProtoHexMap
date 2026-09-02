@@ -58,6 +58,7 @@ export function terrainInfo(name, tr) {
     if (tr.supplyCost > 0) costs.push(t('terrain.cost.supplies', { n: tr.supplyCost }));
     if (tr.hpCost > 0) costs.push(t('terrain.cost.hp', { n: tr.hpCost }));
     parts.push(t('terrain.costly', { costs: joinList(costs) }));
+    parts.push(t('terrain.costly.climbOnly'));
   } else parts.push(t('terrain.free'));
   if (tr.revealBonus > 0) parts.push(t('terrain.revealBonus', { n: tr.revealBonus }));
   if (tr.terrainHeight > 0) parts.push(t('terrain.height', { n: tr.terrainHeight }));

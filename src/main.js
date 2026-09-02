@@ -220,7 +220,17 @@ function syncPartyPanel() {
   if (changed) ui.update(game);
 }
 
-function beginInteractiveBattle(ctx) {
+// Snapshot of a fight at the instant it began (HP + exact tile layout), kept so
+// "Restart battle" can undo every step, hit and death back to that moment
+// without re-rolling anything (see restartBattle() below).
+let battleEntry = null;
+
+// `placementOverride` (from restartBattle) skips beginBattle()'s own placement
+// logic - which would only redo layout if the roster size changed, and
+// otherwise would either reuse the CURRENT (mid-fight) positions or, for a
+// recipe-less fight, roll brand new random tiles - and instead lands everyone
+// back on the exact tile they started this attempt on.
+function beginInteractiveBattle(ctx, placementOverride = null) {
   const view = cinematic.localView;
   // Plain copies: the engine keeps its own instances; wounds are written back at
   // the end. A party unit fights with its RESOLVED abilities - the base defs
@@ -234,8 +244,18 @@ function beginInteractiveBattle(ctx) {
     name: e.name, hp: e.hp, maxHp: e.maxHp, power: e.power,
     shape: e.shape, color: e.color, typeId: e.typeId,
   }));
-  const placement = view.beginBattle({ party: partyDefs, enemies: enemyDefs });
+  const placement = placementOverride
+    ? view.placeUnitsAt(partyDefs, enemyDefs, placementOverride.partyKeys, placementOverride.enemyKeys)
+    : view.beginBattle({ party: partyDefs, enemies: enemyDefs });
   battleCtx = ctx;
+  if (!placementOverride) {
+    // A genuinely new fight (not a restart): remember its opening HP and layout.
+    battleEntry = {
+      partyHp: partyDefs.map((u) => ({ index: u.partyIndex, hp: u.hp })),
+      partyKeys: placement.partyKeys,
+      enemyKeys: placement.enemyKeys,
+    };
+  }
   battle = createBattle({
     config: COMBAT_CONFIG,
     radius: CONFIG.local.radius,
@@ -264,11 +284,35 @@ function beginInteractiveBattle(ctx) {
   tutorial.onEvent('combatStart', {}, game);
 }
 
+// "Restart battle": throws away every step, hit and death from this attempt
+// and rebuilds the exact same fight (same enemies, same tiles) fresh - as if
+// the party had just walked in. Not a win, not a loss: the encounter is not
+// consumed, and nothing is reported. A no-op outside an active fight.
+function restartBattle() {
+  if (!battle || !battleCtx || !battleEntry) return;
+  const ctx = battleCtx;
+  const entry = battleEntry;
+  const view = cinematic.localView;
+  view.endBattle();
+  // Undo any wounds this attempt caused - back to the HP the party had the
+  // instant they entered (already past any Stasis debuffs, which stay applied
+  // for the whole encounter and are untouched here).
+  for (const snap of entry.partyHp) {
+    const p = game.state.party[snap.index];
+    if (p) p.hp = snap.hp;
+  }
+  battle = null; battleCtx = null; window.__battle = null;
+  ui.setBattleMode(null);
+  beginInteractiveBattle(ctx, { partyKeys: entry.partyKeys, enemyKeys: entry.enemyKeys });
+  battle.start();
+  ui.update(game);
+}
+
 function finishInteractiveBattle(won) {
   if (!battle || !battleCtx) return;
   const ctx = battleCtx;
   const b = battle;
-  battle = null; battleCtx = null; window.__battle = null;
+  battle = null; battleCtx = null; battleEntry = null; window.__battle = null;
   // Wounds (and deaths) carry back to the world-map party.
   for (const u of b.state.units) {
     if (u.partyIndex == null) continue;
@@ -283,7 +327,7 @@ function finishInteractiveBattle(won) {
 // Restart / new map while a fight is open: drop the engine, the new Game
 // object discards the battle state anyway.
 function abortBattle() {
-  battle = null; battleCtx = null; window.__battle = null;
+  battle = null; battleCtx = null; battleEntry = null; window.__battle = null;
   ui.setBattleMode(null);
 }
 
@@ -344,6 +388,8 @@ ui = createUI(CONFIG, {
   onRevealAll: () => game.revealAll(),
   // Debug: instantly win the fight running on the local map (does nothing outside one).
   onWinBattle: () => { if (battle) battle.debugResolve(true); },
+  // Undo the fight in progress back to the moment it began (does nothing outside one).
+  onRestartBattle: () => restartBattle(),
   onEnter: () => {
     if (startScreen) {
       if (!layerRolling && !ui.rosterOpen() && !settings.isOpen()) beginJourney();
@@ -628,7 +674,19 @@ function showDialog(d) {
       html: `<p>${escapeHtml(d.text)}</p><div class="effect">${escapeHtml(d.effect)}</div>`,
       filter: (u) => u.alive && availableUpgrades(u).length > 0,
       game,
-      onPick: (i) => { game.blackMarketDeal(i); ui.closeDialog(); },
+      // Which unit pays is only step one: step two picks WHICH of two random
+      // suggestions for that unit is worth the price (game.blackMarketDeal
+      // applies whichever ref the player actually picks there).
+      onPick: (i) => {
+        ui.chooseBlackMarketUpgrade({
+          game,
+          index: i,
+          offers: game.blackMarketOffers(i),
+          loss: game.blackMarketHpLoss(i),
+          onPick: (offer) => { game.blackMarketDeal(i, offer.ref); ui.closeDialog(); },
+          onDecline: () => ui.closeDialog(),
+        });
+      },
       extraActions: [{ label: t('dialog.decline'), sub: t('dialog.decline.sub'), onClick: () => ui.confirm({ title: t('confirm.walkAway.title'), text: t('confirm.walkAway.text'), onYes: () => ui.closeDialog() }) }],
     });
   } else if (d.kind === 'battle') {
@@ -757,15 +815,21 @@ renderer.onHexClick = (hex) => {
   if (tutorial.isBlocking()) return;
   if (renderer.busy) return;
   // A step whose terrain damage would disable someone asks for confirmation first.
-  if (game.canMoveTo(hex) && hex.hpCost > 0) {
-    const doomed = game.livingUnits().filter((u) => u.hp <= hex.hpCost);
-    if (doomed.length) {
-      ui.confirm({
-        title: t('confirm.climb.title'),
-        text: t('confirm.climb.text', { names: doomed.map((u) => tn(u.name)).join(', '), hp: hex.hpCost }),
-        onYes: () => game.moveTo(hex),
-      });
-      return;
+  // Uses the ACTUAL cost of this step (stepCost), not the tile's raw type cost:
+  // hopping mountain-to-mountain or hill-to-hill costs nothing, so it never
+  // needs to ask.
+  if (game.canMoveTo(hex)) {
+    const hpCost = game.stepCost(hex).hpCost;
+    if (hpCost > 0) {
+      const doomed = game.livingUnits().filter((u) => u.hp <= hpCost);
+      if (doomed.length) {
+        ui.confirm({
+          title: t('confirm.climb.title'),
+          text: t('confirm.climb.text', { names: doomed.map((u) => tn(u.name)).join(', '), hp: hpCost }),
+          onYes: () => game.moveTo(hex),
+        });
+        return;
+      }
     }
   }
   if (!game.moveTo(hex)) {

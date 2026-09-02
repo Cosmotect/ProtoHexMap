@@ -18,11 +18,9 @@ through dialogs.
 > On a 0-100 combat difficulty scale: regular encounters occupy 0-60, Stasis Colonies
 > 50-70, bosses 80-100.
 
-Every enemy in the game is written out in `src/config/units.js` (see "The bestiary"
-below): `battle.enemyTypes` defines the creatures, `battle.enemyGroups` the line-ups
-they form, and three tables say where a group may show up - `battle.enemies.bands`
-(regular fights, by ring), `battle.colonies`, `battle.bosses`. Power is an
-ENEMY-ONLY number; the party grows through ability upgrade trees
+The three enemy pools live in `src/config/units.js`: `battle.enemies.bands` (regular
+groups, by ring), `battle.colonies` (Stasis Colonies), `battle.bosses` (the Stasis
+Seed). Power is an ENEMY-ONLY number; the party grows through ability upgrade trees
 (see "Ability upgrades" below), so all old party-power yardsticks are void and the
 balance must be re-measured against interactive play.
 
@@ -43,8 +41,11 @@ balance must be re-measured against interactive play.
     renderer draws no mesh, the camera sees the void; the hex stays in map data so
     later mechanics can navigate it), **water** (impassable), **ground**, **hill**
     (3 supplies to enter, seen from 1 further), **mountain** (10 supplies + 5 HP per
-    living unit, reveal +2, seen from 2 further). A step whose HP cost would down
-    someone asks for confirmation first.
+    living unit, reveal +2, seen from 2 further). Terrain cost is only charged when
+    climbing from strictly lower ground (`game.stepCost`, compares `terrainHeight`):
+    ridge-walking mountain-to-mountain or hill-to-hill, or coming back down
+    mountain-to-hill, is free. A step whose HP cost would down someone asks for
+    confirmation first.
   * Biomes (`config.biomes`): grasslands, forest, mesa, desert, dunes, tundra, plus
     **wither** which worldgen never places - the Stasis paints it during play. Final
     tile colour = type colour LERPED towards the biome colour by
@@ -84,18 +85,7 @@ balance must be re-measured against interactive play.
   Stasis / acolyte / camp always reset, shop / event optionally, treasure never.
   The **fatigue bar** (top centre) draws one box per step, coloured by its percentage,
   filling as the party walks and emptying on a reset; hovering a reachable tile shows
-  the forced chance and the fatigue after the step. The world map's reachable-tile
-  rings wear that same colour: every reachable tile is the SAME next step, so
-  `fatigueStepHue(config, fatigueSteps + 1)` gives one hue for all of them and the
-  ring answers "how tired does this step make us" without a number.
-* **Cost decals** (`render.js`, the `DECAL` block). A reachable tile that charges
-  health or supplies to step onto says so on its own surface: "-5 HP" / "-10 SP"
-  painted on a flat plane just above the tile top, yawed to the camera every frame
-  so the text is never upside down. Each line is coloured on its own - green through
-  yellow to red by `cost / pool`, where the supply pool is what is in the packs and
-  the HP pool is the LOWEST living unit's health, because climb damage hits everyone
-  and that unit decides whether the climb is survivable. The canvas is rebuilt only
-  when the words or the colours change.
+  the forced chance and the fatigue after the step.
 * **The Stasis** (`config.stasis`) - the win condition and the clock:
   * One **Seed** on ring >= `seedMinRing` ('half' = floor(radius/2)); destroying it
     wins the run. `colonyCount` (4) future **Colony** sites; their only placement rule
@@ -121,17 +111,21 @@ balance must be re-measured against interactive play.
     (`config.battle.danger`): a regular fight shows 0-2 by the band its TOTAL enemy
     power falls into (`bands` [12, 36]), a Colony always shows `colony` (3), the Seed
     always `seed` (5). Reading whether a fight is takeable is the player's job.
-    A fight picks one whole GROUP from the band its ring falls into (rings 1-3, 4-7,
-    8-11); the Seed picks from `bosses`, a Colony from `colonies`. Victory: one
+    Regular groups come from RING BANDS (count range + total group power range, split
+    evenly): rings 1-3 = 1-3 units / 3-6 power, 4-7 = 2-5 / 24-30, 8-11 = 4-8 /
+    50-60, hp 14-22 each. The Seed rolls one of 5 `bosses` variants, a Colony one of
+    5 `colonies` variants (leader + chaff, or an equal-power swarm). Victory: one
     ability upgrade pick (x`rewardPicks` after a Colony),
     +`battle.victorySupplies` (5) supplies, a lore line.
   * *Treasure*: +`treasure.supplies` (40); if it overflows the cap on an empty tile,
     the dialog offers "make camp first, then collect".
   * *Event*: one of `events.js` - reveal effects (nearest shop / a blob of tiles /
     hidden battles / a vantage), a supply find (10-20), a scholar (a random unit
-    unlocks a random available upgrade), the black market (a chosen unit trades 1/3
-    max HP for a random upgrade, decline allowed), Nomads (a battle through the same
-    combat path), a merchant caravan (acts as a free camp), or plain lore.
+    unlocks a random available upgrade), the black market (pick a unit, then pick
+    between TWO random upgrade suggestions for that unit only, both costing 1/3
+    max HP; decline allowed at either step), Nomads (a battle through the same
+    combat path), or a merchant caravan (acts as a free camp). (Pure-lore events with
+    no effect were removed.)
   * *Shop*: stays on its tile, revisitable; entering does not reset fatigue. Stock =
     2 guaranteed options (Training = one upgrade pick for 25, reveal 8 tiles for 15)
     + 2 random from (rest 15, relic 25 = same as Training, rumours 15, spare parts
@@ -139,10 +133,6 @@ balance must be re-measured against interactive play.
     remaining stock.
   * *Acolyte*: revives one fallen unit at `acolyte.reviveFraction` (50%) HP; not
     consumed if nobody has fallen.
-  * *Layer gate*: a GREEN PYRAMID, extremely rare (weight 0.03) and unique - the
-    `encounters.unique` list caps it at one per map. Entering it unlocks the next
-    layer of the worldflake (see "Layers of the worldflake" below), shows the
-    lore dialog and is consumed. Never forced; does not reset fatigue.
   * Battle victories, treasure, shops, the Acolyte and camps each draw a flavour lore
     line from their pool (`FLAVOUR_POOL` in game.js; texts in the locale table).
 * **Camera**: perspective only, follows the player with a glide
@@ -159,17 +149,6 @@ balance must be re-measured against interactive play.
   (World, Encounters, Units, General, Audio). The form is generated from the config's
   shape, changes apply immediately, persist in localStorage over the file defaults,
   and every row / tab has a reset. Map, terrain and party values apply on the next run.
-  The **Units tab is hand-built** instead, because the enemy system is a system of
-  ENTRIES and the generator can only edit values, never add or remove one. It holds
-  four editors: the party roster, the bestiary (one row per creature, with a shape
-  dropdown and a validated ability list), the groups (a title plus a comma-separated
-  line-up of bestiary ids, red the moment an id is not real), and the pools - a
-  checkbox per group for each ring band, for the Stasis Seed and for the Colonies.
-  Rows can be added, renamed and deleted, so a whole new enemy can be invented and
-  put into a fight without opening a file. These editors save the WHOLE collection
-  as one override (`battle.enemyTypes`, not `battle.enemyTypes.husk.hp`), since an
-  add or a delete is a change to the collection; that is why they carry one "reset
-  this table" button rather than the per-row reset the generated forms use.
 * **Languages** (`i18n.js`): every user-facing string is a key in a flat per-language
   table (`locales/`); only languages registered in i18n.js are selectable (English
   now). `t(key, params)` / `tn(name)`, `data-i18n` for static HTML, plurals
@@ -192,74 +171,6 @@ balance must be re-measured against interactive play.
   `?scenario=<id>` skip the ceremony.
 * **Seeds**: `?seed=...` in the URL, the HUD and the copy-link button; same seed =
   same map. The run-over overlay offers "Inspect the map".
-
-## Layers of the worldflake (config.layers, map.js, the gate)
-
-Beating the Stasis Seed wins a battle, not the war: the affliction's true source
-sits in the CORE of the worldflake, and the world is a stack of 8 layers around
-it. The party starts on layer 4 and learns the deeper truth through the rare
-GATE encounters.
-
-* **Config** (`config/world.js` layers): `startLayer` (4), `unlockOrder`
-  ([4, 5, 3, 6, 2, 7, 1, 8, 0] - 0 is the core), `rollMs` (the switch cinematic).
-* **Generation**: the layer is an argument to `generateMap(config, rng, layer)`
-  and lands on `map.layer` / `game.layer` - the hook where a layer will later
-  pick its own biomes, NPC spawns, encounter types and rules. FOR NOW a layer
-  only swaps the biome palette: every biome carries `color0`..`color8`
-  (settings-editable in World > biomes; `color` doubles as the start layer's
-  value and the fallback), `biomeColorFor(biomeDef, layer)` in map.js resolves
-  it and the renderer's `targetColorFor` reads it, so the world, the arena
-  backdrop and the edge-colour pull all recolour together. The wither biome
-  deliberately looks the SAME on every layer, so the rot always reads as the rot.
-* **Unlocking** (main.js): meta-progression like the tutorial, stored in the
-  browser (`hexmap-layers-progress`, a COUNT along unlockOrder so retuning the
-  order keeps old saves). Each gate advances the chain by one; the dialog names
-  the layer and, on the second unlock, points at the new selector. When all
-  nine are known the gate only hums.
-* **The layer selector** (start screen): once 2+ layers are unlocked, a
-  dropdown sits right ABOVE "Begin journey" and expands UPWARDS, layers listed
-  top (8) to bottom (the core) like the stack itself. Picking a different layer
-  plays the SWITCH CINEMATIC: `localView.startLayerRoll` rotates the camera a
-  full 360 degrees around its own forward axis (through the campfire, at
-  ground level) - the world appears to roll, the camera submerges into the
-  ground, and at the halfway point (nothing on screen but the underside)
-  main.js restarts the run on the chosen layer with the SAME seed and the
-  party's roster choices preserved; the camera then surfaces over the
-  recoloured world and settles back into the composed shot. Clicks (roster,
-  Begin journey, the selector) are off for the ride. The selection carries to
-  every following run until changed.
-
-## The bestiary - enemies, groups, bands (src/config/units.js)
-
-Since 2026-08-31 nothing about an enemy is rolled unit by unit. There are three
-tables, and a fight is fully readable off them:
-
-* **`battle.enemyTypes`** - the bestiary. One entry per creature, and since
-  2026-09-01 that entry is the WHOLE creature: `name`, `shape` (its 3D body),
-  `color`, `hp`, `power`, plus the combat half - `init`, `speed`, `flying`,
-  `abilities`. It used to be split, with the combat half in `UNIT_COMBAT`
-  (config/abilities.js) keyed by name; that split meant a creature invented in the
-  Settings window could only ever be a nameless `default`, so the combat fields
-  moved here and `UNIT_COMBAT` is now the PARTY's table plus a `default` fallback.
-  A row that omits the four combat fields still falls through to `UNIT_COMBAT` by
-  name, so older hand-authored content keeps working (`makeInstance` in
-  local/battle/engine.js takes the definition's value where it has one).
-  The shapes come from `SHAPES` in `src/local/localview.js`: `box sphere cone
-  cylinder capsule prism pyramid spike tetrahedron octahedron icosahedron
-  dodecahedron torus torusKnot diamond shard slab star`. Adding a name there makes
-  it immediately available to the config.
-* **`battle.enemyGroups`** - the line-ups. A title plus a list of bestiary ids;
-  repeats are fine and get numbered ("Husk 2"). Nothing is rolled inside a group, so
-  what is written is exactly what walks onto the arena, and a group's total power is
-  what the danger chevrons grade.
-* **Where a group appears** - `battle.enemies.bands.<band>.groups` for regular
-  fights by ring, `battle.bosses` for the Stasis Seed, `battle.colonies` for a
-  Colony. All three are just lists of group ids.
-* `battle.enemies.reinforcements` lists the types the Stasis "extra enemies" debuff
-  conjures, since those appear outside any group.
-* A scenario may still hand-write a fight (`enemies: [{ type: 'husk', hp: 12 }]`):
-  the shape and colour come from the bestiary entry, hp and power written there
-  override it (`cloneEnemies` in scenarios/scenario.js).
 
 ## The local map and interactive combat (src/local/)
 
@@ -284,132 +195,6 @@ tables, and a fight is fully readable off them:
   `flyOutMs`). The climb out starts from wherever the player left the arena camera.
   A recipe hook (`applyRecipe` in localmap.js, fed by `hex.recipe`) is reserved for
   future handcrafted arenas and runs before the swap.
-* **Everything changes at the peak** (2026-08-29). The cinematic offers callers two
-  moments, and which one a job belongs to is the rule of the whole transition:
-  * `onSwap` - the swap point, screen fully clouded. EVERY change of game state or
-    of the interface goes here: `body.local-mode` on and off, the battle bar, the
-    start screen's HUD, the encounter itself starting, the arena being torn down on
-    the way out. Nothing the player can see is allowed to change anywhere else.
-  * `onArrived` - the camera has landed. Only "hand control over" belongs here.
-  The one thing that would break the rule is a fatigue AMBUSH: it opens with an
-  enemy phase, and animations are not state - played at the swap they would happen
-  behind the clouds. So `createBattle({ deferOpening: true })` builds the fight at
-  the swap (the HUD is the battle's before the clouds part) and holds only that
-  opening back until `battle.start()` on arrival. A normal fight opens with
-  `startPlayerPhase()`, which animates nothing, and needs no deferring.
-  `cinematic.inArena()` is "the arena is on screen, or the dive is past its swap
-  and committed to it" - the test callers use before starting an encounter.
-* **COMBAT is a sub-state of the local map**, not a state of its own. The arena is
-  shown for fights and for quiet scenes alike - the campfire start screen today,
-  other non-combat encounters later - so `body.local-mode` means "the arena is on
-  screen" and `body.in-combat` (with `body.battle-mode`, the same flag under the
-  name the older CSS knows) means "and it is a fight". `localView.setCombat(on)`
-  carries the same switch into the 3D side. Only in combat do the enemy roster and
-  the battle bar appear, and only then do the unit plaques show anything but a
-  portrait.
-* **Selecting and cancelling on the arena**. A click picks a PARTY unit up; a
-  click on an ENEMY *inspects* it - its movement range lights up in the enemies'
-  red (`colors.enemyReachRing`) instead of the party's gold, and that is all it
-  does: `sb.inspectUid` is a readout no rule reads, and the party's own selection
-  is left exactly where it was.
-  The RIGHT button is the universal cancel, one step per click: an aimed ability
-  goes down first, then the inspected enemy, then the selection itself, leaving
-  nothing selected (the battle bar says so, and a click picks a unit back up).
-  Right-drag still turns the camera, so the two are told apart by DISTANCE alone,
-  with no time limit - a cancel must never be swallowed because a slow frame made
-  the click "too long". The browser's own context menu is suppressed for the whole
-  life of the local map.
-* **Local Map Info** (`#local-info`, right side, in combat): the arena's answer to
-  the party panel on the left. Top to bottom: the fight's NAME (the enemy group's
-  `title` from the bestiary, or a generic "Skirmish"), a lore line drawn from the
-  `combatIntro` flavour pool - written for the moment before the first blow, not
-  the aftermath - a separator, then one block per BUFF or DEBUFF riding on this
-  arena (today the Stasis debuffs, in the world map's purple-red; the `.buff`
-  variant is green and waits for the first buff source), a separator, and the
-  enemy roster. With no effects the block and its separator both go away, so the
-  panel never carries an empty gap. `ui.setBattleMode(battle, info)` fills it once
-  when the fight opens, from `{ title, lore, debuffs }` on the combat ctx.
-* **The unit card** (`unitCardBody` in ui.js, the `#party-units, .enemy-roster`
-  rules in style.css) is ONE shape used by both panels, so a unit reads the same
-  way whoever it belongs to:
-
-      [portrait]  Name              [ab][ab][relic]
-                  24 / 40 HP
-      ========= health bar, full width =========
-      [st][st][st][st][st][st][st]
-
-  The bar sits under everything so it can span the whole card, and the status
-  sockets sit under the bar. Only two things differ between the sides: the frame
-  colour (party green, enemy red) and the relic slot, which enemies do not get -
-  an empty socket there would promise loot that is not there.
-  **Every slot is drawn even when empty.** A vacant socket is information: it
-  tells the player this unit HAS a relic slot before they have ever found a
-  relic, and that seven statuses can be carried. Ability and relic sockets are
-  the portrait's size; the seven status sockets share the card's width. Relics
-  are round, abilities square, so the two can never be misread for each other.
-  Relics themselves do not exist yet - the space is designed for from the start
-  rather than bolted on later.
-* **The enemy roster** (inside the panel above, in combat) is one card per enemy
-  in TURN ORDER - the engine's own ordering, initiative high to low and ties by
-  spawn index. There is deliberately no turn-order number: the order is the order
-  the cards are in. Redrawn every turn by `updateBattle()`.
-* **The party panel** (left) STAYS on the local map - who is on the field and how
-  hurt they are matters most while the fight is running. Its numbers come from
-  the world-map party but its STATUS sockets come from the combat engine's
-  instances (shields and stuns only exist there), so `renderPartyPanel()` runs on
-  every engine change as well as on every world-map update.
-* **Pointer lines.** Hovering ANY card - party or enemy - turns its frame gold and
-  draws a dashed pointer from it to that unit's body in the arena (`#party-lines`,
-  the same SVG idea as the tutorial's green pointer). `localView.tokenScreen`
-  projects the body; a party member is found by its index in `game.state.party`,
-  an enemy by the engine's uid. The line is gold rather than green so it is never
-  confused with a guide pointer on screen at the same time, and `markHovered()`
-  re-applies the frame after every redraw - a card can be rebuilt under the cursor
-  by any HP change.
-* **Status badges** come from ONE table, `src/status.js`, read by both the overhead
-  plaque (drawn on a canvas) and the cards (drawn in HTML) - a status can never
-  mean one thing in the arena and another in the panel. A badge shows a number in
-  its corner only when the status really has a duration; none of today's do, and
-  inventing one would be a lie about the rules.
-* **The Enter button is a WORLD-MAP control.** It is hidden for the whole local map
-  (`.local-mode:not(.start-screen) #statusbar`), not just while a fight runs, so it
-  cannot surface behind a reward popup; it comes back with the fatigue bar and the
-  party panel at the peak of the flight home. The campfire start screen is the one
-  exception - its "Begin journey" button lives in that same slot.
-* **The unit plaque** (`localview.js`, the `PLAQUE` block): ONE billboard over each
-  unit's head carrying the portrait, the HP numbers and the health bar together -
-  icon box on the left, "24 / 40" above a bar on the right, the arrangement of a
-  party-panel row. The bar copies `.unit .bar` from style.css exactly: same track,
-  the same green, the same switch to the danger red below half HP, and a dark
-  segment line every `party.hpSegment` HP, so a bar is read the same way in the
-  panel and on the field. One sprite rather than two stacked ones is also what
-  keeps the plaque centred over the unit - two of different widths never were.
-  Sizes live in the `PLAQUE` constant, deliberately not in the settings window.
-  Out of combat the plaque shrinks to the portrait alone: HP and statuses are
-  combat readings, and the campfire is not a fight.
-  The frame is gold for the party and red for enemies - the fastest read of which
-  side a token belongs to. Plaque sprites opt out of the scene's distance fog and
-  of the renderer's ACES tone mapping (`fog: false, toneMapped: false`): both are
-  for the 3D set, and together they were washing the portraits out to a flat grey.
-  * **Status badges**: a unit's statuses (shield, charge, stun, haste / slow) are
-    drawn as small icons on the numbers row, right-aligned, and each records the
-    box it occupies. Hovering one shows a tooltip with its name and effect, read
-    from the locale tables (`status.<id>.name` / `.desc`). The hit test does not
-    raycast: a sprite always faces the camera and is never rolled, so projecting
-    its centre plus one half-width along the camera's right vector gives the exact
-    screen rectangle, and the badge boxes map into it linearly - cheaper, and it
-    survives the camera moving.
-  * **Durations**: the corner number on a badge is drawn ONLY for a status that
-    really has one. None of today's do - a shield is spent by the next hit, a stun
-    by the next activation - so no number appears. When durations arrive, put a
-    remaining-turns count on the engine's unit as `statusTurns[<id>]` and the
-    badges start counting by themselves; `STATUSES` in localview.js is the table
-    that maps engine fields to badges.
-* **Unit placement happens once**. `build()` (during the dive) places both sides on
-  their REAL starting tiles and remembers them; `beginBattle()` re-uses that layout
-  instead of rolling again, and only re-places when the board does not match the
-  fight being started (the campfire layout, or a fight begun without a dive).
-  Rolling twice was why every unit visibly jumped a moment after the camera landed.
 * **The combat engine** (`local/battle/engine.js` + `bhex.js`; definitions in
   `src/config/abilities.js`, deliberately NOT in the settings window):
   * **Player phase - one simultaneous turn**: select any unit and reposition it
@@ -494,8 +279,10 @@ one node of an ability's UPGRADE TREE, and the ability itself gets stronger.
   living unit (`game.upgradeOffers()`) and the player unlocks exactly one of the
   offers (a Colony grants `rewardPicks` such choices back to back; offers re-drawn
   before each, so freshly opened children can appear). The same chooser serves the
-  shop's Training / Relic options (pay first, then pick); the scholar event and
-  the black market unlock a RANDOM available upgrade directly.
+  shop's Training / Relic options (pay first, then pick); the scholar event unlocks
+  a RANDOM available upgrade directly; the black market drafts TWO random upgrades
+  for one chosen unit (`game.blackMarketOffers()`) and the player picks which one
+  to actually learn (`game.blackMarketDeal(index, ref)`).
 * **Sim proxy**: the legacy auto-resolve still compares power numbers, so a party
   unit's hidden `power` = `battle.simPower.base + perUpgrade x unlocked count`,
   refreshed on every unlock. Nothing displays it; interactive combat ignores it.

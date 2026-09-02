@@ -623,7 +623,7 @@ export class MapRenderer {
         rec.mesh.material.color.copy(this.targetColorFor(rec.hex));
       }
       rec.ring.visible = this.reachable.has(rec.hex.key);
-      this.syncCostDecal(rec, game.state.supplies, lowHp);
+      this.syncCostDecal(rec, game.stepCost(rec.hex), game.state.supplies, lowHp);
       // The marker on the party's own tile floats up so the token does not cut through it.
       rec.markerLiftTarget = rec.hex === game.state.position ? 1.1 : 0;
       // Danger chevrons above revealed battles: how much stronger the enemies are.
@@ -634,10 +634,10 @@ export class MapRenderer {
   // "-2 HP" / "-3 SP" flat on a tile the party can step onto, when stepping
   // there actually costs that. The texture is rebuilt only when the words or
   // the colours change, so this is cheap to call from syncState().
-  syncCostDecal(rec, supplies, lowHp) {
+  syncCostDecal(rec, cost, supplies, lowHp) {
     const hex = rec.hex;
-    const hp = hex.hpCost ?? 0;
-    const sp = hex.supplyCost ?? 0;
+    const hp = cost.hpCost ?? 0;
+    const sp = cost.supplyCost ?? 0;
     const show = rec.ring.visible && hex.revealed && (hp > 0 || sp > 0);
     if (!show) {
       if (rec.decal) rec.decal.visible = false;

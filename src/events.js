@@ -20,8 +20,4 @@ export const EVENTS = [
   { id: 'blackmarket', weight: 1, effect: 'blackMarket' },
   { id: 'nomads', weight: 1, effect: 'battle' },
   { id: 'caravan', weight: 1, effect: 'rest' },
-  { id: 'lore', weight: 2, effect: 'lore' },
 ];
-
-// Plain flavour texts, no effect. One is shown by the "Learned about the world" event.
-export const LORE_IDS = ['light', 'shelf', 'island', 'road', 'night', 'hum', 'swimmers', 'salvage', 'rain', 'marker'];

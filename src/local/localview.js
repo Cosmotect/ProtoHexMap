@@ -790,9 +790,29 @@ export class LocalMapView {
       this.placement = placement;
       this.placedCounts = { party: party.length, enemies: enemies.length };
     }
+    return { ...placement, heights: this.tileHeights() };
+  }
+
+  // "Restart battle": rebuilds every token at an EXACT, previously-recorded
+  // layout (both key arrays fully populated, one per unit). Unlike beginBattle()
+  // - which only re-places tokens when the roster size changed, and otherwise
+  // either reuses whatever is on the board or rolls fresh random tiles for a
+  // recipe-less fight - this always clears and always lands everyone back on
+  // the tile they started this attempt on, with no die roll involved.
+  placeUnitsAt(party, enemies, partyKeys, enemyKeys) {
+    this.clearUnits();
+    const noRng = { random: () => 0 };   // every key is already fixed; nothing is rolled
+    const placement = this.placeUnits(party, enemies, noRng, { party: partyKeys, enemies: enemyKeys });
+    this.placement = placement;
+    this.placedCounts = { party: party.length, enemies: enemies.length };
+    return { ...placement, heights: this.tileHeights() };
+  }
+
+  // Per-tile elevation level, keyed the way the battle engine wants it.
+  tileHeights() {
     const heights = {};
     for (const tile of this.map.hexes.values()) heights[tile.key] = tile.elevation ?? 0;
-    return { ...placement, heights };
+    return heights;
   }
 
   // Wires a created battle to the scene: tokens get their engine uids (matched

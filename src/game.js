@@ -6,7 +6,7 @@ import { buildScenarioMap, cloneEnemies } from './scenarios/scenario.js';
 import { hexKey, neighbors, hexesInRange, hexDistance } from './hex.js';
 import { simulateBattle, makeEnemies, makeRegulars, renameDuplicates } from './battle.js';
 import { availableUpgrades, unlockUpgrade, upgradeCount } from './upgrades.js';
-import { EVENTS, LORE_IDS } from './events.js';
+import { EVENTS } from './events.js';
 import { t, tn } from './i18n.js';
 
 // How many flavour (lore) lines each window can draw from. The lines themselves live
@@ -133,6 +133,23 @@ export class Game {
     return this.map.hexes.get(hexKey(q, r));
   }
 
+  // The supplies/HP a step onto `hex` would ACTUALLY cost right now, stepping
+  // there from the party's current tile. Hills and mountains only charge their
+  // terrain cost when climbed from strictly lower ground (by terrainHeight):
+  // ridge-walking mountain-to-mountain or hill-to-hill, or coming back down
+  // mountain-to-hill, costs nothing. A biome's own flat HP cost (wither) is
+  // NOT height-gated - it hurts every step regardless of where you came from.
+  stepCost(hex) {
+    const from = this.state.position;
+    const type = this.config.tileTypes[hex.type] ?? {};
+    const biome = this.config.biomes[hex.biome] ?? {};
+    const climbing = (hex.terrainHeight ?? 0) > (from?.terrainHeight ?? 0);
+    return {
+      supplyCost: climbing ? (type.supplyCost ?? 0) : 0,
+      hpCost: (climbing ? (type.hpCost ?? 0) : 0) + (biome.hpCost ?? 0),
+    };
+  }
+
   // Hexes the player could step to right now.
   reachable() {
     if (this.state.status !== 'playing') return [];
@@ -140,7 +157,7 @@ export class Game {
     const out = [];
     for (const [nq, nr] of neighbors(q, r)) {
       const h = this.hexAt(nq, nr);
-      if (h && h.passable && h.supplyCost <= this.state.supplies) out.push(h);
+      if (h && h.passable && this.stepCost(h).supplyCost <= this.state.supplies) out.push(h);
     }
     return out;
   }
@@ -150,7 +167,7 @@ export class Game {
     const pos = this.state.position;
     if (hexDistance(pos.q, pos.r, hex.q, hex.r) !== 1) return false;
     if (!hex.passable) return false;
-    if (hex.supplyCost > this.state.supplies) return false;
+    if (this.stepCost(hex).supplyCost > this.state.supplies) return false;
     return true;
   }
 
@@ -255,6 +272,9 @@ export class Game {
     if (!this.canMoveTo(hex)) return false;
     const from = this.state.position;
     const s = this.state;
+    // Must be read BEFORE s.position moves on to `hex` - stepCost() compares
+    // against the party's CURRENT tile.
+    const cost = this.stepCost(hex);
 
     s.turn += 1;
     s.position = hex;
@@ -266,19 +286,20 @@ export class Game {
     s.fatigueSteps += 1;
     s.fatigue = lerpTable(this.config.fatigue.byStep, s.fatigueSteps);
 
-    // Terrain costs (mountains): supplies and HP.
-    if (hex.supplyCost > 0) s.supplies -= hex.supplyCost;
+    // Terrain costs (mountains, hills): supplies and HP, only when climbing
+    // (see stepCost above).
+    if (cost.supplyCost > 0) s.supplies -= cost.supplyCost;
 
     const radius = this.config.run.revealRadius + (hex.revealBonus || 0);
     const newlyRevealed = this.reveal(hex.q, hex.r, radius, false);
     this.emit('move', { from, to: hex, newlyRevealed });
 
     const costs = [];
-    if (hex.supplyCost > 0) costs.push(t('log.cost.supplies', { n: hex.supplyCost }));
-    if (hex.hpCost > 0) costs.push(t('log.cost.hp', { n: hex.hpCost }));
+    if (cost.supplyCost > 0) costs.push(t('log.cost.supplies', { n: cost.supplyCost }));
+    if (cost.hpCost > 0) costs.push(t('log.cost.hp', { n: cost.hpCost }));
     this.addLog('log.moved', { turn: s.turn, where: { hex: { type: hex.type, biome: hex.biome, q: hex.q, r: hex.r, encounter: hex.encounter } }, fatigue: s.fatigue });
     if (costs.length) this.addLog('log.moved.costs', { costs: costs.join(', ') });
-    if (hex.hpCost > 0) this.damageParty(hex.hpCost, 'log.climb');
+    if (cost.hpCost > 0) this.damageParty(cost.hpCost, 'log.climb');
     if (!this.livingUnits().length) {
       s.status = 'lost';
       s.endReason = ['log.perished', { turn: s.turn }];
@@ -918,13 +939,6 @@ export class Game {
         effect = t('effect.rest', { pct: `${Math.round(this.config.rest.healFraction * 100)}%` });
         break;
       }
-      case 'lore':
-      default: {
-        const id = this.rng.pick(LORE_IDS);
-        title = t('lore.combined', { event: title, lore: t(`lore.${id}.title`) });
-        text = t(`lore.${id}.text`);
-        effect = t('effect.lore');
-      }
     }
     if (effect) this.addLog('log.effect', { effect });
     this.emit('change');
@@ -1013,16 +1027,35 @@ export class Game {
     return pick;
   }
 
-  blackMarketDeal(index) {
+  // Two random DISTINCT upgrade suggestions for this one unit (fewer if it has
+  // only one left to learn) - the player picks between them; nothing is
+  // unlocked yet and no HP is spent until blackMarketDeal() is called.
+  blackMarketOffers(index) {
     const u = this.state.party[index];
-    const cfg = this.config.events;
-    if (!u || !u.alive) return false;
-    const pick = this.unlockRandomUpgrade(u);
-    if (!pick) return false;
-    const loss = Math.max(1, Math.round(u.maxHp * cfg.blackMarketHpFraction));
+    if (!u || !u.alive) return [];
+    return this.shuffle(availableUpgrades(u)).slice(0, 2);
+  }
+
+  // The max HP the unit would pay - same number either offer costs, so the
+  // dialog can show it before the player has picked one.
+  blackMarketHpLoss(index) {
+    const u = this.state.party[index];
+    if (!u) return 0;
+    return Math.max(1, Math.round(u.maxHp * this.config.events.blackMarketHpFraction));
+  }
+
+  // Unlocks the CHOSEN ref (one of blackMarketOffers()'s entries) for the unit,
+  // at the usual HP price.
+  blackMarketDeal(index, ref) {
+    const u = this.state.party[index];
+    if (!u || !u.alive || !ref) return false;
+    const offer = availableUpgrades(u).find((o) => o.ref === ref);
+    if (!offer || !unlockUpgrade(u, ref)) return false;
+    this.refreshSimPower(u);
+    const loss = this.blackMarketHpLoss(index);
     u.maxHp = Math.max(1, u.maxHp - loss);
     u.hp = Math.min(u.hp, u.maxHp);
-    this.addLog('log.blackMarket', { name: { name: u.name }, loss, upgrade: { key: `upgrade.${pick.abilityId}.${pick.nodeId}.name` } });
+    this.addLog('log.blackMarket', { name: { name: u.name }, loss, upgrade: { key: `upgrade.${offer.abilityId}.${offer.nodeId}.name` } });
     this.emit('change');
     return true;
   }
