@@ -18,13 +18,18 @@ export class Game {
   // `scenario` switches the run into SCENARIO MODE (src/scenarios/): the map is
   // built from the scenario's data instead of the generator, and every roll the
   // script covers (forced fights, event picks, enemy groups) is read from it.
-  constructor(config, seed, scenario = null) {
+  // `layer` is which layer of the worldflake the run happens on (config.layers;
+  // main.js passes the start screen's selection - for now it only recolours the
+  // biomes, see map.js biomeColorFor).
+  constructor(config, seed, scenario = null, layer = null) {
     this.config = config;
     this.seed = seed;
     this.scenario = scenario;
+    this.layer = layer ?? config.layers?.startLayer ?? 4;
     this.scenarioState = { ambushesDone: new Set() };   // runtime; scenario data stays untouched
     this.rng = createRng(seed);
-    this.map = scenario ? buildScenarioMap(config, scenario) : generateMap(config, this.rng);
+    this.map = scenario ? buildScenarioMap(config, scenario) : generateMap(config, this.rng, this.layer);
+    this.map.layer = this.layer;
     // Enemy groups are rolled up front for every battle tile, so the danger of a revealed
     // battle can be shown before the party enters it. (Scenario battles come authored.)
     for (const h of this.map.hexes.values()) {
@@ -497,6 +502,15 @@ export class Game {
           return false;
         }
         this.emit('dialog', { kind: 'acolyte', lore: this.pickFlavour('acolyte') });
+        return true;
+      }
+      case 'gate': {
+        // The layer gate (the green pyramid): the party learns of another layer
+        // of the worldflake. WHICH layer it opens is meta-progression - main.js
+        // keeps the unlock chain in the browser (like the tutorial progress)
+        // and fills the dialog; the rules layer only consumes the tile.
+        this.consume(hex, type, forced);
+        this.emit('dialog', { kind: 'gate' });
         return true;
       }
       default:

@@ -18,10 +18,17 @@ export const ENCOUNTERS = {
       shop: 0.75,
       treasure: 0.8,
       acolyte: 0.15,   // very rare as a random roll...
+      // The layer gate: EXTREMELY rare - most maps have none, and "unique"
+      // below caps it at one. Entering it unlocks the next layer of the
+      // worldflake (config.layers.unlockOrder; the chain is meta-progression,
+      // remembered by the browser across runs).
+      gate: 0.03,
     },
     guaranteed: { acolyte: 1 },   // ...but at least this many per map
-    // Visual placeholders. "shape" is one of: octahedron, icosahedron, box, cone, dodecahedron
-    // Labels and descriptions live in the locale tables (visual.<type>.label / .info).
+    unique: ['gate'],             // types that appear at most ONCE per map
+    // Visual placeholders. "shape" is one of: octahedron, icosahedron, box, cone,
+    // dodecahedron, pyramid. Labels and descriptions live in the locale tables
+    // (visual.<type>.label / .info).
     visuals: {
       battle: { color: 0xe2474b, shape: 'octahedron' },
       event: { color: 0xa56cf5, shape: 'icosahedron' },
@@ -31,6 +38,7 @@ export const ENCOUNTERS = {
       stasisSeed: { color: 0x9b1c31, shape: 'cone' },
       stasisColony: { color: 0x6e2c8f, shape: 'cone' },
       acolyte: { color: 0xfff3b0, shape: 'icosahedron' },
+      gate: { color: 0x35d17a, shape: 'pyramid' },   // the green pyramid
       // The waypoint that completes a scenario (tutorial) map. Never generated on
       // normal maps, so it is hidden from the legend.
       goal: { color: 0x9fd9ff, shape: 'cone', hidden: true },
@@ -142,6 +150,7 @@ export const ENCOUNTERS = {
       shop: 'optional',
       event: 'optional',
       treasure: 'never',
+      gate: 'never',
     },
     // Notes for the 'optional' ones are in the locale tables (reset.note.<type>).
     // Which encounters fatigue can force the party into on arrival.

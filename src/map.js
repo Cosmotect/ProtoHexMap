@@ -19,9 +19,15 @@ import { createNoise } from './noise.js';
  * Returns { hexes: Map<key, hex>, start, seed, colonies, shortestPath, bounds }.
  * Each hex: { q, r, ring, key, type, biome, passable, supplyCost, encounter,
  *             revealed, visited, x, y }   (x, y = 2D plane position)
+ *
+ * `layer` is WHICH LAYER of the worldflake this map belongs to (config.layers;
+ * 0 = the core, the run starts on startLayer). For now a layer only changes the
+ * biome palette at render time (biomeColorFor below) - this is the hook where a
+ * layer will later pick its own biomes, spawns, encounter types and rules.
  */
-export function generateMap(config, rng) {
+export function generateMap(config, rng, layer = null) {
   const { radius, orientation, hexSize } = config.map;
+  const mapLayer = layer ?? config.layers?.startLayer ?? 4;
 
   let attempt = 0;
   let result = null;
@@ -44,7 +50,16 @@ export function generateMap(config, rng) {
 
   placeEncounters(result, config, rng);
   result.attempts = attempt;
+  result.layer = mapLayer;
   return result;
+}
+
+// The colour a biome wears on a given layer of the worldflake: its color<N>
+// entry, falling back to the plain `color` (config/world.js documents the
+// scheme). Read by the renderer, so recolouring a run is just redrawing.
+export function biomeColorFor(biomeDef, layer) {
+  if (!biomeDef) return 0xffffff;
+  return biomeDef[`color${layer}`] ?? biomeDef.color;
 }
 
 function buildLayout(config, rng, radius, orientation, hexSize) {
@@ -253,6 +268,16 @@ function placeEncounters(result, config, rng) {
     if (rng.chance(enc.density)) {
       h.encounter = rng.weighted(enc.weights);
     }
+  }
+
+  // Unique types (the layer gate) appear AT MOST once per map: the weighted
+  // roll above may rarely land one twice, so extras are cleared, keeping one
+  // seeded pick.
+  for (const type of enc.unique ?? []) {
+    const spots = [...result.hexes.values()].filter((h) => h.encounter === type);
+    if (spots.length <= 1) continue;
+    const keep = spots[Math.floor(rng.random() * spots.length)];
+    for (const h of spots) if (h !== keep) h.encounter = null;
   }
 
   // Guaranteed minimums (e.g. at least one Acolyte per map): top up on random empty tiles.

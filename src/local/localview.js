@@ -1185,6 +1185,58 @@ export class LocalMapView {
     this.camera.updateProjectionMatrix();
   }
 
+  // ----- the layer-switch camera roll (start screen) -------------------------
+  // The camera rotates a full 360 degrees around its own FORWARD axis - the
+  // line from the camera through the campfire, laid flat at ground level.
+  // Rolling around that line sweeps the camera sideways, down UNDER the arena
+  // floor and back up the other side, while the shot stays aimed at the fire:
+  // on screen the whole world rotates, the ground swallows the camera, and it
+  // surfaces again into the same composed pose. At the halfway point (fully
+  // underground, nothing recognisable on screen) onHalf fires - that is where
+  // main.js swaps the worldflake layer, so the camera comes up over the new
+  // palette. The base pose is captured ONCE and re-applied at the end, so the
+  // roll survives the mid-roll scene rebuild (the rebuilt campfire composes
+  // the same shot; only the camera object is new, and stepLayerRoll always
+  // drives whichever camera is current).
+  startLayerRoll({ durationMs = 2600, onHalf = null, onDone = null } = {}) {
+    if (this.layerRoll || !this.camera) return false;
+    const pose = { pos: this.camera.position.clone(), quat: this.camera.quaternion.clone(), up: this.camera.up.clone() };
+    const axis = new THREE.Vector3();
+    this.camera.getWorldDirection(axis);
+    axis.y = 0;
+    if (axis.lengthSq() < 1e-6) axis.set(0, 0, -1);
+    axis.normalize();
+    // The fire sits at the arena's centre; ground level = the tiles' baseline top.
+    const pivot = new THREE.Vector3(0, this.baseTileHeight ?? 0, 0);
+    this.layerRoll = { t0: performance.now(), dur: durationMs, pose, axis, pivot, halfFired: false, onHalf, onDone };
+    return true;
+  }
+  stepLayerRoll() {
+    const r = this.layerRoll;
+    if (!r || !this.camera) return;
+    const t = Math.min(1, (performance.now() - r.t0) / r.dur);
+    const e = t * t * (3 - 2 * t);              // smoothstep: eases in, fast underground, eases out
+    const angle = e * Math.PI * 2;
+    if (!r.halfFired && angle >= Math.PI) {
+      r.halfFired = true;
+      // The swap rebuilds the scene (and the camera object) under us; the roll
+      // state survives on the instance and keeps driving the new camera.
+      if (r.onHalf) r.onHalf();
+    }
+    if (t >= 1) {
+      this.camera.position.copy(r.pose.pos);
+      this.camera.quaternion.copy(r.pose.quat);
+      this.camera.up.copy(r.pose.up);
+      this.layerRoll = null;
+      if (r.onDone) r.onDone();
+      return;
+    }
+    const q = new THREE.Quaternion().setFromAxisAngle(r.axis, angle);
+    this.camera.position.copy(r.pose.pos).sub(r.pivot).applyQuaternion(q).add(r.pivot);
+    this.camera.quaternion.copy(q).multiply(r.pose.quat);
+    this.camera.up.copy(r.pose.up).applyQuaternion(q);
+  }
+
   // Called every frame while the local map is on screen.
   // Which status badge (if any) the cursor is over, and the tooltip for it.
   //
@@ -1243,6 +1295,7 @@ export class LocalMapView {
 
   update(dt) {
     this.elapsed += dt;
+    this.stepLayerRoll();
     if (this.controls) this.controls.update();
     if (this.walk) this.stepWalk(performance.now());
     for (const m of this.tokens) {

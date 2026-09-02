@@ -89,6 +89,51 @@ button.npe:hover { background: rgba(85, 175, 140, 0.7); }
 .top-center { left: 0; right: 0; top: 14px; margin: 0 auto; width: fit-content; }
 /* Only the action button lives down here now. */
 .statusbar { display: flex; align-items: center; gap: 22px; padding: 10px 18px; }
+
+/* ----- the layer selector (start screen) --------------------------------------
+   Sits right ABOVE the Begin journey button; the option list expands UPWARDS
+   (the worldflake read top to bottom: layer 8 first, the core last). */
+.layer-select {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 176px;
+}
+.layer-current {
+  width: 100%;
+  font-family: var(--mono);
+  letter-spacing: 0.06em;
+  background: rgba(10, 14, 24, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 9px;
+  padding: 8px 12px;
+}
+.layer-current:hover { border-color: var(--accent); }
+.layer-options {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border-radius: 10px;
+  background: rgba(10, 14, 24, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+.layer-options button {
+  width: 100%;
+  text-align: center;
+  font-family: var(--mono);
+  padding: 6px 10px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid transparent;
+}
+.layer-options button:hover { border-color: rgba(255, 255, 255, 0.35); }
+.layer-options button.current { border-color: var(--accent); color: var(--accent); }
 .version {
   color: var(--muted);
   font-weight: 400;

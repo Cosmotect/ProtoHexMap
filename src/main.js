@@ -144,11 +144,15 @@ function enterStartScreen() {
   const open = (i) => openRosterFor(i);
   cinematic.localView.enablePicking(open);
   ui.setStartScreen(true, { onUnitClick: open });
+  // Mid-roll re-entry (the layer switch restarts the run at the underside):
+  // the ride is not over, so clicks stay off until the camera surfaces.
+  if (layerRolling) cinematic.localView.disablePicking();
+  refreshLayerSelector();
   ui.update(game);
 }
 
 function openRosterFor(slotIndex) {
-  if (!startScreen || ui.rosterOpen()) return;
+  if (!startScreen || layerRolling || ui.rosterOpen()) return;
   ui.openRoster({
     slotIndex,
     party: game.state.party,
@@ -342,7 +346,7 @@ ui = createUI(CONFIG, {
   onWinBattle: () => { if (battle) battle.debugResolve(true); },
   onEnter: () => {
     if (startScreen) {
-      if (!ui.rosterOpen() && !settings.isOpen()) beginJourney();
+      if (!layerRolling && !ui.rosterOpen() && !settings.isOpen()) beginJourney();
       return;
     }
     if (renderer.busy || ui.dialogOpen() || tutorial.isBlocking() || cinematic.isActive()) return;
@@ -382,6 +386,63 @@ function firstUnfinishedTutorial() {
   return s ?? scenarioById('tutorial1');
 }
 
+// ----- layer progression -----------------------------------------------------
+// How much of the worldflake this browser has unlocked (meta-progression, like
+// the tutorial): the rare GATE encounter advances the chain one layer at a time
+// along config.layers.unlockOrder (4 first, the core last). Stored as a COUNT,
+// so retuning the order in config never invalidates an old save.
+const LAYERS_KEY = 'hexmap-layers-progress';
+function unlockedLayerCount() {
+  const max = (CONFIG.layers?.unlockOrder ?? [4]).length;
+  try { return Math.min(max, Math.max(1, Number(localStorage.getItem(LAYERS_KEY)) || 1)); } catch { return 1; }
+}
+function unlockedLayers() { return (CONFIG.layers?.unlockOrder ?? [4]).slice(0, unlockedLayerCount()); }
+// Advances the chain; returns the newly unlocked layer id, or null when the
+// whole worldflake (core included) is already known.
+function unlockNextLayer() {
+  const order = CONFIG.layers?.unlockOrder ?? [4];
+  const count = unlockedLayerCount();
+  if (count >= order.length) return null;
+  try { localStorage.setItem(LAYERS_KEY, String(count + 1)); } catch { /* private mode etc. */ }
+  return order[count];
+}
+const layerLabel = (n) => (n === 0 ? t('layer.core') : t('layer.name', { n }));
+let currentLayer = CONFIG.layers?.startLayer ?? 4;   // the layer the NEXT run generates on
+let layerRolling = false;                            // the switch cinematic is playing
+
+// The selector above Begin journey: only on the start screen, only once a
+// second layer is unlocked, and never while the roll cinematic is playing.
+function refreshLayerSelector() {
+  const layers = unlockedLayers();
+  ui.setLayerSelector(startScreen && !layerRolling && layers.length > 1
+    ? { layers, current: currentLayer, onSelect: switchLayer }
+    : null);
+}
+
+// The layer-switch cinematic: the camera barrel-rolls 360 degrees around its
+// own forward axis (through the campfire, at ground level), diving under the
+// arena floor. At the halfway point - fully underground, nothing on screen -
+// the run restarts on the chosen layer (same seed, roster choices kept), so
+// the camera surfaces over the recoloured world and settles back into the
+// composed shot.
+function switchLayer(layer) {
+  if (layerRolling || !startScreen || layer === currentLayer) return;
+  layerRolling = true;
+  refreshLayerSelector();                       // hides the selector for the ride
+  cinematic.localView.disablePicking();
+  const seed = game.seed;
+  const party = game.state.party;
+  cinematic.localView.startLayerRoll({
+    durationMs: CONFIG.layers?.rollMs ?? 2600,
+    onHalf: () => startRun(seed, { layer, preserveParty: party }),
+    onDone: () => {
+      layerRolling = false;
+      if (startScreen) cinematic.localView.enablePicking(openRosterFor);
+      refreshLayerSelector();
+    },
+  });
+}
+
 // ----- scenario mode (src/scenarios/): hand-authored maps, the tutorial -----
 // A scenario's configPatch temporarily rewrites CONFIG values for its run (a
 // tighter fatigue table, say). The old values come back when a run without
@@ -416,7 +477,13 @@ function startRun(seed, opts = {}) {
   tutorial.finish('restart');
   activeScenario = opts.scenario ?? null;
   applyScenarioPatch(activeScenario);
-  game = new Game(CONFIG, seed, activeScenario);
+  // The worldflake layer this run generates on: the start screen's selection
+  // carries over between runs; the layer-switch roll passes an explicit one.
+  currentLayer = opts.layer ?? currentLayer;
+  game = new Game(CONFIG, seed, activeScenario, currentLayer);
+  // A layer switch on the start screen restarts the run mid-roll: the party
+  // (with any roster swaps already made) walks over into the new one.
+  if (opts.preserveParty) game.state.party = opts.preserveParty;
   window.game = game; // handy for poking at the state in the browser console
   // Forced fights (fatigue) take the same dive as the Enter button.
   game.combatIntro = (hex, resume) => (cinematic.isActive() ? false : startCombatDive(hex, resume));
@@ -663,6 +730,19 @@ function showDialog(d) {
       game,
       onPick: (i) => { game.restoreUnit(i); ui.closeDialog(); },
       skip: { text: t('acolyte.skip'), onSkip: () => ui.closeDialog() },
+    });
+  } else if (d.kind === 'gate') {
+    // The layer gate: the green pyramid taught the party another layer of the
+    // worldflake. The unlock chain is meta-progression, so it advances here in
+    // the UI layer, not in the run's rules.
+    const unlocked = unlockNextLayer();
+    const effect = unlocked != null
+      ? `${t('gate.unlocked', { layer: layerLabel(unlocked) })}${unlockedLayerCount() === 2 ? ` ${t('gate.selectorHint')}` : ''}`
+      : t('gate.exhausted');
+    ui.openDialog({
+      title: t('gate.title'),
+      html: `<p>${escapeHtml(t('gate.text'))}</p><div class="effect">${escapeHtml(effect)}</div>`,
+      actions: [{ label: t('dialog.continue'), onClick: () => ui.closeDialog() }],
     });
   }
 }

@@ -139,6 +139,10 @@ balance must be re-measured against interactive play.
     remaining stock.
   * *Acolyte*: revives one fallen unit at `acolyte.reviveFraction` (50%) HP; not
     consumed if nobody has fallen.
+  * *Layer gate*: a GREEN PYRAMID, extremely rare (weight 0.03) and unique - the
+    `encounters.unique` list caps it at one per map. Entering it unlocks the next
+    layer of the worldflake (see "Layers of the worldflake" below), shows the
+    lore dialog and is consumed. Never forced; does not reset fatigue.
   * Battle victories, treasure, shops, the Acolyte and camps each draw a flavour lore
     line from their pool (`FLAVOUR_POOL` in game.js; texts in the locale table).
 * **Camera**: perspective only, follows the player with a glide
@@ -188,6 +192,42 @@ balance must be re-measured against interactive play.
   `?scenario=<id>` skip the ceremony.
 * **Seeds**: `?seed=...` in the URL, the HUD and the copy-link button; same seed =
   same map. The run-over overlay offers "Inspect the map".
+
+## Layers of the worldflake (config.layers, map.js, the gate)
+
+Beating the Stasis Seed wins a battle, not the war: the affliction's true source
+sits in the CORE of the worldflake, and the world is a stack of 8 layers around
+it. The party starts on layer 4 and learns the deeper truth through the rare
+GATE encounters.
+
+* **Config** (`config/world.js` layers): `startLayer` (4), `unlockOrder`
+  ([4, 5, 3, 6, 2, 7, 1, 8, 0] - 0 is the core), `rollMs` (the switch cinematic).
+* **Generation**: the layer is an argument to `generateMap(config, rng, layer)`
+  and lands on `map.layer` / `game.layer` - the hook where a layer will later
+  pick its own biomes, NPC spawns, encounter types and rules. FOR NOW a layer
+  only swaps the biome palette: every biome carries `color0`..`color8`
+  (settings-editable in World > biomes; `color` doubles as the start layer's
+  value and the fallback), `biomeColorFor(biomeDef, layer)` in map.js resolves
+  it and the renderer's `targetColorFor` reads it, so the world, the arena
+  backdrop and the edge-colour pull all recolour together. The wither biome
+  deliberately looks the SAME on every layer, so the rot always reads as the rot.
+* **Unlocking** (main.js): meta-progression like the tutorial, stored in the
+  browser (`hexmap-layers-progress`, a COUNT along unlockOrder so retuning the
+  order keeps old saves). Each gate advances the chain by one; the dialog names
+  the layer and, on the second unlock, points at the new selector. When all
+  nine are known the gate only hums.
+* **The layer selector** (start screen): once 2+ layers are unlocked, a
+  dropdown sits right ABOVE "Begin journey" and expands UPWARDS, layers listed
+  top (8) to bottom (the core) like the stack itself. Picking a different layer
+  plays the SWITCH CINEMATIC: `localView.startLayerRoll` rotates the camera a
+  full 360 degrees around its own forward axis (through the campfire, at
+  ground level) - the world appears to roll, the camera submerges into the
+  ground, and at the halfway point (nothing on screen but the underside)
+  main.js restarts the run on the chosen layer with the SAME seed and the
+  party's roster choices preserved; the camera then surfaces over the
+  recoloured world and settles back into the composed shot. Clicks (roster,
+  Begin journey, the selector) are off for the ride. The selection carries to
+  every following run until changed.
 
 ## The bestiary - enemies, groups, bands (src/config/units.js)
 

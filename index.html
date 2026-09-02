@@ -107,8 +107,14 @@
       </div>
 
       <!-- Status bar: just the one action button. Supplies, fatigue and the turn
-           all live in the top-centre bar. -->
+           all live in the top-centre bar. On the start screen, once a second
+           worldflake layer is unlocked, the layer selector sits right above the
+           Begin journey button and expands UPWARDS (src/ui.js fills it). -->
       <div class="panel bottom-center statusbar" id="statusbar">
+        <div id="layer-select" class="layer-select hidden">
+          <div id="layer-options" class="layer-options hidden"></div>
+          <button id="btn-layer" class="layer-current"></button>
+        </div>
         <button id="btn-enter" class="enter" disabled>Enter</button>
       </div>
 

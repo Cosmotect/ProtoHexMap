@@ -709,7 +709,7 @@ export function createUI(config, handlers) {
     startScreenMode = !!v;
     onPartyUnitClick = v ? (opts.onUnitClick ?? null) : null;
     document.body.classList.toggle('start-screen', startScreenMode);
-    if (!v) closeRoster();
+    if (!v) { closeRoster(); setLayerSelector(null); }
   }
   els.party.addEventListener('click', (e) => {
     if (!startScreenMode || !onPartyUnitClick) return;
@@ -717,6 +717,41 @@ export function createUI(config, handlers) {
     if (!card) return;
     onPartyUnitClick([...els.party.children].indexOf(card));
   });
+
+  // ----- the layer selector (start screen) ---------------------------------
+  // A dropdown that expands UPWARDS from just above the Begin journey button,
+  // listing the unlocked layers of the worldflake top (8) to bottom (the
+  // core), the way the layers physically stack. main.js shows it only once a
+  // second layer is unlocked; picking a DIFFERENT layer plays the camera-roll
+  // switch (the current one just closes the list).
+  const layerSelectEl = $('layer-select');
+  const layerBtn = $('btn-layer');
+  const layerOptionsEl = $('layer-options');
+  let layerOpts = null;
+  const layerLabel = (n) => (n === 0 ? t('layer.core') : t('layer.name', { n }));
+  layerBtn.addEventListener('click', () => {
+    if (!layerOpts) return;
+    layerOptionsEl.classList.toggle('hidden');
+  });
+  layerOptionsEl.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-layer]');
+    if (!b || !layerOpts) return;
+    layerOptionsEl.classList.add('hidden');
+    const layer = Number(b.dataset.layer);
+    if (layer !== layerOpts.current && layerOpts.onSelect) layerOpts.onSelect(layer);
+  });
+  // opts: { layers: [ids], current, onSelect(layer) } or null to hide.
+  function setLayerSelector(opts) {
+    layerOpts = opts ?? null;
+    layerOptionsEl.classList.add('hidden');
+    layerSelectEl.classList.toggle('hidden', !layerOpts);
+    if (!layerOpts) return;
+    layerBtn.textContent = `${layerLabel(layerOpts.current)} ▴`;
+    layerBtn.title = t('layer.title');
+    const sorted = [...layerOpts.layers].sort((a, b) => b - a);   // 8 on top, the core last
+    layerOptionsEl.innerHTML = sorted.map((n) =>
+      `<button data-layer="${n}" class="${n === layerOpts.current ? 'current' : ''}">${escapeHtml(layerLabel(n))}</button>`).join('');
+  }
 
   // ----- the roster grid (fighting-game style character select) ------------
   // Picking a card no longer swaps the unit on the spot: it only marks that
@@ -853,7 +888,7 @@ export function createUI(config, handlers) {
     return `<svg class="ability-tree" viewBox="0 0 ${W} ${H}">${lines}${nodes}</svg>`;
   }
 
-  return { update, renderLog, setHover, showEnd, hideEnd, openDialog, closeDialog, dialogOpen, flashDialog, confirm, chooseUnit, chooseUpgrade, showBanner, buildLegend, buildFatigueBar, updateBlur, setStartScreen, openRoster, closeRoster, rosterOpen, setBattleMode, updateBattle };
+  return { update, renderLog, setHover, showEnd, hideEnd, openDialog, closeDialog, dialogOpen, flashDialog, confirm, chooseUnit, chooseUpgrade, showBanner, buildLegend, buildFatigueBar, updateBlur, setStartScreen, setLayerSelector, openRoster, closeRoster, rosterOpen, setBattleMode, updateBattle };
 }
 
 // Log parameters are stored language-neutral and resolved at render time:

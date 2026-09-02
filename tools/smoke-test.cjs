@@ -24,6 +24,8 @@ try {
 
 // nostart=1 skips the start screen (splash + campfire): these sections test the world flow.
 const URL = process.env.URL || 'http://localhost:4173/?seed=777&nostart=1';
+// How long the layer-switch camera roll takes (config.layers.rollMs).
+const CONFIG_ROLL_MS = 2600;
 const OUT = process.env.OUT || path.join(__dirname, 'shots');
 fs.mkdirSync(OUT, { recursive: true });
 
@@ -135,12 +137,15 @@ fs.mkdirSync(OUT, { recursive: true });
   // before the dialog is built). Fights are interactive now: enter() dives into
   // the arena and starts the engine; the test wins instantly via debugResolve.
   await page.evaluate(() => { const g = window.game; const hex = g.state.position; hex.encounter = 'battle'; hex.enemies = [{ name: 'Dummy', hp: 1, maxHp: 1, power: 0, alive: true }]; g.enter(false); });
-  await page.waitForFunction(() => !!window.__battle, null, { timeout: 30000 });
+  // The engine is built at the SWAP point, while the camera is still landing:
+  // wait for the flight to finish before reading the on-screen state.
+  await page.waitForFunction(() => !!window.__battle && window.__cinematic.mode() === 'local', null, { timeout: 30000 });
   const engineState = await page.evaluate(() => ({
     mode: window.__cinematic.mode(),
     bar: !document.getElementById('battle-bar').classList.contains('hidden'),
     units: window.__battle.state.units.length,
-    wave: Object.values(window.__battle.state.heights).some((h) => h > 0),
+    // Heights sit around the neutral middle step now: a wave means variety.
+    wave: new Set(Object.values(window.__battle.state.heights)).size > 1,
     abilities: window.__battle.state.units.every((u) => u.abilityIds.length > 0),
   }));
   if (engineState.mode !== 'local') problems.push('battle engine started outside the local map: ' + JSON.stringify(engineState));
@@ -172,12 +177,12 @@ fs.mkdirSync(OUT, { recursive: true });
   const unlocked = await page.evaluate(() => ({
     total: window.game.state.party.reduce((a, u) => a + (u.upgrades?.length ?? 0), 0),
     refShape: window.game.state.party.every((u) => (u.upgrades ?? []).every((r) => /^[a-z]+:[a-z]+$/.test(r))),
-    chips: document.querySelectorAll('#party-units .ab-chip').length,
-    marked: document.querySelectorAll('#party-units .ab-chip b').length,
+    chips: document.querySelectorAll('#party-units .u-slot.ab:not(.empty)').length,
+    marked: document.querySelectorAll('#party-units .u-slot.ab b').length,
   }));
   if (unlocked.total !== 1 || !unlocked.refShape) problems.push('the reward pick did not unlock exactly one tree node: ' + JSON.stringify(unlocked));
-  if (unlocked.chips !== 6) problems.push(`party panel should show 2 ability chips per unit (6), got ${unlocked.chips}`);
-  if (unlocked.marked !== 1) problems.push('the unlocked upgrade is not counted on its ability chip: ' + JSON.stringify(unlocked));
+  if (unlocked.chips !== 6) problems.push(`party panel should show 2 filled ability sockets per unit (6), got ${unlocked.chips}`);
+  if (unlocked.marked !== 1) problems.push('the unlocked upgrade is not counted on its ability socket: ' + JSON.stringify(unlocked));
   // Closing the last window flies the camera back out to the world map.
   await page.waitForFunction(() => window.__cinematic.mode() === 'idle', null, { timeout: 25000 }).catch(() => problems.push('did not fly back out after the reward chooser'));
 
@@ -228,9 +233,12 @@ fs.mkdirSync(OUT, { recursive: true });
     const t0 = lv.map.hexes.get('0,0');
     const backs = lv.scene.children.filter((c) => c.isMesh && c.userData.key === undefined
       && c.geometry.type === 'CylinderGeometry' && c.geometry.parameters.radiusTop > cfgL.hexSize * 3);
+    // Levels are centred on the neutral MIDDLE step (elevationLevels 4 -> 2):
+    // that step renders at the type baseline, others offset by elevationStep.
+    const mid = cfgL.elevationMid ?? 2;
     return {
       expected, base: lv.baseTileHeight, backs: backs.length,
-      tileOk: Math.abs((t0.top - (t0.elevation ?? 0) * (cfgL.elevationStep ?? 0.35)) - expected) < 1e-6,
+      tileOk: Math.abs((t0.top - ((t0.elevation ?? mid) - mid) * (cfgL.elevationStep ?? 0.35)) - expected) < 1e-6,
       backBottomsOk: backs.every((b) => Math.abs(b.position.y) < 1e-6),
     };
   });
@@ -435,6 +443,9 @@ fs.mkdirSync(OUT, { recursive: true });
     tokens: window.__localView.tokens.length,
   }));
   if (!boot.splash || !boot.start || !/Begin journey/.test(boot.btn) || !boot.campfire || boot.tokens !== 3) problems.push('start screen boot state wrong: ' + JSON.stringify(boot));
+  // With only the starting layer unlocked there is no layer selector.
+  const layerHidden = await page.evaluate(() => document.getElementById('layer-select').classList.contains('hidden'));
+  if (!layerHidden) problems.push('layer selector should be hidden with a single unlocked layer');
   await page.waitForFunction(() => !document.getElementById('splash'), null, { timeout: 15000 }).catch(() => problems.push('splash did not fade away'));
   await page.screenshot({ path: path.join(OUT, '31-campfire.png') });
   // Roster: click a party-panel unit, swap in a new companion.
@@ -445,7 +456,9 @@ fs.mkdirSync(OUT, { recursive: true });
     cards: document.querySelectorAll('.roster-card').length,
     taken: document.querySelectorAll('.roster-card.taken').length,
   }));
-  if (!roster.open || roster.cards !== 10 || roster.taken !== 3) problems.push('roster grid wrong: ' + JSON.stringify(roster));
+  // The slot's own unit is the confirmed (green) card, not "taken"; only the
+  // OTHER two party members are locked out of this slot.
+  if (!roster.open || roster.cards !== 10 || roster.taken !== 2) problems.push('roster grid wrong: ' + JSON.stringify(roster));
   // The unit detail window below the grid: portrait + story on the left, TWO
   // ability sections with their 5-node upgrade trees drawn as SVG.
   const detail = await page.evaluate(() => ({
@@ -467,10 +480,18 @@ fs.mkdirSync(OUT, { recursive: true });
   const hoverName = await page.evaluate(() => document.querySelector('#unit-detail .ud-name')?.textContent);
   if (hoverName !== 'Duskblade') problems.push('hovering a roster card did not preview it: ' + hoverName);
   await page.screenshot({ path: path.join(OUT, '32-roster.png') });
+  // Clicking a card only SELECTS it; the swap happens on the confirm button.
   await page.evaluate(() => { [...document.querySelectorAll('.roster-card')].find((c) => c.textContent.includes('Stonestep')).click(); });
+  await page.waitForTimeout(200);
+  const pending = await page.evaluate(() => ({
+    selected: !!document.querySelector('.roster-card.selected'),
+    stillOld: window.game.state.party[0].name,
+  }));
+  if (!pending.selected || pending.stillOld === 'Stonestep') problems.push('clicking a roster card should only select it: ' + JSON.stringify(pending));
+  await page.evaluate(() => document.getElementById('btn-roster-confirm').click());
   await page.waitForTimeout(300);
-  const swapped = await page.evaluate(() => ({ name: window.game.state.party[0].name, tokens: window.__localView.tokens.length }));
-  if (swapped.name !== 'Stonestep' || swapped.tokens !== 3) problems.push('roster swap failed: ' + JSON.stringify(swapped));
+  const swapped = await page.evaluate(() => ({ name: window.game.state.party[0].name, tokens: window.__localView.tokens.length, closed: document.getElementById('roster').classList.contains('hidden') }));
+  if (swapped.name !== 'Stonestep' || swapped.tokens !== 3 || !swapped.closed) problems.push('roster swap failed: ' + JSON.stringify(swapped));
   // Begin journey: the same zoom-out as leaving a fight, ending on the world map.
   await page.click('#btn-enter');
   await page.waitForFunction(() => window.__cinematic.mode() === 'idle', null, { timeout: 25000 }).catch(() => problems.push('Begin journey did not reach the world map'));
@@ -478,6 +499,102 @@ fs.mkdirSync(OUT, { recursive: true });
   if (onWorld.start || /Begin journey/.test(onWorld.btn)) problems.push('world state after Begin journey wrong: ' + JSON.stringify(onWorld));
   await page.waitForTimeout(400);
   await page.screenshot({ path: path.join(OUT, '33-after-journey.png') });
+
+  // ----- The LAYER GATE: the green pyramid unlocks the next worldflake layer ---
+  // Generated gates are extremely rare and capped at one per map; the test
+  // plants one on the current tile instead and walks the unlock.
+  const gateSetup = await page.evaluate(() => {
+    const g = window.game;
+    const generated = [...g.map.hexes.values()].filter((h) => h.encounter === 'gate').length;
+    const hex = g.state.position;
+    hex.encounter = 'gate';
+    window.__renderer.loadGame(g);
+    const rec = window.__renderer.tiles.get(hex.key);
+    return {
+      generated,
+      layer: g.layer,
+      mapLayer: g.map.layer,
+      pyramid: rec?.marker?.geometry === window.__renderer.markerGeos.pyramid,
+      green: rec?.marker?.material?.color?.getHex() === g.config.encounters.visuals.gate.color,
+      legend: document.getElementById('legend-items').textContent.includes('Layer gate'),
+    };
+  });
+  if (gateSetup.generated > 1) problems.push(`gates must be unique per map, found ${gateSetup.generated}`);
+  if (gateSetup.layer !== 4 || gateSetup.mapLayer !== 4) problems.push('a fresh run should sit on the start layer (4): ' + JSON.stringify(gateSetup));
+  if (!gateSetup.pyramid || !gateSetup.green) problems.push('the gate marker is not a green pyramid: ' + JSON.stringify(gateSetup));
+  if (!gateSetup.legend) problems.push('the layer gate is missing from the legend');
+  await page.evaluate(() => window.game.enter(false));
+  await page.waitForTimeout(300);
+  const gateDlg = await page.evaluate(() => ({
+    open: !document.getElementById('dialog').classList.contains('hidden'),
+    title: document.getElementById('dialog-title').textContent,
+    body: document.getElementById('dialog-body').textContent,
+    stored: (() => { try { return localStorage.getItem('hexmap-layers-progress'); } catch { return null; } })(),
+    consumed: window.game.state.position.encounter === null,
+  }));
+  if (!gateDlg.open || !/Gate/i.test(gateDlg.title)) problems.push('entering the gate did not open its dialog: ' + JSON.stringify(gateDlg));
+  if (!/Layer 5/.test(gateDlg.body)) problems.push('the gate should unlock Layer 5 first (4 > 5 > 3 > ...): ' + gateDlg.body);
+  if (gateDlg.stored !== '2') problems.push('the layer unlock was not stored: ' + JSON.stringify(gateDlg));
+  if (!gateDlg.consumed) problems.push('the gate should be consumed on entry');
+  await page.screenshot({ path: path.join(OUT, '34-gate-dialog.png') });
+  await dismissDialog();
+
+  // ----- The LAYER SELECTOR + the roll cinematic ------------------------------
+  // Two layers are unlocked now: a fresh start screen grows the selector above
+  // Begin journey; picking Layer 5 barrel-rolls the camera under the ground,
+  // restarts the run on the new layer at the underside and surfaces over the
+  // recoloured world.
+  await page.goto(URL.replace(/\?.*$/, '') + '?seed=555', { waitUntil: 'load', timeout: 60000 });
+  await page.waitForTimeout(1200);
+  const sel = await page.evaluate(() => ({
+    visible: !document.getElementById('layer-select').classList.contains('hidden'),
+    label: document.getElementById('btn-layer').textContent,
+  }));
+  if (!sel.visible || !/Layer 4/.test(sel.label)) problems.push('layer selector wrong with two layers unlocked: ' + JSON.stringify(sel));
+  await page.click('#btn-layer');
+  await page.waitForTimeout(100);
+  const opts = await page.evaluate(() => ({
+    open: !document.getElementById('layer-options').classList.contains('hidden'),
+    order: [...document.querySelectorAll('#layer-options button')].map((b) => b.dataset.layer).join(','),
+  }));
+  // The list reads like the worldflake: higher layers on top (5 above 4).
+  if (!opts.open || opts.order !== '5,4') problems.push('layer options wrong: ' + JSON.stringify(opts));
+  await page.screenshot({ path: path.join(OUT, '35-layer-selector.png') });
+  // Same seed = same topology, so one revealed tile can be compared across layers.
+  const layerProbe = await page.evaluate(() => {
+    const g = window.game;
+    const h = [...g.map.hexes.values()].find((x) => x.revealed && !x.isStart && g.config.tileTypes[x.type].biomeTint);
+    return h ? { key: h.key, color: window.__renderer.targetColorFor(h).getHex() } : null;
+  });
+  if (!layerProbe) problems.push('no revealed biome-tinted tile to probe the layer palette with');
+  await page.evaluate(() => { [...document.querySelectorAll('#layer-options button')].find((b) => b.dataset.layer === '5').click(); });
+  await page.waitForTimeout(CONFIG_ROLL_MS * 0.35);
+  await page.screenshot({ path: path.join(OUT, '36-layer-roll.png') });
+  await page.waitForFunction(() => window.game && window.game.layer === 5, null, { timeout: 20000 }).catch(() => problems.push('the roll never swapped the run to layer 5'));
+  await page.waitForFunction(() => !window.__localView.layerRoll, null, { timeout: 20000 }).catch(() => problems.push('the layer roll never finished'));
+  await page.waitForTimeout(300);
+  const rolled = await page.evaluate(([key]) => {
+    const g = window.game;
+    const h = g.map.hexes.get(key);
+    return {
+      layer: g.layer, mapLayer: g.map.layer,
+      color: h ? window.__renderer.targetColorFor(h).getHex() : null,
+      start: window.__startScreen(), mode: window.__cinematic.mode(),
+      label: document.getElementById('btn-layer').textContent,
+      party: g.state.party.length,
+    };
+  }, [layerProbe?.key ?? '0,0']);
+  if (rolled.layer !== 5 || rolled.mapLayer !== 5) problems.push('layer switch did not land on 5: ' + JSON.stringify(rolled));
+  if (layerProbe && rolled.color === layerProbe.color) problems.push('the biome palette did not change with the layer');
+  if (!rolled.start || rolled.mode !== 'local' || !/Layer 5/.test(rolled.label)) problems.push('start screen state wrong after the roll: ' + JSON.stringify(rolled));
+  await page.screenshot({ path: path.join(OUT, '37-layer5-campfire.png') });
+  // Begin journey: the run now walks layer 5.
+  await page.click('#btn-enter');
+  await page.waitForFunction(() => window.__cinematic.mode() === 'idle', null, { timeout: 25000 }).catch(() => problems.push('Begin journey did not leave the layer-5 start screen'));
+  await page.waitForTimeout(400);
+  const onLayer5 = await page.evaluate(() => ({ layer: window.game.layer, start: window.__startScreen() }));
+  if (onLayer5.layer !== 5 || onLayer5.start) problems.push('the layer-5 journey did not begin: ' + JSON.stringify(onLayer5));
+  await page.screenshot({ path: path.join(OUT, '38-layer5-world.png') });
 
   // ----- SCENARIO ENGINE: the hand-authored tutorial map, walked end to end ----
   // Everything on it is scripted, so the whole walkthrough is deterministic:
@@ -623,10 +740,12 @@ fs.mkdirSync(OUT, { recursive: true });
           h00: b.state.heights['0,0'],
           hRamp: b.state.heights['0,1'],
           enemies: b.state.units.filter((u) => u.isEnemy).map((u) => u.pos).sort().join('|'),
-          raised: Object.values(b.state.heights).filter((h) => h > 0).length,
+          // Untouched tiles sit on the neutral middle step (2); the recipe's
+          // plateau (4) and ramp (3) are the only tiles ABOVE it.
+          raised: Object.values(b.state.heights).filter((h) => h > 2).length,
         };
       });
-      if (arena.h00 !== 2 || arena.hRamp !== 1) problems.push('guard arena recipe heights not applied: ' + JSON.stringify(arena));
+      if (arena.h00 !== 4 || arena.hRamp !== 3) problems.push('guard arena recipe heights not applied: ' + JSON.stringify(arena));
       if (arena.enemies !== '0,0|1,-1|2,-1') problems.push('guard arena fixed spawns not applied: ' + JSON.stringify(arena));
       if (arena.raised !== 7) problems.push('recipe arena should have exactly the 7 authored raised tiles: ' + JSON.stringify(arena));
       await page.screenshot({ path: path.join(OUT, '64-guard-arena.png') });

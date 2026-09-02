@@ -15,11 +15,13 @@
 // party approaching from the low south side. One plateau edge drops straight
 // to the floor - standing next to it invites a shove.
 const GUARD_ARENA = {
+  // Elevations are ABSOLUTE levels centred on the neutral middle step (2 with
+  // elevationLevels 4): 4 = two steps up, 3 = one step up, 2 = untouched.
   tiles: {
-    '0,0': { elevation: 2 }, '1,-1': { elevation: 2 }, '1,0': { elevation: 2 },
-    '0,-1': { elevation: 2 }, '2,-1': { elevation: 2 },
+    '0,0': { elevation: 4 }, '1,-1': { elevation: 4 }, '1,0': { elevation: 4 },
+    '0,-1': { elevation: 4 }, '2,-1': { elevation: 4 },
     // A ramp on the south-west side: the honest way up costs movement.
-    '-1,1': { elevation: 1 }, '0,1': { elevation: 1 },
+    '-1,1': { elevation: 3 }, '0,1': { elevation: 3 },
   },
   spawns: {
     enemies: ['0,0', '1,-1', '2,-1'],

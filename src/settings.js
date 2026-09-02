@@ -460,9 +460,10 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
   function kindOf(key, value, path) {
     if (typeof value === 'boolean') return 'bool';
     if (typeof value === 'number') {
-      // "color", anything ending in "Color" (groundColor, cloudColor...), and the
-      // whole colors section get a colour picker instead of a raw number.
-      const isColor = key === 'color' || /Color$/.test(key) || (path.startsWith('colors.') && !/tint|height/i.test(key));
+      // "color", the per-layer biome palette ("color0".."color8"), anything
+      // ending in "Color" (groundColor, cloudColor...), and the whole colors
+      // section get a colour picker instead of a raw number.
+      const isColor = key === 'color' || /^color\d+$/.test(key) || /Color$/.test(key) || (path.startsWith('colors.') && !/tint|height/i.test(key));
       return isColor ? 'color' : 'number';
     }
     return 'text';

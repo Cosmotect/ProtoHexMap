@@ -6,6 +6,7 @@ import { MapControls } from 'three/addons/controls/MapControls.js';
 import { tween, cancelTween, Ease, updateTweens } from './tween.js';
 import { hexDistance } from './hex.js';
 import { fatigueStepHue } from './game.js';
+import { biomeColorFor } from './map.js';
 
 const SQRT3 = Math.sqrt(3);
 const deg = (d) => (d * Math.PI) / 180;
@@ -212,6 +213,7 @@ export class MapRenderer {
       box: new THREE.BoxGeometry(0.42, 0.42, 0.42),
       cone: new THREE.ConeGeometry(0.3, 0.62, 14),
       dodecahedron: new THREE.DodecahedronGeometry(0.3),
+      pyramid: new THREE.ConeGeometry(0.34, 0.55, 4),   // the layer gate's green pyramid
     };
 
     // Stasis lines: short shared-geometry segments laid over the tiles (rebuilt per
@@ -542,7 +544,10 @@ export class MapRenderer {
       color = new THREE.Color(type.color);
       const biome = this.config.biomes[hex.biome];
       if (biome && (type.biomeTint || biome.tintAllTypes)) {
-        color.lerp(new THREE.Color(biome.color), biome.tintAmount ?? c.biomeTintAmount ?? 0.45);
+        // The biome's colour depends on WHICH LAYER of the worldflake this map
+        // is (color<N> per biome, map.js biomeColorFor).
+        const layerColor = biomeColorFor(biome, this.game?.map?.layer ?? this.config.layers?.startLayer ?? 4);
+        color.lerp(new THREE.Color(layerColor), biome.tintAmount ?? c.biomeTintAmount ?? 0.45);
       }
     }
     if (hex.visited && !hex.isStart && this.game.state.position !== hex) color.multiplyScalar(c.visitedTint);
