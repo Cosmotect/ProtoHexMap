@@ -9,7 +9,8 @@
 // =====================================================================
 import * as THREE from 'three';
 import { MapControls } from 'three/addons/controls/MapControls.js';
-import { generateLocalMap, pickRandomTiles, applyElevationWave, neutralElevation } from './localmap.js';
+import { generateLocalMap, pickRandomTiles, pickClusteredTiles, applyElevationWave, neutralElevation } from './localmap.js';
+import { hexKey, hexesInRange, hexDistance, axialToPlane } from '../hex.js';
 import { COMBAT_CONFIG } from '../config/abilities.js';
 import { createRng } from '../rng.js';
 import { t, hasKey } from '../i18n.js';
@@ -151,7 +152,18 @@ export class LocalMapView {
   // offset from the entered tile, final colour, and height difference. They become
   // huge uninteractive backdrop hexes around the arena, and pull the colour of
   // edge-facing arena tiles towards themselves (the sense of place).
-  build({ worldHex, baseColor, party, enemies, seed, recipe = null, layout = 'battle', neighbors = [], worldAzimuth = 0 }) {
+  // deployParty: true = the party is NOT put on the board here. The fly-in shows
+  //   an arena holding only the enemy, and the player picks the tiles themselves
+  //   once the camera lands (startDeployment below).
+  // partySpread: when the party IS scattered here, how many tiles apart its
+  //   members may end up (0 = anywhere in the arena). A fight nobody chose still
+  //   drops the party as a group, not one unit alone in a far corner.
+  // edges: the SIX world tiles sharing a side with this one, as
+  //   [{ dx, dy, isVoid }] - world-plane offset and whether that side is a hole
+  //   (an ether tile, or off the world map). They decide which arena edges kill
+  //   what is shoved over them; see computeVoidEdges.
+  build({ worldHex, baseColor, party, enemies, seed, recipe = null, layout = 'battle', neighbors = [],
+          edges = [], worldAzimuth = 0, deployParty = false, partySpread = 0 }) {
     this.dispose();
     const cfg = this.config.local;
     const rng = createRng((seed ?? 1) ^ ((worldHex?.q ?? 0) * 73856093) ^ ((worldHex?.r ?? 0) * 19349663));
@@ -261,15 +273,26 @@ export class LocalMapView {
     this.hlRingBackGeo = new THREE.RingGeometry(tileRadius * 0.72, tileRadius * 0.97, 6, 1, ringStart);
     this.hlRingBackGeo.rotateX(-Math.PI / 2);
 
+    // Which arena edges are a hole rather than a wall (see computeVoidEdges).
+    this.voidEdges = this.computeVoidEdges(edges);
+
     if (layout === 'camp') {
       this.buildCampfire();
       this.placeCampParty(party ?? []);
+    } else if (deployParty) {
+      // The player will place the party by hand once the camera lands, so only
+      // the enemy is on the board while the arena is still falling out of the
+      // clouds. awaitingDeployment() is how the caller knows to run that step.
+      this.deployPending = party ?? [];
+      this.placement = this.placeUnits([], enemies ?? [], rng, { enemies: recipe?.spawns?.enemies });
+      this.placement.partyKeys = [];
+      this.placedCounts = { party: 0, enemies: (enemies ?? []).length };
     } else {
       // These are the REAL starting positions, not stage dressing: beginBattle()
       // reuses them rather than rolling again, so the units the player sees as
       // the clouds part are the ones the fight starts with. (Rolling twice was
       // why everybody jumped a moment after landing.)
-      this.placement = this.placeUnits(party ?? [], enemies ?? [], rng, recipe?.spawns ?? null);
+      this.placement = this.placeUnits(party ?? [], enemies ?? [], rng, recipe?.spawns ?? null, { partySpread });
       this.placedCounts = { party: (party ?? []).length, enemies: (enemies ?? []).length };
     }
     // Right click is the arena's cancel button, so the browser's own menu must
@@ -427,36 +450,47 @@ export class LocalMapView {
   // Textures are cached per glyph: three units sharing an icon share one texture.
   // Used for terrain TAGS; a unit gets the fuller plaque below instead.
   makePortrait(glyph) {
-    this.portraitCache = this.portraitCache ?? new Map();
-    let tex = this.portraitCache.get(glyph);
-    if (!tex) {
-      const size = 128;
-      const cv = document.createElement('canvas');
-      cv.width = size; cv.height = size;
-      const g = cv.getContext('2d');
-      // A dark rounded plate behind the glyph: without it a light emoji
-      // disappears against a pale tile.
-      g.fillStyle = PLAQUE.plateFill;
-      roundRect(g, 6, 6, size - 12, size - 12, 26);
-      g.fill();
-      g.strokeStyle = PLAQUE.plateStroke;
-      g.lineWidth = 5;
-      roundRect(g, 6, 6, size - 12, size - 12, 26);
-      g.stroke();
-      g.fillStyle = PLAQUE.glyphColor;   // not the plate's dark wash (see updateUnitPlaque)
-      g.font = `${Math.round(size * 0.58)}px ${PLAQUE.emojiFont}`;
-      g.textAlign = 'center';
-      g.textBaseline = 'middle';
-      g.fillText(glyph, size / 2, size / 2 + 2);
-      tex = new THREE.CanvasTexture(cv);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      this.portraitCache.set(glyph, tex);
-    }
-    const sprite = new THREE.Sprite(new THREE.SpriteMaterial(SPRITE_MAT(tex)));
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial(SPRITE_MAT(this.makePortraitTexture(glyph))));
     sprite.scale.setScalar(0.42);
     sprite.position.set(0, 1.0, 0);
     sprite.renderOrder = 10;   // always drawn on top, never buried in a tile
     return sprite;
+  }
+
+  // The glyph plate on its own, cached per glyph.
+  makePortraitTexture(glyph) {
+    this.portraitCache = this.portraitCache ?? new Map();
+    let tex = this.portraitCache.get(glyph);
+    if (!tex) {
+      tex = new THREE.CanvasTexture(this.drawGlyphPlate(glyph));
+      tex.colorSpace = THREE.SRGBColorSpace;
+      this.portraitCache.set(glyph, tex);
+    }
+    return tex;
+  }
+
+  // The plate itself: a dark rounded square with the glyph on it. Without the
+  // plate a light emoji disappears against a pale tile.
+  // A cached TEXTURE belongs to one material - the deployment decal draws its
+  // own from this canvas rather than borrowing the sprite's (sharing one
+  // canvas texture between a sprite and a mesh upsets the GL texture upload).
+  drawGlyphPlate(glyph, size = 128, canvas = null) {
+    const cv = canvas ?? document.createElement('canvas');
+    cv.width = size; cv.height = size;   // (re)setting the size also clears it
+    const g = cv.getContext('2d');
+    g.fillStyle = PLAQUE.plateFill;
+    roundRect(g, 6, 6, size - 12, size - 12, 26);
+    g.fill();
+    g.strokeStyle = PLAQUE.plateStroke;
+    g.lineWidth = 5;
+    roundRect(g, 6, 6, size - 12, size - 12, 26);
+    g.stroke();
+    g.fillStyle = PLAQUE.glyphColor;   // not the plate's dark wash (see updateUnitPlaque)
+    g.font = `${Math.round(size * 0.58)}px ${PLAQUE.emojiFont}`;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText(glyph, size / 2, size / 2 + 2);
+    return cv;
   }
 
   // ----- the unit plaque -------------------------------------------------
@@ -512,6 +546,7 @@ export class LocalMapView {
     const w = mode === 'icon' ? P.iconOnlyW : P.w;
     const h = mode === 'icon' ? P.iconOnlyH : P.h;
     const cv = plaque.userData.canvas;
+    const resized = cv.width !== w * P.dpr || cv.height !== h * P.dpr;
     cv.width = w * P.dpr;
     cv.height = h * P.dpr;
     const g = cv.getContext('2d');
@@ -521,7 +556,24 @@ export class LocalMapView {
     // not change size when a fight starts - only the strip beside it disappears.
     const worldH = P.worldWidth * (P.h / P.w);
     plaque.scale.set(worldH * (w / h), worldH, 1);
-    plaque.userData.tex.needsUpdate = true;
+    // A canvas that CHANGED SIZE cannot be re-uploaded into the texture it has
+    // already filled once - the graphics driver refuses the copy ("offset
+    // overflows texture dimensions") and the plaque would keep the old picture.
+    // So a resize gets a brand new texture; a redraw at the same size is just an
+    // update. (Visible when a plaque switches between the icon-only and the full
+    // layout after it has been on screen - a fight opening on units the player
+    // placed, or the roster swapping somebody at the campfire.)
+    if (resized) {
+      const old = plaque.userData.tex;
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      plaque.material.map = tex;
+      plaque.material.needsUpdate = true;
+      plaque.userData.tex = tex;
+      if (old) old.dispose();
+    } else {
+      plaque.userData.tex.needsUpdate = true;
+    }
     return { w, h };
   }
 
@@ -718,20 +770,25 @@ export class LocalMapView {
   // and (via beginBattle) for the real fight; returns where everyone stood.
   // `fixed` (from an arena recipe's `spawns`) pins units to authored tiles,
   // positionally; anyone beyond the authored list still lands on a random tile.
-  placeUnits(party, enemies, rng, fixed = null) {
+  // `partySpread` keeps the party's rolled tiles within that many steps of each
+  // other - a group that landed together instead of a scatter across the arena.
+  placeUnits(party, enemies, rng, fixed = null, { partySpread = 0 } = {}) {
     const used = new Set();
-    const resolve = (defs, authored) => {
+    const resolve = (defs, authored, spread = 0) => {
       const keys = [];
       for (let i = 0; i < defs.length; i++) {
         const k = authored?.[i];
         if (k && this.map.hexes.has(k) && !used.has(k)) { keys.push(k); used.add(k); }
         else keys.push(null);
       }
-      const fillers = pickRandomTiles(this.map, keys.filter((k) => !k).length, () => rng.random(), used);
+      const need = keys.filter((k) => !k).length;
+      const fillers = spread > 0
+        ? pickClusteredTiles(this.map, need, () => rng.random(), used, spread)
+        : pickRandomTiles(this.map, need, () => rng.random(), used);
       let f = 0;
       return keys.map((k) => k ?? (used.add(fillers[f]), fillers[f++]));
     };
-    const partyKeys = resolve(party, fixed?.party);
+    const partyKeys = resolve(party, fixed?.party, partySpread);
     const enemyKeys = resolve(enemies, fixed?.enemies);
 
     party.forEach((u, i) => this.addPartyToken(u, i, partyKeys[i]));
@@ -753,6 +810,204 @@ export class LocalMapView {
       this.attachToken(enemyKeys[i], body, enemyColor, rng.random() * Math.PI * 2);
     });
     return { partyKeys, enemyKeys };
+  }
+
+  // ----- the void edge ----------------------------------------------------
+  // Which tiles JUST OUTSIDE the arena are a hole rather than a wall.
+  //
+  // The arena is one world tile blown up, so its six sides face the six world
+  // tiles around it. Where that neighbour is an ether tile (a hole in the world)
+  // or the world simply ends, there is nothing out there to crash into: anything
+  // shoved over that side falls out of the world. The engine only ever asks
+  // about tiles one or two rings past the rim, so that is all we work out.
+  //
+  // Sides are matched by ANGLE, not by direction index: the arena's tiles use
+  // the opposite hex orientation to the world, so a local push direction points
+  // at a CORNER between two world neighbours. Taking the angle of the tile being
+  // pushed into and picking the world neighbour closest to it gets the side
+  // right whichever way the shove came from.
+  computeVoidEdges(edges) {
+    const out = new Set();
+    if (!this.map || !edges?.length || !edges.some((e) => e.isVoid)) return out;
+    const dirs = edges.map((e) => ({ a: Math.atan2(e.dy, e.dx), isVoid: !!e.isVoid }));
+    const size = this.config.local.hexSize;
+    const R = this.map.radius;
+    for (const [q, r] of hexesInRange(0, 0, R + 2)) {
+      if (hexDistance(q, r, 0, 0) <= R) continue;
+      const p = axialToPlane(q, r, size, this.map.orientation);
+      const a = Math.atan2(p.y, p.x);
+      let best = null;
+      let bestD = Infinity;
+      for (const d of dirs) {
+        // Shortest angular distance, so the wrap at +-180 degrees is not a cliff.
+        const diff = Math.abs(Math.atan2(Math.sin(a - d.a), Math.cos(a - d.a)));
+        if (diff < bestD) { bestD = diff; best = d; }
+      }
+      if (best?.isVoid) out.add(hexKey(q, r));
+    }
+    return out;
+  }
+  // Handed to the combat engine as `voidEdgeKeys`.
+  voidEdgeKeys() { return [...(this.voidEdges ?? [])]; }
+
+  // ===== DEPLOYMENT =======================================================
+  // Before a fight the party WALKED INTO, the player says where each unit
+  // stands. The cursor carries the next unit's icon on a flat tile decal (the
+  // world map's cost-decal idea, an icon instead of numbers); left click locks
+  // that unit onto the tile and the decal becomes the next unit's; right click
+  // takes the last one back. When the last unit is down, onDone hands the tile
+  // keys back and the fight is built on them.
+  // A fight nobody chose (a fatigue ambush) never gets here: build() scattered
+  // the party itself, as a group (partySpread).
+
+  awaitingDeployment() { return !!this.deployPending?.length; }
+
+  // `party` is the units to place, in the order the fight will use them - the
+  // caller passes its own list so tile i always belongs to unit i. Without one
+  // we fall back to the list build() was given.
+  startDeployment({ party = null, onPlaced, onDone } = {}) {
+    const list = party ?? this.deployPending ?? [];
+    if (!list.length) { this.deployPending = null; onDone?.([]); return false; }
+    this.deploy = {
+      party: list,
+      index: 0,
+      keys: [],
+      taken: new Set(this.placement?.enemyKeys ?? []),
+      onPlaced, onDone,
+    };
+    this.buildDeployDecal();
+    this.enableTilePicking((k) => this.placeDeployUnit(k), () => this.undeployLast());
+    this.refreshDeployDecal();
+    onPlaced?.(this.deployState());
+    return true;
+  }
+
+  // What the HUD shows: whose turn it is to be placed, and how far along we are.
+  deployState() {
+    const d = this.deploy;
+    if (!d) return null;
+    return { index: d.index, total: d.party.length, unit: d.party[d.index] ?? null, placed: [...d.keys] };
+  }
+
+  deployTileFree(k) {
+    const d = this.deploy;
+    return !!(d && this.map?.hexes.has(k) && !d.taken.has(k));
+  }
+
+  placeDeployUnit(k) {
+    const d = this.deploy;
+    if (!d || !this.deployTileFree(k)) return;
+    const unit = d.party[d.index];
+    this.addPartyToken(unit, d.index, k);
+    d.keys.push(k);
+    d.taken.add(k);
+    d.index += 1;
+    if (d.index >= d.party.length) { this.finishDeployment(); return; }
+    this.refreshDeployDecal();
+    d.onPlaced?.(this.deployState());
+  }
+
+  // Right click: the last unit placed steps back off the board.
+  undeployLast() {
+    const d = this.deploy;
+    if (!d || !d.keys.length) return;
+    const k = d.keys.pop();
+    d.taken.delete(k);
+    d.index -= 1;
+    const tok = this.tokens.find((m) => m.userData.partyIndex === d.index);
+    if (tok) {
+      this.scene.remove(tok);
+      if (tok.userData.ring) this.scene.remove(tok.userData.ring);
+      this.tokens.splice(this.tokens.indexOf(tok), 1);
+    }
+    this.refreshDeployDecal();
+    d.onPlaced?.(this.deployState());
+  }
+
+  finishDeployment() {
+    const d = this.deploy;
+    if (!d) return;
+    this.deploy = null;
+    this.deployPending = null;
+    this.clearDeployDecal();
+    this.disableTilePicking();
+    // The board IS the placement now: beginBattle() finds it matching and keeps
+    // every token exactly where the player put it.
+    this.placement = { partyKeys: d.keys, enemyKeys: this.placement?.enemyKeys ?? [] };
+    this.placedCounts = { party: d.keys.length, enemies: this.placement.enemyKeys.length };
+    d.onDone?.([...d.keys]);
+  }
+
+  // Called when a fight is abandoned mid-placement (new map, restart).
+  cancelDeployment() {
+    if (!this.deploy) return;
+    this.clearDeployDecal();
+    this.disableTilePicking();
+    this.deploy = null;
+  }
+
+  // The flat icon plate that follows the cursor across the tiles.
+  buildDeployDecal() {
+    this.clearDeployDecal();
+    const cfg = this.config.local;
+    const r = (cfg.hexSize - cfg.gap / SQRT3) * (cfg.deploy?.decalScale ?? 1.15);
+    const geo = new THREE.PlaneGeometry(r, r);
+    geo.rotateX(-Math.PI / 2);
+    // ONE canvas and ONE texture for the whole step: each unit's icon is
+    // repainted onto it (see refreshDeployDecal). Swapping in a fresh texture
+    // per unit instead upsets the GL texture upload on software renderers.
+    this.deployCanvas = this.drawGlyphPlate('', 128);
+    const tex = new THREE.CanvasTexture(this.deployCanvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      map: tex, transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    }));
+    mesh.renderOrder = 6;      // over the tile and over any ring on it
+    mesh.visible = false;
+    this.scene.add(mesh);
+    this.deployDecal = mesh;
+  }
+
+  // Repaints the decal's own canvas with the CURRENT unit's icon.
+  refreshDeployDecal() {
+    const d = this.deploy;
+    if (!d || !this.deployDecal || !this.deployCanvas) return;
+    const unit = d.party[d.index];
+    this.drawGlyphPlate(unit?.icon || (unit?.name ?? '?').charAt(0), 128, this.deployCanvas);
+    if (this.deployDecal.material.map) this.deployDecal.material.map.needsUpdate = true;
+  }
+
+  clearDeployDecal() {
+    if (!this.deployDecal) return;
+    this.scene?.remove(this.deployDecal);
+    this.deployDecal.geometry.dispose();
+    if (this.deployDecal.material.map) this.deployDecal.material.map.dispose();
+    this.deployDecal.material.dispose();
+    this.deployDecal = null;
+    this.deployCanvas = null;
+  }
+
+  // Per-frame: sit the decal on the hovered tile, tinted red where a unit
+  // cannot go, and keep it turned towards the camera so the icon reads upright.
+  stepDeployDecal() {
+    const d = this.deploy;
+    const decal = this.deployDecal;
+    if (!d || !decal) return;
+    // The tile under the cursor rises a little, exactly as it does in a fight.
+    for (const t2 of this.map.hexes.values()) {
+      const target = t2.key === this.hoverKey ? 0.12 : 0;
+      t2.lift = (t2.lift ?? 0) + (target - (t2.lift ?? 0)) * 0.25;
+      if (t2.mesh) t2.mesh.position.y = t2.lift < 0.0005 ? 0 : t2.lift;
+    }
+    const tile = this.hoverKey ? this.map.hexes.get(this.hoverKey) : null;
+    decal.visible = !!tile;
+    if (!tile) return;
+    const free = this.deployTileFree(tile.key);
+    decal.position.set(tile.x, tile.top + 0.045 + (tile.lift ?? 0), -tile.y);
+    decal.material.color.set(free ? 0xffffff : 0xff6b6b);
+    decal.material.opacity = free ? 1 : 0.6;
+    if (this.camera) decal.rotation.y = Math.atan2(
+      this.camera.position.x - tile.x, this.camera.position.z + tile.y);
   }
 
   // ===== BATTLE MODE ======================================================
@@ -1323,6 +1578,19 @@ export class LocalMapView {
       m.position.y = m.userData.baseY + Math.sin(this.elapsed / 620 + m.userData.phase) * 0.05;
       m.rotation.y += dt * 0.0006;
     }
+    // Which tile the cursor is over, resolved once per frame (raycasting on
+    // every mousemove would hammer slow machines). Needed by the fight AND by
+    // the deployment step before it.
+    if ((this.battle || this.deploy) && this.hoverDirty && this.camera && this.pointer) {
+      this.hoverDirty = false;
+      // A status badge under the cursor wins over the tile behind it.
+      const onBadge = this.battle ? this.resolvePlaqueHover() : false;
+      this.hoverRay = this.hoverRay ?? new THREE.Raycaster();
+      this.hoverRay.setFromCamera(new THREE.Vector2(this.pointer.x, this.pointer.y), this.camera);
+      const hit = onBadge ? null : this.hoverRay.intersectObjects(this.tileMeshes ?? [], false)[0];
+      this.hoverKey = hit ? hit.object.userData.key : null;
+    }
+    if (this.deploy) this.stepDeployDecal();
     // The active combatant's ground ring breathes so the player sees whose turn it is.
     if (this.battle) {
       const activeUid = this.battle.state.activeUid;
@@ -1334,17 +1602,7 @@ export class LocalMapView {
         ring.scale.setScalar(s);
         ring.material.opacity = active ? 0.95 : 0.5;
       }
-      // Hover over highlighted tiles: resolve the pick once per frame, then let
-      // the hovered tile rise and its ring go solid white (world-map feedback).
-      if (this.hoverDirty && this.camera && this.pointer) {
-        this.hoverDirty = false;
-        // A status badge under the cursor wins over the tile behind it.
-        const onBadge = this.resolvePlaqueHover();
-        this.hoverRay = this.hoverRay ?? new THREE.Raycaster();
-        this.hoverRay.setFromCamera(new THREE.Vector2(this.pointer.x, this.pointer.y), this.camera);
-        const hit = onBadge ? null : this.hoverRay.intersectObjects(this.tileMeshes ?? [], false)[0];
-        this.hoverKey = hit ? hit.object.userData.key : null;
-      }
+      // The hovered tile rises and its ring goes solid white (world-map feedback).
       const c = this.config.colors;
       for (const tile of this.map.hexes.values()) {
         const hl = this.hlTiles ? this.hlTiles.get(tile.key) : null;
@@ -1383,6 +1641,9 @@ export class LocalMapView {
     }
     this.deactivate();
     this.disablePicking();
+    this.cancelDeployment();
+    this.deployPending = null;
+    this.voidEdges = null;
     this.endBattle();
     this.tileMeshes = [];
     if (this.hlRingGeo) { this.hlRingGeo.dispose(); this.hlRingGeo = null; }

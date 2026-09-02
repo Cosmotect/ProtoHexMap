@@ -5,6 +5,7 @@ import { Game } from './game.js';
 import { MapRenderer } from './render.js';
 import { createUI } from './ui.js';
 import { resolveSeed } from './rng.js';
+import { DIRECTIONS, axialToPlane } from './hex.js';
 import { createTutorial } from './tutorial.js';
 import { scenarioById } from './scenarios/index.js';
 import { createSettings, deepClone } from './settings.js';
@@ -207,6 +208,20 @@ function worldNeighborsFor(hex) {
   return out;
 }
 
+// The SIX world tiles sharing a side with `hex`, in world-plane offsets, each
+// marked as a hole or not: an ether tile is a hole in the world, and so is the
+// map's own rim (no tile there at all). The arena turns these into its lethal
+// edges - a shove over a side that faces a hole drops the victim out of the
+// world (see LocalMapView.computeVoidEdges).
+function worldEdgesFor(hex) {
+  const cfg = CONFIG.map;
+  return DIRECTIONS.map(([dq, dr]) => {
+    const nb = game.map.hexes.get(`${hex.q + dq},${hex.r + dr}`);
+    const p = axialToPlane(dq, dr, cfg.hexSize, cfg.orientation);
+    return { dx: p.x, dy: p.y, isVoid: !nb || nb.type === 'ether' };
+  });
+}
+
 // Wounds appear in the party panel AS they happen, not only after the fight.
 // (Deaths are only made official in finishCombat; here it is just the HP.)
 function syncPartyPanel() {
@@ -224,6 +239,15 @@ function syncPartyPanel() {
 // "Restart battle" can undo every step, hit and death back to that moment
 // without re-rolling anything (see restartBattle() below).
 let battleEntry = null;
+
+// The fight waiting for the player to place the party (see startDeployment).
+let pendingDeploy = null;
+
+// Where units died in the fight now running: [{ uid, name, isEnemy, key, cause }],
+// the tile each one fell on. Filled by the engine's onUnitDeath; the loot system
+// will read it (for now it is only kept, and exposed as window.__deaths()).
+let lastDeathSpots = [];
+window.__deaths = () => lastDeathSpots;
 
 // `placementOverride` (from restartBattle) skips beginBattle()'s own placement
 // logic - which would only redo layout if the roster size changed, and
@@ -244,6 +268,14 @@ function beginInteractiveBattle(ctx, placementOverride = null) {
     name: e.name, hp: e.hp, maxHp: e.maxHp, power: e.power,
     shape: e.shape, color: e.color, typeId: e.typeId,
   }));
+  // The arena is holding the party back so the player can place them: park the
+  // fight here and hand over to the deployment step. It runs when the camera
+  // lands (startCombatDive / combatDelegate call startDeployment there), and
+  // calls back into this same function with the tiles the player chose.
+  if (!placementOverride && view.awaitingDeployment()) {
+    pendingDeploy = { ctx, partyDefs, enemyDefs };
+    return;
+  }
   const placement = placementOverride
     ? view.placeUnitsAt(partyDefs, enemyDefs, placementOverride.partyKeys, placementOverride.enemyKeys)
     : view.beginBattle({ party: partyDefs, enemies: enemyDefs });
@@ -256,6 +288,7 @@ function beginInteractiveBattle(ctx, placementOverride = null) {
       enemyKeys: placement.enemyKeys,
     };
   }
+  lastDeathSpots = [];
   battle = createBattle({
     config: COMBAT_CONFIG,
     radius: CONFIG.local.radius,
@@ -270,6 +303,11 @@ function beginInteractiveBattle(ctx, placementOverride = null) {
     // battle's when the clouds part) but a fatigue ambush does not swing until
     // battle.start() - otherwise its opening blow lands behind the clouds.
     deferOpening: true,
+    // Arena sides facing a hole in the world kill whatever is shoved over them.
+    voidEdgeKeys: view.voidEdgeKeys(),
+    // Every death, with the tile it happened on. Nothing reads this yet - it is
+    // the hook loot dropped by beaten enemies will hang off.
+    onUnitDeath: (spot) => { lastDeathSpots.push(spot); },
     onChange: () => { view.syncBattle(); ui.updateBattle(); syncPartyPanel(); },
     onFloater: (k, text, color) => view.addFloater(k, text, color),
     onLog: () => {},   // the floaters carry the story; a combat log can come later
@@ -282,6 +320,29 @@ function beginInteractiveBattle(ctx, placementOverride = null) {
   ui.setBattleMode(battle, { title: ctx.title, lore: ctx.lore, debuffs: ctx.debuffs });
   // The guide may have a card for the first fight (scenario maps).
   tutorial.onEvent('combatStart', {}, game);
+}
+
+// ----- deployment: the player places the party ------------------------------
+// Runs the moment the camera lands in an arena that kept the party off the
+// board. The view owns the cursor decal and the clicks; here we only drive the
+// HUD line and, once the last unit is down, build the fight on those tiles.
+function startDeployment() {
+  if (!pendingDeploy) return false;
+  cinematic.localView.startDeployment({
+    party: pendingDeploy.partyDefs,   // the very list the fight will be built from
+    onPlaced: (state) => ui.setDeployBar(state),
+    onDone: () => {
+      const started = pendingDeploy;
+      pendingDeploy = null;
+      ui.setDeployBar(null);
+      if (!started) return;
+      // Second pass: the arena's board now IS the placement, so this builds the
+      // fight on the tiles the player chose and hands control over.
+      beginInteractiveBattle(started.ctx);
+      battle?.start();
+    },
+  });
+  return true;
 }
 
 // "Restart battle": throws away every step, hit and death from this attempt
@@ -328,6 +389,10 @@ function finishInteractiveBattle(won) {
 // object discards the battle state anyway.
 function abortBattle() {
   battle = null; battleCtx = null; battleEntry = null; window.__battle = null;
+  // A fight abandoned while the party was still being placed goes with it.
+  pendingDeploy = null;
+  cinematic.localView.cancelDeployment();
+  ui.setDeployBar(null);
   ui.setBattleMode(null);
 }
 
@@ -346,6 +411,11 @@ function startCombatDive(hex, resume) {
     seed: game.seed,
     recipe: hex.recipe ?? null,   // future: handcrafted arena recipes live on the hex
     neighbors: worldNeighborsFor(hex),
+    edges: worldEdgesFor(hex),
+    // This dive is the player walking in on purpose, so they place the party
+    // themselves when the camera lands - unless the arena's recipe already says
+    // where the party stands, or deployment is switched off in config.
+    deployParty: deployAllowed(hex.recipe ?? null),
     onSwap: () => {
       // The wither may have eaten the encounter while we were in the air.
       if (COMBAT_TYPES.has(hex.encounter)) resume();
@@ -353,9 +423,16 @@ function startCombatDive(hex, resume) {
     },
     onArrived: () => {
       if (turnBack) cinematic.flyOut({});
+      else if (pendingDeploy) startDeployment();
       else if (battle) battle.start();
     },
   });
+}
+
+// Deployment is for fights the party walked into, on arenas that do not author
+// their own party spawns.
+function deployAllowed(recipe) {
+  return (CONFIG.local.deploy?.enabled ?? true) && !recipe?.spawns?.party;
 }
 
 ui = createUI(CONFIG, {
@@ -544,7 +621,11 @@ function startRun(seed, opts = {}) {
     // waits for onArrived (see startCombatDive).
     if (cinematic.inArena()) {
       beginInteractiveBattle(ctx);
-      if (cinematic.mode() === 'local') battle?.start();
+      // The camera is already down: placing the party (or the first round) can
+      // begin at once. Still mid-dive, onArrived below does it on landing.
+      if (cinematic.mode() === 'local') {
+        if (pendingDeploy) startDeployment(); else battle?.start();
+      }
       return true;
     }
     if (cinematic.isActive()) return false;
@@ -556,9 +637,14 @@ function startRun(seed, opts = {}) {
       seed: game.seed,
       recipe: ctx.hex.recipe ?? null,
       neighbors: worldNeighborsFor(ctx.hex),
+      edges: worldEdgesFor(ctx.hex),
+      // A fight the party was FORCED into (a fatigue ambush) gives no choice of
+      // tiles: they are dropped where they stood, together (partySpread).
+      deployParty: !ctx.forced && deployAllowed(ctx.hex.recipe ?? null),
+      partySpread: ctx.forced ? (CONFIG.local.deploy?.maxSpread ?? 0) : 0,
       // Same split: the fight is built under the clouds, and swings on landing.
       onSwap: () => beginInteractiveBattle(ctx),
-      onArrived: () => { if (battle) battle.start(); },
+      onArrived: () => { if (pendingDeploy) startDeployment(); else if (battle) battle.start(); },
     });
   };
 

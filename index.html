@@ -131,6 +131,17 @@
         <button id="btn-end-turn" class="enter" data-i18n="battle.ui.endTurn" data-i18n-title="battle.ui.endTurn.title">End turn</button>
       </div>
 
+      <!-- Deployment bar: before a fight the party walked into, the player
+           places each unit on a tile. Shows whose turn it is to be placed and
+           how to do it. src/ui.js setDeployBar() fills it. -->
+      <div class="panel bottom-center deploybar hidden" id="deploy-bar">
+        <div class="deploy-info">
+          <span id="deploy-step" class="deploy-step"></span>
+          <span id="deploy-unit" class="deploy-unit"></span>
+        </div>
+        <span id="deploy-hint" class="deploy-hint"></span>
+      </div>
+
       <div id="fatigue-tip" class="fatigue-tip hidden"></div>
       <div id="banner" class="banner hidden"></div>
 

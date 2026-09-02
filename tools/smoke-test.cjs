@@ -72,10 +72,36 @@ fs.mkdirSync(OUT, { recursive: true });
     await page.waitForFunction(() => !window.__renderer.busy, null, { timeout: 20000 });
     await page.waitForTimeout(900); // let the camera glide settle
   };
+  // DEPLOYMENT: a fight the party walks into now waits for the player to place
+  // each unit before the first round (config.local.deploy). Any test that opens
+  // a fight has to get through that step first. This drops the waiting units on
+  // the first free tiles it finds and returns how many it placed (0 = nothing
+  // was waiting, e.g. a forced fight, which places the party itself).
+  const placeParty = async () => {
+    await page.waitForFunction(
+      () => !!window.__battle || !!(window.__localView && window.__localView.deploy) || window.__cinematic.mode() === 'idle',
+      null, { timeout: 30000 }).catch(() => {});
+    return page.evaluate(() => {
+      const v = window.__localView;
+      if (!v || !v.deploy) return 0;
+      const taken = new Set((v.placement && v.placement.enemyKeys) || []);
+      let n = 0;
+      for (const tile of v.map.hexes.values()) {
+        if (!v.deploy) break;                 // the last unit closed the step
+        if (taken.has(tile.key)) continue;
+        const before = v.deploy.index;
+        v.placeDeployUnit(tile.key);
+        if (!v.deploy || v.deploy.index > before) { taken.add(tile.key); n++; }
+      }
+      return n;
+    });
+  };
+
   // Combat is interactive now: a fight dives into the arena and waits for the
   // player. If one started (e.g. a fatigue-forced battle mid-walk), win it from
   // the console, close the report + reward windows and fly back out.
   const settleBattleIfAny = async () => {
+    await placeParty();
     await page.waitForFunction(() => !!window.__battle || window.__cinematic.mode() === 'idle', null, { timeout: 30000 }).catch(() => {});
     if (!(await page.evaluate(() => !!window.__battle))) return;
     await page.evaluate(() => window.__battle.debugResolve(true));
@@ -139,6 +165,7 @@ fs.mkdirSync(OUT, { recursive: true });
   await page.evaluate(() => { const g = window.game; const hex = g.state.position; hex.encounter = 'battle'; hex.enemies = [{ name: 'Dummy', hp: 1, maxHp: 1, power: 0, alive: true }]; g.enter(false); });
   // The engine is built at the SWAP point, while the camera is still landing:
   // wait for the flight to finish before reading the on-screen state.
+  await placeParty();
   await page.waitForFunction(() => !!window.__battle && window.__cinematic.mode() === 'local', null, { timeout: 30000 });
   const engineState = await page.evaluate(() => ({
     mode: window.__cinematic.mode(),
@@ -205,6 +232,7 @@ fs.mkdirSync(OUT, { recursive: true });
   }));
   if (midFlight.mode !== 'in' || !midFlight.clouds || midFlight.dialog) problems.push('fly-in state wrong at 700ms: ' + JSON.stringify(midFlight));
   await page.screenshot({ path: path.join(OUT, '20-dive-mid.png') });
+  await placeParty();
   await page.waitForFunction(() => !!window.__battle && window.__cinematic.mode() === 'local', null, { timeout: 30000 }).catch(() => {});
   const landed = await page.evaluate(() => ({
     mode: window.__cinematic.mode(),
@@ -262,6 +290,131 @@ fs.mkdirSync(OUT, { recursive: true });
   const backOut = await page.evaluate(() => ({ mode: window.__cinematic.mode(), filter: window.__renderer.renderer.domElement.style.filter, bar: document.getElementById('battle-bar').classList.contains('hidden') }));
   if (backOut.mode !== 'idle' || backOut.filter) problems.push('did not return cleanly to the world map: ' + JSON.stringify(backOut));
   if (!backOut.bar) problems.push('battle bar stayed visible after the fight');
+
+  // ----- DEPLOYMENT, the void edge, death spots, a sold-out shop --------------
+  // A fight the party WALKS INTO waits for the player to place each unit; a
+  // FORCED one drops them as a group instead. Shoves over an arena side that
+  // faces a hole in the world kill; every death reports the tile it happened on.
+  await page.evaluate(() => {
+    const g = window.game;
+    const hex = [...g.map.hexes.values()].find((h) => h.encounter === 'battle');
+    g.startCombat(hex, false);
+  });
+  await page.waitForFunction(() => window.__cinematic.mode() === 'local', null, { timeout: 30000 });
+  await page.waitForTimeout(300);
+  const deployOpen = await page.evaluate(() => {
+    const v = window.__localView;
+    v.hoverKey = '0,0';                 // the icon decal follows the cursor
+    v.stepDeployDecal();
+    const free = { visible: v.deployDecal.visible, color: v.deployDecal.material.color.getHex(), icon: !!v.deployDecal.material.map };
+    v.hoverKey = (v.placement.enemyKeys || [])[0];
+    v.stepDeployDecal();
+    return {
+      deploying: !!v.deploy, battle: !!window.__battle,
+      bar: !document.getElementById('deploy-bar').classList.contains('hidden'),
+      step: document.getElementById('deploy-step').textContent,
+      partyTokens: v.tokens.filter((t) => t.userData.partyIndex != null).length,
+      free, takenColor: v.deployDecal.material.color.getHex(),
+    };
+  });
+  if (!deployOpen.deploying || !deployOpen.bar) problems.push('walking into a fight did not open the placement step: ' + JSON.stringify(deployOpen));
+  if (deployOpen.battle) problems.push('the fight started before the party was placed');
+  if (deployOpen.partyTokens !== 0) problems.push('party tokens are on the board during placement');
+  if (!deployOpen.free.visible || !deployOpen.free.icon) problems.push('no icon decal on the hovered tile');
+  if (deployOpen.free.color === deployOpen.takenColor) problems.push('an occupied tile is not marked on the decal');
+  await page.screenshot({ path: path.join(OUT, '22-deploy.png') });
+  // Place them, taking one back on the way (the right-click undo).
+  const placed = await page.evaluate(() => {
+    const v = window.__localView;
+    const want = [...v.map.hexes.keys()].filter((k) => !(v.placement.enemyKeys || []).includes(k)).slice(0, 4);
+    v.placeDeployUnit(want[0]);
+    v.placeDeployUnit(want[1]);
+    v.undeployLast();
+    const undo = { index: v.deploy.index, tokens: v.tokens.filter((t) => t.userData.partyIndex != null).length };
+    const keys = [want[0]];
+    while (v.deploy) { const k = want[keys.length]; keys.push(k); v.placeDeployUnit(k); }
+    return { undo, keys };
+  });
+  if (placed.undo.index !== 1 || placed.undo.tokens !== 1) problems.push('the placement undo did not take the last unit back: ' + JSON.stringify(placed.undo));
+  await page.waitForTimeout(400);
+  const deployed = await page.evaluate(() => ({
+    battle: !!window.__battle,
+    bar: !document.getElementById('deploy-bar').classList.contains('hidden'),
+    battleBar: !document.getElementById('battle-bar').classList.contains('hidden'),
+    party: window.__battle ? window.__battle.state.units.filter((u) => !u.isEnemy).map((u) => u.pos) : [],
+  }));
+  if (!deployed.battle || deployed.bar || !deployed.battleBar) problems.push('the fight did not open after the last unit was placed: ' + JSON.stringify(deployed));
+  if (JSON.stringify(deployed.party) !== JSON.stringify(placed.keys)) problems.push('the party is not on the chosen tiles: ' + JSON.stringify(deployed.party) + ' vs ' + JSON.stringify(placed.keys));
+  // Only the sides facing a hole are lethal: a synthetic set of neighbours with
+  // one void side must produce keys on that side alone (within its 60-degree
+  // sector, so at most 30 degrees off its centre).
+  const voidGeom = await page.evaluate(() => {
+    const v = window.__localView;
+    const edges = [0, 60, 120, 180, 240, 300].map((d, i) => ({ dx: Math.cos(d * Math.PI / 180), dy: Math.sin(d * Math.PI / 180), isVoid: i === 0 }));
+    const keys = [...v.computeVoidEdges(edges)];
+    const size = v.config.local.hexSize;
+    const worst = keys.reduce((m, k) => {
+      const [q, r] = k.split(',').map(Number);
+      const x = size * (Math.sqrt(3) * q + (Math.sqrt(3) / 2) * r); const y = size * 1.5 * r;
+      return Math.max(m, Math.abs(Math.atan2(y, x) * 180 / Math.PI));
+    }, 0);
+    return { count: keys.length, worst: Math.round(worst), noneWhenSolid: [...v.computeVoidEdges(edges.map((e) => ({ ...e, isVoid: false })))].length };
+  });
+  if (!voidGeom.count || voidGeom.worst > 31) problems.push('void edge keys are not on the void side: ' + JSON.stringify(voidGeom));
+  if (voidGeom.noneWhenSolid !== 0) problems.push('void edge keys with no void side: ' + JSON.stringify(voidGeom));
+  // Winning the fight reports every death on the tile the unit stood on.
+  const deathSpots = await page.evaluate(() => {
+    const before = window.__battle.state.units.filter((u) => u.isEnemy && u.hp > 0).map((u) => u.uid + '@' + u.pos);
+    window.__battle.debugResolve(true);
+    return { before, after: window.__battle.state.deaths.map((d) => d.uid + '@' + d.key) };
+  });
+  if (deathSpots.after.length !== deathSpots.before.length || deathSpots.after.some((x) => !deathSpots.before.includes(x))) {
+    problems.push('death spots do not match where the units stood: ' + JSON.stringify(deathSpots));
+  }
+  await dismissDialog();
+  await dismissDialog();
+  await page.waitForFunction(() => window.__cinematic.mode() === 'idle', null, { timeout: 25000 }).catch(() => {});
+
+  // A FORCED fight places the party itself, as a group.
+  await page.evaluate(() => {
+    const g = window.game;
+    const hex = [...g.map.hexes.values()].find((h) => h.encounter === 'battle') || g.state.position;
+    hex.encounter = 'battle';
+    g.startCombat(hex, true);
+  });
+  await page.waitForFunction(() => !!window.__battle, null, { timeout: 30000 }).catch(() => {});
+  const forced = await page.evaluate(() => {
+    const d = (a, b) => { const [q1, r1] = a.split(',').map(Number); const [q2, r2] = b.split(',').map(Number);
+      return (Math.abs(q1 - q2) + Math.abs(r1 - r2) + Math.abs(q1 + r1 - q2 - r2)) / 2; };
+    const keys = window.__battle ? window.__battle.state.units.filter((u) => !u.isEnemy).map((u) => u.pos) : [];
+    let worst = 0;
+    for (const a of keys) for (const b of keys) worst = Math.max(worst, d(a, b));
+    return { deploying: !!window.__localView.deploy, battle: !!window.__battle, worst, spread: window.game.config.local.deploy.maxSpread };
+  });
+  if (forced.deploying) problems.push('a forced fight asked the player to place the party');
+  if (!forced.battle) problems.push('a forced fight did not start');
+  if (forced.worst > forced.spread) problems.push(`a forced party landed ${forced.worst} tiles apart (max ${forced.spread})`);
+  await page.evaluate(() => window.__battle && window.__battle.debugResolve(true));
+  await dismissDialog();
+  await dismissDialog();
+  await page.waitForFunction(() => window.__cinematic.mode() === 'idle', null, { timeout: 25000 }).catch(() => {});
+
+  // A shop with nothing left to sell leaves the map.
+  const soldOut = await page.evaluate(() => {
+    const g = window.game;
+    const hex = [...g.map.hexes.values()].find((h) => h.encounter === 'shop');
+    if (!hex) return { skipped: true };
+    if (!hex.shop) hex.shop = g.rollShopStock();
+    const here = g.state.position;
+    g.state.position = hex; g.state.supplies = 999;
+    const last = hex.shop.options.includes('map') ? 'map' : hex.shop.options[0];
+    for (const id of hex.shop.options) if (id !== last) hex.shop.bought[id] = true;
+    const bought = g.shopBuy(last);
+    const after = hex.encounter;
+    g.state.position = here;
+    return { skipped: false, bought, after };
+  });
+  if (!soldOut.skipped && (!soldOut.bought || soldOut.after !== null)) problems.push('a sold-out shop stayed on the map: ' + JSON.stringify(soldOut));
 
   // The Stasis, straight through the rules layer: placement, line growth, colony
   // spawn, withering and debuffs.
@@ -421,6 +574,7 @@ fs.mkdirSync(OUT, { recursive: true });
     await page.waitForTimeout(400);
     const p = await screenPos(n[0], n[1]);
     await page.mouse.move(p.x, p.y); await page.waitForTimeout(60); await page.mouse.down(); await page.mouse.up();
+    await placeParty();
     await page.waitForFunction(() => !!window.__battle, null, { timeout: 30000 }).catch(() => {});
     if (!(await page.evaluate(() => !!window.__battle))) problems.push('forced encounter did not start an interactive battle');
     await page.evaluate(() => window.__battle && window.__battle.debugResolve(true));
@@ -733,6 +887,7 @@ fs.mkdirSync(OUT, { recursive: true });
     if (pos.enc === 'battle') {
       await page.evaluate(() => { const el = document.getElementById('tutorial'); if (!el.classList.contains('hidden')) document.getElementById('btn-tutorial-ok').click(); });
       await page.evaluate(() => window.game.enter(false));
+      await placeParty();
       await page.waitForFunction(() => !!window.__battle, null, { timeout: 30000 });
       const arena = await page.evaluate(() => {
         const b = window.__battle;
@@ -834,6 +989,7 @@ fs.mkdirSync(OUT, { recursive: true });
   // Remember the healthy max HP: the debuff shrinks it only for the fight.
   const preMax = await page.evaluate(() => window.game.state.party[0].maxHp);
   await page.evaluate(() => window.game.enter(false));
+  await placeParty();
   await page.waitForFunction(() => !!window.__battle, null, { timeout: 30000 });
   const curse = await page.evaluate(([pre]) => {
     const b = window.__battle;
@@ -855,6 +1011,7 @@ fs.mkdirSync(OUT, { recursive: true });
     await okCards();
   }
   await page.evaluate(() => window.game.enter(false));
+  await placeParty();
   await page.waitForFunction(() => !!window.__battle, null, { timeout: 30000 });
   await settleBattleIfAny();
   const scn3End = await page.evaluate(() => ({

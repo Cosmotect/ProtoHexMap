@@ -677,8 +677,20 @@ export class Game {
       return false;
     }
     hex.shop.bought[item] = true;
+    // Sold out: an empty shop is no longer an encounter. The tile loses its
+    // marker (like any consumed encounter), while hex.shop stays behind so the
+    // open window - and the tile's hover text - can still list what was here.
+    // Fatigue is untouched: shop's reset rule is 'optional', not 'always'.
+    if (this.shopSoldOut(hex)) this.consume(hex, 'shop', false);
     this.emit('change');
     return true;
+  }
+
+  // True when every option this shop stocks has been bought.
+  shopSoldOut(hex) {
+    const stock = hex?.shop;
+    if (!stock || !stock.options?.length) return false;
+    return stock.options.every((id) => !!stock.bought[id]);
   }
 
   // ----- battle ---------------------------------------------------------

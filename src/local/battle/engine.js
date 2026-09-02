@@ -31,14 +31,22 @@ import { DIRS, K, PK, addK, hexDist, rotOff, aimRot, abRotFor, rotDir, boardTile
 import { abilityById, tagDefById, combatStatsFor } from '../../config/abilities.js';
 
 export function createBattle({ config, radius, heights, party, enemies, partyKeys, enemyKeys, forced,
-                               partyDamageMod = 0, deferOpening = false,
-                               onChange, onFloater, onLog, onAnim, onEnd }) {
+                               partyDamageMod = 0, deferOpening = false, voidEdgeKeys = [],
+                               onChange, onFloater, onLog, onAnim, onEnd, onUnitDeath }) {
   const CFG = config.combat;
   const R = radius;
   const tiles = boardTiles(R);
   const inMap = (k) => { const [q, r] = PK(k); return Math.max(Math.abs(q), Math.abs(r), Math.abs(q + r)) <= R; };
   const tilePass = (k) => inMap(k);          // the arena has no blocked tiles (yet)
-  const isVoid = (k) => CFG.voidEdges && !tilePass(k);
+  // THE VOID EDGE. Off-board tiles are normally a wall to be crashed into. The
+  // ones listed in voidEdgeKeys are a hole instead: the arena side facing them
+  // borders an ether world tile (or the world's own rim), so there is nothing
+  // out there to hit - whatever is shoved that way falls out of the world and
+  // dies on the spot. The list is computed by the view, which is the only place
+  // that knows how the arena sits inside the world map (LocalMapView.voidEdgeKeys).
+  // config.combat.voidEdges = true still makes EVERY edge lethal, as before.
+  const voidSet = new Set(voidEdgeKeys ?? []);
+  const isVoid = (k) => !tilePass(k) && (CFG.voidEdges || voidSet.has(k));
   const activeTiles = () => tiles;
   const abById = abilityById;
   // A unit's view of an ability: its own resolved (upgraded) def when it has
@@ -58,11 +66,34 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     // creature can reach and then carry on with the unit they had picked.
     inspectUid: null, inspectReach: null,
     busy: false, over: null, deathQueue: [], ambush: !!forced,
+    // Where every unit that died fell - see noteDeath below.
+    deaths: [],
   };
 
   const emit = () => onChange && onChange();
   const floater = (k, text, color) => onFloater && onFloater(k, text, color);
   const blog = (t) => onLog && onLog(t);
+
+  // ----- death spots ------------------------------------------------------
+  // Every unit death is reported ON A TILE: the tile it was standing on when it
+  // died. For a unit shoved into the void that is its LAST tile INSIDE the
+  // arena, not the hole it fell into - loot dropped by a kill has to land
+  // somewhere the party can still walk to.
+  // Recorded in sb.deaths and handed to onUnitDeath(spot); the loot system will
+  // hang off this hook. Real deaths only - the enemy AI's simulation of a cast
+  // never reports - and once per unit.
+  const deathReported = new Set();
+  function noteDeath(st, u, tileK, cause) {
+    if (!st || st.sim || !u || u.uid === undefined || deathReported.has(u.uid)) return;
+    deathReported.add(u.uid);
+    const spot = {
+      uid: u.uid, name: u.name, icon: u.icon ?? null,
+      isEnemy: !!u.isEnemy, partyIndex: u.partyIndex ?? null,
+      key: tileK ?? u.pos, cause: cause ?? 'damage', round: sb.round,
+    };
+    sb.deaths.push(spot);
+    if (onUnitDeath) onUnitDeath(spot);
+  }
 
   function makeInstance(def, isEnemy, pos, i) {
     // The definition wins where it has an opinion: a bestiary row carries its
@@ -139,7 +170,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       else {
         floater(v.pos, pre + '-' + amt + (label ? ' ' + label : ''), '#ff5d73');
         blog(atk + v.name + ': -' + amt + (label ? ' ' + label : ''));
-        if (v.hp <= 0) blog(v.name + ' is down');
+        if (v.hp <= 0) { blog(v.name + ' is down'); noteDeath(st, v, v.pos, label || 'damage'); }
       }
     } else {
       if (v.hp <= 0) return;
@@ -176,6 +207,9 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     if (ent.uid !== undefined) {
       if (st.sim) { st.rec.dmg[ent.uid] = (st.rec.dmg[ent.uid] || 0) + ent.hp; st.rec.killed[ent.uid] = 1; }
       else { floater(ent.pos, '🕳 VOID', '#c66dff'); blog(ent.name + ' is shoved into the void'); }
+      // Reported BEFORE hp drops, while ent.pos is still the tile it stood on:
+      // that tile, not the hole, is where anything it was carrying stays.
+      noteDeath(st, ent, ent.pos, 'void');
       ent.hp = 0;
     } else {
       ent.hp = 0;
@@ -227,6 +261,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
           else if (occ.uid !== undefined) {
             if (st.sim) { st.rec.dmg[occ.uid] = (st.rec.dmg[occ.uid] || 0) + occ.hp; st.rec.killed[occ.uid] = 1; }
             else { floater(nk, 'CRUSHED', '#ff5d73'); blog(occ.name + ' is crushed flat'); }
+            noteDeath(st, occ, nk, 'crush');
             occ.hp = 0;
           } else sHit(st, occ, 999, '');
         }
@@ -796,7 +831,8 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // Test / debug helper: decide the battle instantly.
   function debugResolve(won) {
     if (sb.over) return;
-    for (const u of sb.units) if (u.isEnemy === !!won) u.hp = 0;
+    const live = liveSt();
+    for (const u of sb.units) if (u.isEnemy === !!won && u.hp > 0) { noteDeath(live, u, u.pos, 'debug'); u.hp = 0; }
     checkEnd();
   }
 

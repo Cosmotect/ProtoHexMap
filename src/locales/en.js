@@ -505,6 +505,10 @@ export const en = {
   'battle.enemiesFirst': 'The enemies struck first (forced by fatigue).',
   'battle.enemies': 'Enemies: {list}',
   'battle.round': 'Round {n}',
+  // The deployment bar (placing the party before a fight it walked into).
+  'deploy.step': 'Placing {n} of {total}',
+  'deploy.hint': 'Click a tile to place this unit.',
+  'deploy.hint.undo': 'Click a tile to place this unit. Right click takes the last one back.',
   // The battle bar (interactive combat on the local map).
   'battle.ui.round': 'Round {n}',
   'battle.ui.ambush': 'Ambush!',

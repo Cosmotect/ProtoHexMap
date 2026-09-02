@@ -69,6 +69,10 @@ export function createUI(config, handlers) {
     overlayText: $('overlay-text'),
     scene: $('scene'),
     pathInfo: $('path-info'),
+    deployBar: $('deploy-bar'),
+    deployStep: $('deploy-step'),
+    deployUnit: $('deploy-unit'),
+    deployHint: $('deploy-hint'),
     battleBar: $('battle-bar'),
     battleRound: $('battle-round'),
     battleActive: $('battle-active'),
@@ -627,6 +631,20 @@ export function createUI(config, handlers) {
     else { fillLocalInfo(info); updateBattle(); }
   }
 
+  // ----- the deployment bar -------------------------------------------------
+  // Before a fight the party walked into: which unit the cursor is carrying and
+  // how many are left to place. `state` is { index, total, unit } from the local
+  // view; null takes the bar away.
+  function setDeployBar(state) {
+    const on = !!state && !!state.unit;
+    els.deployBar.classList.toggle('hidden', !on);
+    document.body.classList.toggle('deploy-mode', on);
+    if (!on) return;
+    els.deployStep.textContent = t('deploy.step', { n: state.index + 1, total: state.total });
+    els.deployUnit.innerHTML = `<b>${escapeHtml(`${state.unit.icon ?? ''} ${tn(state.unit.name)}`.trim())}</b>`;
+    els.deployHint.textContent = state.index > 0 ? t('deploy.hint.undo') : t('deploy.hint');
+  }
+
   // Top half of the Local Map Info panel: what this fight is, and the effects
   // hanging over the arena. The enemy roster below it is redrawn every turn by
   // updateBattle(); this part is written once, when the fight opens.
@@ -914,7 +932,7 @@ export function createUI(config, handlers) {
     return `<svg class="ability-tree" viewBox="0 0 ${W} ${H}">${lines}${nodes}</svg>`;
   }
 
-  return { update, renderLog, setHover, showEnd, hideEnd, openDialog, closeDialog, dialogOpen, flashDialog, confirm, chooseUnit, chooseUpgrade, chooseBlackMarketUpgrade, showBanner, buildLegend, buildFatigueBar, updateBlur, setStartScreen, setLayerSelector, openRoster, closeRoster, rosterOpen, setBattleMode, updateBattle };
+  return { update, renderLog, setHover, showEnd, hideEnd, openDialog, closeDialog, dialogOpen, flashDialog, confirm, chooseUnit, chooseUpgrade, chooseBlackMarketUpgrade, showBanner, buildLegend, buildFatigueBar, updateBlur, setStartScreen, setLayerSelector, openRoster, closeRoster, rosterOpen, setBattleMode, setDeployBar, updateBattle };
 }
 
 // Log parameters are stored language-neutral and resolved at render time:

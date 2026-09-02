@@ -130,7 +130,10 @@ balance must be re-measured against interactive play.
     2 guaranteed options (Training = one upgrade pick for 25, reveal 8 tiles for 15)
     + 2 random from (rest 15, relic 25 = same as Training, rumours 15, spare parts
     30 = revive at 50%). Each option sells once; hovering a visited shop lists its
-    remaining stock.
+    remaining stock. When the LAST option is bought the shop is consumed like any
+    other encounter (marker gone, `encountersCleared` +1, fatigue untouched - its
+    reset rule is 'optional'); the stock stays on the hex so the open window still
+    reads correctly.
   * *Acolyte*: revives one fallen unit at `acolyte.reviveFraction` (50%) HP; not
     consumed if nobody has fallen.
   * Battle victories, treasure, shops, the Acolyte and camps each draw a flavour lore
@@ -179,11 +182,17 @@ balance must be re-measured against interactive play.
   shades of the entered world tile, pulled towards each IMMEDIATE neighbouring world
   tile near the edge facing it (squared falloff, per-tile jitter). Arena tiles have a
   BASELINE height from the entered world tile's TYPE - max(`local.tileHeight`, type's
-  visual height x `local.typeHeightScale` (2)) - so a hill arena starts taller than a
+  visual height x `local.typeHeightScale` (16)) - so a hill arena starts taller than a
   plains one; battle arenas then add rolling heights on top: `applyElevationWave`
-  (three seeded sine waves) snaps each tile to a level 0..`elevationLevels` (3), drawn
+  (three seeded sine waves) snaps each tile to a level 0..`elevationLevels` (4), drawn
   at `local.elevationStep` (0.35) world units per level (the campfire layout stays
-  flat, baseline only). THREE rings of surrounding world tiles stand around the arena
+  flat, baseline only). The levels are CENTRED on `local.elevationMid` (2): that
+  middle step is the untouched ground, flush with the surrounding world tiles, and
+  the arena has two steps up and two steps down around it. The wave's mix over an
+  arena is about 43% middle, 25% each one step up / down, 3.5% each two steps up /
+  down, so the outer steps read as rare peaks and pits; its feature size (`FREQ` in
+  localmap.js) is x2 the original, which leaves ~36% of tile borders flat and ~14% a
+  2-level cliff. THREE rings of surrounding world tiles stand around the arena
   as giant uninteractive backdrop hexes: bottoms on the arena floor, tops at the SAME
   type-baseline formula - so a mountain neighbour towers over a hill arena and a
   same-type neighbour sits flush with the arena's wave-less level; hidden tiles use
@@ -213,8 +222,13 @@ balance must be re-measured against interactive play.
     attacking from 2+ levels above adds `highBonus` (1) damage, from 2+ below loses
     `lowPenalty` (1); a shield blocks one hit or push; stun skips the unit's next
     activation; pushes crash into walls (2 dmg), fall 2+ levels (2 dmg + stun) and
-    crush whoever they land on (chains); `voidEdges` (off) can make edge shoves
-    lethal. Tile TAGS (fire: 1 dmg, 2 turns) tick when a unit activates on them,
+    crush whoever they land on (chains). **The void edge**: an arena side facing an
+    ETHER world tile (or the world's rim) is a hole, not a wall - anything shoved
+    over it dies instantly. main.js `worldEdgesFor` marks which of the six world
+    neighbours are holes, the view turns that into the off-board tile keys
+    (`computeVoidEdges`, matched by ANGLE because arena and world hexes use opposite
+    orientations) and hands them to the engine as `voidEdgeKeys`; `voidEdges` (off)
+    still makes EVERY edge lethal. Tile TAGS (fire: 1 dmg, 2 turns) tick when a unit activates on them,
     expire by lifetime, and support on-destroy / on-expire / on-pickup / periodic
     casts. Slowed units keep at least `minSpeed` (2).
   * **Abilities** (`ABILITIES`): zone-based - castZone (where it can be aimed),
@@ -231,6 +245,21 @@ balance must be re-measured against interactive play.
     The Stasis "damage" debuff arrives as `partyDamageMod`, a flat penalty to
     party ability damage. A fatigue-forced fight opens with an AMBUSH - one extra
     enemy phase before round 1 (no tag ticks, no round counter).
+  * **Deployment - the player places the party** (`local.deploy`): a fight the party
+    WALKED INTO opens with a placement step. The arena keeps the party off the board
+    during the dive (only the enemy is there as the clouds part); when the camera
+    lands, the cursor carries the next unit's icon on a flat tile decal (the world
+    map's cost-decal idea, an icon instead of numbers, red over an occupied tile),
+    left click locks that unit in, right click takes the last one back, and the
+    fight is built the moment the last unit is down (`#deploy-bar` shows who is
+    being placed). A FORCED fight (fatigue ambush) gets no choice: the party is
+    scattered at random, but as a GROUP - no two units further than
+    `deploy.maxSpread` (6) apart (`pickClusteredTiles`). Arenas whose recipe
+    authors party spawns, and "Restart battle", skip the step.
+  * **Death spots**: every unit death is reported with the tile it happened ON -
+    `sb.deaths` plus the `onUnitDeath` callback. A unit shoved into the void is
+    reported on its LAST tile inside the arena, not the hole. Nothing consumes this
+    yet: it is the hook for loot dropped by beaten enemies.
   * **Presentation**: the engine is pure state; everything visual goes through
     callbacks (onChange / onFloater / onLog / onAnim / onEnd). The view draws
     movement / cast ranges as hex-outline rings (bright over a dark backing, pulsing;

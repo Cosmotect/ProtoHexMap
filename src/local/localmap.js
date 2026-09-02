@@ -103,10 +103,12 @@ export function applyRecipe(map, recipe) {
  * roughly 43% middle, 25% each one step up / down, 3.5% each two steps up / down
  * - so the outermost steps read as rare peaks and pits, not as general terrain.
  *
- * FREQ is the size of the features: bigger = smaller, choppier bumps (x3 from
- * the original 0.9 / 0.8 / 0.6, which gave one lazy hill across the whole arena).
+ * FREQ is the size of the features: bigger = smaller, choppier bumps. x2 the
+ * original 0.9 / 0.8 / 0.6 - the original gave one lazy hill across the whole
+ * arena, x3 was too broken up to fight on (a quarter of all tile borders were
+ * 2-level cliffs), so the arena settled here.
  */
-const FREQ = [2.7, 2.4, 1.8];
+const FREQ = [1.8, 1.6, 1.2];
 
 export function applyElevationWave(map, random, levels) {
   const ph = [random() * Math.PI * 2, random() * Math.PI * 2, random() * Math.PI * 2];
@@ -130,6 +132,33 @@ export function pickRandomTiles(map, count, random, exclude = new Set()) {
   while (picked.length < count && pool.length) {
     const i = Math.floor(random() * pool.length);
     picked.push(pool.splice(i, 1)[0]);
+  }
+  return picked;
+}
+
+/**
+ * Random tiles that stay TOGETHER: every pair of picked tiles is at most
+ * `maxSpread` steps apart. This is how a party dropped into a fight it did not
+ * choose (a fatigue ambush) lands - scattered, but still a group that can reach
+ * each other, instead of one unit alone in a far corner.
+ *
+ * How: the first tile is free, and every pick afterwards narrows the pool to
+ * the tiles still within range of EVERY tile already taken. A pick near the rim
+ * can leave nothing in range for the last unit; that unit falls back to a plain
+ * random tile rather than going unplaced.
+ */
+export function pickClusteredTiles(map, count, random, exclude = new Set(), maxSpread = 6) {
+  if (count <= 0) return [];
+  const picked = [];
+  let pool = [...map.hexes.values()].filter((t) => !exclude.has(t.key));
+  while (picked.length < count && pool.length) {
+    const t = pool[Math.floor(random() * pool.length)];
+    picked.push(t.key);
+    pool = pool.filter((o) => o.key !== t.key && hexDistance(o.q, o.r, t.q, t.r) <= maxSpread);
+  }
+  if (picked.length < count) {
+    const used = new Set([...exclude, ...picked]);
+    picked.push(...pickRandomTiles(map, count - picked.length, random, used));
   }
   return picked;
 }
