@@ -1576,11 +1576,33 @@ export class LocalMapView {
   // and exactly gone again at 2*PI, starting its uncover at 3*PI/2 (270
   // degrees) - both sweeps moving the same way, right to left, only which
   // side of the moving edge is "already black" flips between them.
+  //
+  // COVER_START and UNCOVER_END are the two knobs for "how much of each
+  // quarter-turn is spent waiting vs. actually swiping", both read as a
+  // fraction (0..1) of their own 90-degree quarter:
+  //   COVER_START - the covering swipe waits out this fraction of the FIRST
+  //     quarter before it starts, then rushes to finish exactly at 90
+  //     degrees (the finish line never moves). Bigger = appears later AND
+  //     swipes faster, since it has less of the quarter left to cross the
+  //     screen in.
+  //   UNCOVER_END - deliberately (1 - COVER_START), not the same raw number:
+  //     the uncovering swipe still starts right at 270 degrees, but now
+  //     finishes after only this fraction of the LAST quarter instead of
+  //     taking the whole thing, then holds fully clear for what is left.
+  //     Using (1 - COVER_START) keeps the swipe itself the same width (and
+  //     so the same speed) as the covering one - it is just mirrored, sitting
+  //     at the START of its quarter instead of the end. Setting UNCOVER_END
+  //     to the SAME raw number as COVER_START would instead give the
+  //     uncover a wide, slow swipe starting immediately at 270 degrees -
+  //     the opposite of "faster" - which is the mix-up this comment is here
+  //     to head off.
   updateLayerRollWipe(angle) {
     this.ensureLayerRollDom();
     if (!this._wipeRoot || !this._wipeFill || !this._wipeEdge) return;
     this._wipeRoot.classList.remove('hidden');
     const QUARTER = Math.PI / 2;
+    const COVER_START = 0.75;
+    const UNCOVER_END = 1 - COVER_START;
     const vw = window.innerWidth;
     const feather = Math.min(140, vw * 0.1);
     const place = (fillLeft, fillRight, edgeLeft, edgeGrad) => {
@@ -1590,23 +1612,38 @@ export class LocalMapView {
       this._wipeEdge.style.width = `${feather}px`;
       this._wipeEdge.style.background = edgeGrad;
     };
-    if (angle <= QUARTER) {
+    const coverStartAngle = QUARTER * COVER_START;
+    // The uncover SWEEP itself runs from 270 degrees (3*QUARTER) to this
+    // angle, then the screen just holds fully clear for whatever is left of
+    // the quarter - the mirror image of the cover branch, which holds fully
+    // CLEAR up to coverStartAngle and then sweeps for what is left.
+    const uncoverSweepEndAngle = 3 * QUARTER + QUARTER * UNCOVER_END;
+    if (angle <= coverStartAngle) {
+      // Still well before the ground - nothing to show yet.
+      place(vw + feather, 0, vw, 'linear-gradient(to right, transparent, #000)');
+    } else if (angle <= QUARTER) {
       // Covering: a soft-edged black block enters from the right and grows
       // leftward, its leading (left) edge sweeping right -> left, landing
       // solid across the whole screen exactly when angle hits 90 degrees.
-      const p = angle / QUARTER;
+      const p = (angle - coverStartAngle) / (QUARTER - coverStartAngle);
       const boundary = vw + feather - p * (vw + 2 * feather);
       place(boundary, 0, boundary - feather, 'linear-gradient(to right, transparent, #000)');
     } else if (angle < 3 * QUARTER) {
-      // Fully underground: solid black, nothing left to animate.
+      // Fully underground: solid black, nothing left to animate yet.
       place(0, 0, -feather, 'linear-gradient(to right, transparent, #000)');
-    } else {
+    } else if (angle < uncoverSweepEndAngle) {
       // Uncovering: the exact same right -> left sweep, but now the CLEAR
       // area (already swept, to the right of the moving edge) is the one
       // eating into the black, so the right side of the screen clears first.
-      const p2 = Math.min(1, (angle - 3 * QUARTER) / QUARTER);
+      // Confined to UNCOVER_END's slice of the quarter, starting right at
+      // 270 degrees, so it finishes - and the screen goes fully clear - well
+      // before the roll's 360-degree finish line.
+      const p2 = (angle - 3 * QUARTER) / (uncoverSweepEndAngle - 3 * QUARTER);
       const boundary = vw + feather - p2 * (vw + 2 * feather);
       place(0, Math.max(0, vw - boundary), boundary, 'linear-gradient(to right, #000, transparent)');
+    } else {
+      // Already fully clear for the remainder of the roll.
+      place(0, vw + feather, -feather, 'linear-gradient(to right, #000, transparent)');
     }
   }
 
