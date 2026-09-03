@@ -32,9 +32,15 @@ import { abilityById, tagDefById, combatStatsFor } from '../../config/abilities.
 
 export function createBattle({ config, radius, heights, party, enemies, partyKeys, enemyKeys, forced,
                                partyDamageMod = 0, deferOpening = false, voidEdgeKeys = [],
-                               rng = Math.random, noFlee = false,
+                               rng = Math.random, noFlee = false, instant = false,
                                onChange, onFloater, onLog, onAnim, onEnd, onUnitDeath, onUnitFlee }) {
   const CFG = config.combat;
+  // INSTANT MODE (the Virtual Playtester, tools/playtester): every pacing delay
+  // in this file goes through `wait`, and with instant: true it collapses into
+  // a synchronous call - a whole enemy phase resolves before endTurn() returns.
+  // The RULES are untouched: the timeouts only ever existed so a human could
+  // watch the fight happen. The game itself never passes the flag.
+  const wait = (fn, ms) => { if (instant) fn(); else setTimeout(fn, ms); };
   const R = radius;
   const tiles = boardTiles(R);
   const inMap = (k) => { const [q, r] = PK(k); return Math.max(Math.abs(q), Math.abs(r), Math.abs(q + r)) <= R; };
@@ -647,12 +653,12 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     sb.activeUid = e.uid; emit();
     if (e.stunned) {
       e.stunned = false; floater(e.pos, 'STUNNED', '#c9a8ff');
-      sb.busy = true; setTimeout(() => { sb.busy = false; stepEnemy(); }, 650); return;
+      sb.busy = true; wait(() => { sb.busy = false; stepEnemy(); }, 650); return;
     }
     tagTick(e);
     if (checkEnd()) return;
-    if (e.hp <= 0) { emit(); setTimeout(stepEnemy, 500); return; }
-    sb.busy = true; setTimeout(() => aiTurn(e), 550);
+    if (e.hp <= 0) { emit(); wait(stepEnemy, 500); return; }
+    sb.busy = true; wait(() => aiTurn(e), 550);
   }
   function endRound() {
     sb.activeUid = null;
@@ -743,7 +749,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     animateMove(e, path, () => {
       sArrive(liveSt(), e); flushDeaths(liveSt());
       emit();
-      setTimeout(() => {
+      wait(() => {
         if (sb.over) { sb.busy = false; return; }
         if (e.hp > 0 && ringOf(e.pos) >= R) { escapeUnit(e); return; }
         sb.busy = false;
@@ -810,17 +816,17 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       animateMove(e, path, () => {
         sArrive(liveSt(), e); flushDeaths(liveSt());
         emit();
-        setTimeout(() => {
+        wait(() => {
           if (sb.over) { sb.busy = false; return; }
           if (e.hp <= 0 || e.stunned || e.pos !== best.startK) {
             if (e.hp > 0 && e.stunned) floater(e.pos, 'STUNNED', '#c9a8ff');
             emit();
-            setTimeout(() => { sb.busy = false; if (!checkEnd()) stepEnemy(); }, 450);
+            wait(() => { sb.busy = false; if (!checkEnd()) stepEnemy(); }, 450);
             return;
           }
           resolveCast(liveSt(), e, best.ab, best.t);
           emit();
-          setTimeout(() => { sb.busy = false; if (!checkEnd()) stepEnemy(); }, 550);
+          wait(() => { sb.busy = false; if (!checkEnd()) stepEnemy(); }, 550);
         }, 300);
       });
       return;
@@ -839,11 +845,11 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       animateMove(e, path, () => {
         sArrive(liveSt(), e); flushDeaths(liveSt());
         emit();
-        setTimeout(() => { sb.busy = false; if (!checkEnd()) stepEnemy(); }, 400);
+        wait(() => { sb.busy = false; if (!checkEnd()) stepEnemy(); }, 400);
       });
       return;
     }
-    setTimeout(() => { sb.busy = false; stepEnemy(); }, 400);
+    wait(() => { sb.busy = false; stepEnemy(); }, 400);
   }
 
   // ----- player input (called by the view / the HUD) -----------------------
@@ -872,7 +878,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
         sb.selAb = null; sb.aimMap = null;
         resolveCast(liveSt(), c, ab, target);
         emit();
-        setTimeout(() => {
+        wait(() => {
           sb.busy = false;
           if (checkEnd()) return;
           afterCast(c);   // casting finishes the unit and locks strayed positions

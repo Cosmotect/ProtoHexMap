@@ -444,9 +444,11 @@ stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }
 3. Party HP never grows, only abilities do (through the upgrade trees). Is that the
    pacing we want, or should HP / healing scale too?
 4. Map variants: branching lanes? Bigger fields? Multiple Seeds?
-5. How is combat balance measured now that fights are interactive? The planned tool
-   is a bot that plays roughly like a human (movement + decisions) - a separate,
-   large undertaking.
+5. Combat balance is measured by the VIRTUAL PLAYTESTER (see its section above):
+   all three phases are live - the combat gym, the world runner (full headless
+   campaigns) and the playstyle personas with per-decision pick records. Open
+   next: tuning the personas until the owner likes HOW they play, then using
+   the numbers to re-balance.
 
 ## Roadmap (suggested order)
 
@@ -456,6 +458,97 @@ stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }
 3. Path preview on hover (total cost to reach a tile).
 4. Save / load a run in the browser (localStorage), so a refresh does not reset.
 5. Polish: tile textures, fog clouds, more sound.
+
+## The Virtual Playtester (tools/playtester/)
+
+An automated system that PLAYS the game headlessly - no browser, no UI - and
+turns the results into balance data, Slay-the-Spire-metrics style. It imports
+the very modules the game ships (the combat engine, the bestiary builders, the
+upgrade resolver), so it can never drift into testing a different game; its
+bots act only through the public player API and see only what a player sees.
+It REPORTS findings; changing the game in response is always a separate,
+owner-approved request.
+
+* **Engine instant mode**: `createBattle({ instant: true })` collapses every
+  pacing setTimeout into a synchronous call (the `wait` helper) - a whole
+  enemy phase resolves before `endTurn()` returns. Rules untouched; the game
+  itself never passes the flag. This is the one game-side hook the harness
+  needed.
+* **The harness** (`headless.mjs`): one fight = the live arena recipe (local
+  map + elevation wave), seeded random-distinct-tile placement, resolved
+  party abilityDefs, an engine in instant mode and a bot on the sticks.
+  Everything is reproducible from (seed, group, party spec, bot); the bot
+  rolls its own seeded rng, separate from the game's. `buildParty` unlocks N
+  upgrade-tree nodes the way a run would (one available pick at a time), so
+  "N upgrades" is the gym's progression axis.
+* **The bots** (`bots.mjs`): policies with one entry point,
+  `actUnit(battle, unit, rng)`. `greedy` - competent-first-timer heuristics:
+  score every legal aim by its EXACT rotated footprint (never clip an ally or
+  the caster, never bloom-heal an enemy), close distance first with high
+  ground as a tie-break, heal real wounds. `random` - the lower bound and
+  crash-finder. Bot numbers are COMPARATIVE (before vs after a patch), not
+  absolute difficulty.
+* **The gym** (`gym.mjs`, `npm run gym`): sweeps enemy groups x party
+  progression points x N seeds, one JSON line per fight (plus a header that
+  makes the log self-describing), `--patch file.json` applies dotted-path
+  CONFIG overrides for A/B experiments on identical seeds. Roughly 20-50
+  fights/s single-process. **The report** (`report.mjs`, `npm run gym:report`)
+  aggregates a log into the bestiary difficulty ladder (win rate with a 95%
+  margin, rounds, HP left) as report.md; two logs = an experiment diff with
+  noise-aware markers. The harness guards its own spawns (everyone in one
+  walkable height component) so soft-locks do not pollute the statistics.
+* **The world runner** (`worldrun.mjs`): plays a COMPLETE campaign in Node -
+  a real `Game` on a real generated worldflake. Every fight is delegated the
+  way main.js delegates it (`game.combatDelegate` -> the shared `runArena`
+  core in instant mode, wounds written back by partyIndex, then
+  `finishCombat({ won, rounds, interactive: true })`), and every window the
+  game opens ('dialog' events) is queued during the action and answered after
+  it returns through the same public calls the buttons make (claimSupplies,
+  upgradeOffers + applyUpgradePick, shopBuy, restoreUnit, blackMarketOffers +
+  blackMarketDeal). Every upgrade screen also writes a per-decision 'pick'
+  record (offered refs vs the taken one) - the Slay-the-Spire lesson. Known
+  divergences from the live game, both cosmetic to the rules: no deployment
+  step (spawns are random, walkable-component guarded) and no scripted void
+  edges. The engine's rng is seeded now, so a whole campaign replays
+  identically from its seed.
+* **The personas** (`worldbot.mjs`): the overworld policy plus three
+  parameter sets - `cautious` (fights only what looks safe, camps early,
+  hoards, grinds before the Seed), `bold` (the intended baseline: calculated
+  risks, shops, black-market deals) and `rusher` (beelines the Seed; if THIS
+  wins often, the map is too easy). Decisions read only the public API and
+  only REVEALED tiles; with revealRadius 0 exploring literally means stepping
+  into the fog, and an impassable fogged tile is learned by bumping into it,
+  like a player clicking blind. Courage is measured in danger chevrons and
+  grows with the party's upgrade count. The upgrade CHOOSER is a seeded
+  random pick on purpose: pick-rate stats then measure what the game offers,
+  not a bot-invented meta.
+* **The campaign runner** (`campaign.mjs`, `npm run campaign`): N seeds per
+  persona, one 'run' line each (outcome, end reason, turns, fights, forced
+  fights, colonies, deaths, upgrades, supplies, the per-fight log) plus the
+  'pick' lines; `--patch` works like the gym's. `report.mjs` recognises a
+  campaign log automatically (`npm run campaign:report`): per-persona
+  outcome/pace/economy tables, a loss-anatomy table (HOW runs end), the
+  upgrade pick rates, and a per-persona win-rate diff when given two logs.
+  A run that stops moving is recorded as 'stalled' with its reason - that is
+  a finding about the policy or the map, not an error.
+* **Day-one findings** (2026-09-03, greedy bot, default trio, 30 seeds/cell;
+  REPORTED ONLY, nothing changed in the game by the owner's decision):
+  the inner band is a clean 100% at 0 upgrades; the middle band jumps to
+  0-3% at 0 upgrades and only reaches 60-80% at 12 - a cliff, not a ramp;
+  the outer band and every boss are 0% even at 12; colonies disagree wildly
+  with each other (Stasis Brood 57% vs Colony Anchor 0% at 12). Open bugs the
+  gym exposed: the Sweep upgrade's ring can HIT ITS OWN CASTER in melee, and
+  units can SPAWN ON SEALED PLATEAUS the height graph lets nobody leave or
+  reach, which soft-locks a fight forever (`localview.placeUnits` has no
+  walkable-component guard; the harness's own placement does).
+* **Campaign findings** (2026-09-03, 10 seeds/persona, light validation runs
+  only; REPORTED ONLY): every persona loses every run, mostly 'end.fell'
+  (killed in a fight) around turn 17-30 despite a 47-76% per-fight win rate -
+  consistent with the gym's middle-band cliff. One notable scale problem: a
+  1-chevron fight reads as "moderate risk" but is near-unwinnable for a
+  fresh party, so even the cautious persona (courage 1) walks into deaths
+  the danger chevrons approved. Nobody found or cleared a Colony in these
+  samples.
 
 ## Conventions for working on this project
 

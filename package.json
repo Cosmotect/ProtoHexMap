@@ -8,7 +8,11 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "build:single": "vite build --config vite.singlefile.config.js"
+    "build:single": "vite build --config vite.singlefile.config.js",
+    "gym": "node tools/playtester/gym.mjs",
+    "gym:report": "node tools/playtester/report.mjs",
+    "campaign": "node tools/playtester/campaign.mjs",
+    "campaign:report": "node tools/playtester/report.mjs tools/playtester/worldruns.jsonl"
   },
   "dependencies": {
     "three": "^0.185.1"
