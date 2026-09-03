@@ -7,6 +7,7 @@ import { playFatigueStep, playFatigueClear, clearStaggerMs } from './audio.js';
 import { unitAbilityIds, upgradeTree, treeLayout, upgradeRef } from './upgrades.js';
 import { ABILITIES } from './config/abilities.js';
 import { statusesFor, badgeNumber } from './status.js';
+import { biomeColorFor } from './map.js';
 
 // A status badge's hover text, in plain text (the overhead plaque builds the
 // same thing as HTML - see statusTipHtml in src/local/localview.js).
@@ -144,8 +145,33 @@ export function createUI(config, handlers) {
       if (battleRef) { battleRef.endTurn(); return; }
       handlers.onEnter();
     }
+    // 1 / 2 / 3 pick an ability of the unit whose turn it is, in the order the
+    // ability bar shows them: the unit's own abilities first, then its relic when
+    // the relic is an activatable one. (Relics do not exist yet - the slot is
+    // reserved, so the third key simply finds nothing until they do.)
+    if (battleRef && e.key >= '1' && e.key <= '3') {
+      const slots = battleAbilitySlots();
+      const id = slots[Number(e.key) - 1];
+      if (id) battleRef.selectAbility(id);
+      return;
+    }
     if (e.key === 'Escape') { closeMenu(); closeRoster(); handlers.onEscape && handlers.onEscape(); }
   });
+
+  // The abilities the hotkeys address, in bar order. Empty unless it is the
+  // player's phase, a unit is selected and the engine is not mid-animation - the
+  // same conditions under which the on-screen buttons are clickable.
+  function battleAbilitySlots() {
+    if (!battleRef) return [];
+    const sb = battleRef.state;
+    if (sb.phase !== 'player' || sb.busy || sb.over) return [];
+    const c = battleRef.curPlayer();
+    if (!c) return [];
+    const slots = [...(c.abilityIds ?? [])];
+    const relicAb = c.relic && (c.relic.abilityId ?? c.relic.ability);
+    if (relicAb && battleRef.abilityFor(c, relicAb)) slots.push(relicAb);
+    return slots;
+  }
 
   let currentSeed = 0;
   let lastGame = null;   // the party panel is redrawn from combat too, not only from update()
@@ -174,6 +200,10 @@ export function createUI(config, handlers) {
   // ----- legend ------------------------------------------------------
   // Collapsed by default, expands on hover; each entry expands on click to show its info.
   // Rebuilt whenever a setting changes, since the texts are generated from the config.
+  // Which layer's biome palette the legend swatches show. Set from the running
+  // game in update(); the config default covers the moments before a run exists.
+  let legendLayer = config.layers?.startLayer ?? 4;
+
   function buildLegend() {
   const legendItems = [];
   for (const [name, tr] of Object.entries(config.tileTypes)) {
@@ -184,9 +214,11 @@ export function createUI(config, handlers) {
   }
   // Biomes: mostly colour - the swatch shows the pure biome colour that land tiles
   // are shifted towards. A special biome (wither) may also add an HP cost.
+  // A biome wears a different colour on every layer of the worldflake, so the swatch
+  // asks map.js for the one THIS run is on (legendLayer, kept current in update()).
   for (const [name, b] of Object.entries(config.biomes)) {
     const note = (b.hpCost ?? 0) > 0 ? t('legend.costHp', { hp: b.hpCost }) : '';
-    legendItems.push({ swatch: `<span class="swatch" style="background:${hex(b.color)}"></span>`, label: `${t(`biome.${name}`)}${note}`, info: tc(`biome.${name}.info`, config) });
+    legendItems.push({ swatch: `<span class="swatch" style="background:${hex(biomeColorFor(b, legendLayer))}"></span>`, label: `${t(`biome.${name}`)}${note}`, info: tc(`biome.${name}.info`, config) });
   }
   for (const [type, v] of Object.entries(config.encounters.visuals)) {
     if (v.hidden) continue;   // scenario-only markers (the tutorial waypoint) stay out of the legend
@@ -303,6 +335,11 @@ export function createUI(config, handlers) {
   function update(game) {
     const s = game.state;
     currentSeed = game.seed;
+    // A new run may sit on a different layer, where every biome wears other colours.
+    if (game.map && game.map.layer !== undefined && game.map.layer !== legendLayer) {
+      legendLayer = game.map.layer;
+      buildLegend();
+    }
     syncFatigueBar(game);
     if (startScreenMode) {
       // The start screen: the Enter button's slot holds "Begin journey".
@@ -674,6 +711,8 @@ export function createUI(config, handlers) {
       .filter((u) => u.isEnemy)
       .sort((a, b) => b.init - a.init || a.idx - b.idx);
     els.enemyRoster.innerHTML = order.map((u, i) => {
+      // A unit that ran off the field also sits at 0 HP, but it was never killed:
+      // the card says so instead of showing it as a casualty.
       const dead = u.hp <= 0;
       const pct = Math.max(0, Math.min(100, (u.hp / u.maxHp) * 100));
       const segPct = (config.party.hpSegment / u.maxHp) * 100;
@@ -691,7 +730,7 @@ export function createUI(config, handlers) {
         ${unitCardBody({
           portrait: escapeHtml(initial),
           name: tn(u.name),
-          hpText: t('party.hp', { hp: Math.max(0, u.hp), max: u.maxHp }),
+          hpText: u.fled ? t('battle.ui.fled') : u.fleeing ? t('battle.ui.fleeing') : t('party.hp', { hp: Math.max(0, u.hp), max: u.maxHp }),
           pct, segPct, slots: slots.join(''), statuses: statusesFor(u),
         })}
       </div>`;
@@ -721,12 +760,16 @@ export function createUI(config, handlers) {
     if (sb.phase === 'player' && c) {
       const hint = c.moveLocked ? t('battle.ui.locked') : t('battle.ui.canMove');
       els.battleActive.innerHTML = `<b>${c.icon ?? ''} ${escapeHtml(tn(c.name))}</b> <span class="hp">${t('battle.ui.hp', { hp: c.hp, max: c.maxHp })}</span> <span class="muted">${escapeHtml(hint)}</span>`;
+      // The hotkeys (1 / 2 / 3) address this same list, so the tooltip names the key.
+      const slots = battleAbilitySlots();
       els.battleAbilities.innerHTML = c.abilityIds.map((id) => {
         const ab = battleRef.abilityFor(c, id);   // the unit's UPGRADED def
         if (!ab) return '';
         const sel = sb.selAb === id ? 'selected' : '';
         const num = ab.damage > 0 ? `⚔${ab.damage}` : ab.heal > 0 ? `+${ab.heal}` : '';
-        const tip = `${ab.name}${ab.damage > 0 ? ` - ${t('battle.ui.dmg', { n: ab.damage })}` : ''}${ab.heal > 0 ? ` - ${t('battle.ui.heal', { n: ab.heal })}` : ''}`;
+        const slot = slots.indexOf(id);
+        const key = slot >= 0 && slot < 3 ? ` [${slot + 1}]` : '';
+        const tip = `${ab.name}${key}${ab.damage > 0 ? ` - ${t('battle.ui.dmg', { n: ab.damage })}` : ''}${ab.heal > 0 ? ` - ${t('battle.ui.heal', { n: ab.heal })}` : ''}`;
         return `<button class="ab ${sel}" data-ab="${id}" title="${escapeAttr(tip)}" ${sb.busy ? 'disabled' : ''}>
           <span class="ab-icon">${ab.icon}</span><small>${escapeHtml(ab.name)}</small>${num ? `<span class="ab-num">${num}</span>` : ''}
         </button>`;

@@ -103,10 +103,10 @@ export const CONFIG = {
   worldBackground: {
     color: 0x1c2035,          // behind the map, and the colour distant tiles fade into
     fog: true,                // distance fog on (off = tiles stay sharp to the horizon)
-    fogNear: 15,              // world units at which the fade starts
+    fogNear: 20,              // world units at which the fade starts
     fogFar: 60,               // ...and at which a tile is fully the background colour
-    groundColor: 0x205f62,    // the void floor far below, seen through the ether holes
-    groundDepth: -10,         // how far below y=0 that floor sits (was -30: with the
+    groundColor: 0x2c6369,    // the void floor far below, seen through the ether holes
+    groundDepth: -5,          // how far below y=0 that floor sits (was -30: with the
                               // tighter fogNear/fogFar above, -30 fogged out to plain
                               // background colour before it read as a floor at all)
   },
@@ -116,7 +116,7 @@ export const CONFIG = {
     fogNear: 20,
     fogFar: 60,
     groundColor: 0x2d6673,
-    groundDepth: -10,         // same fix as worldBackground.groundDepth, for the arena
+    groundDepth: -5,          // same fix as worldBackground.groundDepth, for the arena
   },
 
   // ----- Camera ------------------------------------------------------
@@ -130,7 +130,7 @@ export const CONFIG = {
     maxDistance: 32,
     minTiltDegrees: 15,       // how far the player may tilt the camera
     maxTiltDegrees: 72,
-    followPlayer: true,       // camera glides after the player when they move
+    followPlayer: false,      // camera glides after the player when they move
     followDurationMs: 650,
   },
 

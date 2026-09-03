@@ -216,8 +216,12 @@ balance must be re-measured against interactive play.
     repositioning.
   * **Enemy phase**: enemies act by initiative (ties by index), one move + one cast
     each. The AI simulates every reachable cast and scores the outcome (damage,
-    kills, stuns - for and against); with nothing worth casting it approaches the
-    party along a distance field.
+    kills, stuns, and POPPING A SHIELD - for and against); with nothing worth casting
+    it approaches the party along a distance field. The shield term
+    (`combat.shieldStripScore`, 14, against 10 per point of damage) exists because a
+    blocked hit deals no damage: without it the AI scored such a swing as worthless,
+    refused to attack a shielded unit at all, and since a shield only ever expires by
+    blocking something, it stayed up for the rest of the fight (fixed 2026-09-02).
   * **Shared rules**: an uphill step costs 2 movement, flyers glide over anything;
     attacking from 2+ levels above adds `highBonus` (1) damage, from 2+ below loses
     `lowPenalty` (1); a shield blocks one hit or push; stun skips the unit's next
@@ -231,6 +235,24 @@ balance must be re-measured against interactive play.
     still makes EVERY edge lethal. Tile TAGS (fire: 1 dmg, 2 turns) tick when a unit activates on them,
     expire by lifetime, and support on-destroy / on-expire / on-pickup / periodic
     casts. Slowed units keep at least `minSpeed` (2).
+  * **The retreat rule** (`combat.flee`, since 2026-09-02): a decided fight ends
+    itself instead of being mopped up. From the round AFTER `afterRound` (7), on every
+    enemy's turn, while the enemy side's remaining HP is under `hpFraction` (0.3) of
+    what it had at the bell, each enemy that has not broken yet rolls
+    `100 / (enemies still standing)` percent to flee - so a crowd goes a few at a
+    time and the last one standing always runs. The roll happens ONCE per enemy: a
+    fleeing enemy is locked in, walks for the highest ring it can reach each turn,
+    never fights, and is a perfectly ordinary target the whole way. Reaching the rim
+    takes it off the board with the same pop a consumed encounter marker gets on the
+    world map (`LocalMapView.vanishToken`). Escaping is NOT a death: `noteDeath` is
+    never called, so nothing lands in `sb.deaths` / `onUnitDeath` - **when loot
+    exists, this is exactly the branch that must not roll it**. The fight still ends
+    in a WIN once no enemy is left standing, so the party keeps the completion reward.
+    The rolls use the engine's injectable `rng` (default `Math.random`) - the only
+    randomness in an otherwise deterministic engine.
+    **The Stasis is exempt**: a Stasis Seed or Colony fight never offers the roll at
+    all. `prepareCombat` puts `stasis` on the combat context (game.js), main.js hands
+    it to `createBattle` as `noFlee`, and the engine mirrors it on `state.noFlee`.
   * **Abilities** (`ABILITIES`): zone-based - castZone (where it can be aimed),
     dmgZone / tagZone / hZone / pushZone offsets from the aim point, rotatable
     abilities snap their zones to one of six 60-degree sectors towards the aim;
@@ -404,6 +426,16 @@ state  = { status, party, supplies, maxSupplies, turn, position, shortestPathLen
            fatigueSteps, fatigue, coloniesCleared, endReason }
 stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }], witherCharge }
 ```
+* 2026-09-02 Shield deadlock fixed (see the AI scoring note above), the **retreat
+  rule** added (the Stasis exempt from it), keys **1 / 2 / 3** select the active unit's abilities in bar order
+  (own abilities first, then an activatable relic - relics do not exist yet, so the
+  third key finds nothing until they do), and the world map's forced-encounter banner
+  reads **"Ambushed!"** instead of "Exhausted!". Biomes lost their flat `color`: every
+  generated biome now carries color0..color8 and the legend swatch asks
+  `biomeColorFor` for the layer the run is on. Wither keeps its flat `color` on
+  purpose - it is the same rot on every layer. Owner's config calls: the layer gate
+  weight up to 1 (from 0.03), both void floors to -5, world fogNear 20, water
+  #23479c, camera follow off, and a repaint of the layer 4 / 5 biome palettes.
 
 ## Open questions
 

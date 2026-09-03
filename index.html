@@ -12,6 +12,15 @@
   <body>
     <div id="scene"></div>
 
+    <!-- Pure-black wipe for the layer-switch camera roll (src/local/localview.js
+         startLayerRoll/stepLayerRoll). #layer-wipe-fill is the solid part,
+         #layer-wipe-edge is its soft gradient edge; both are repositioned every
+         frame from JS, never animated by CSS. Empty and hidden the rest of the time. -->
+    <div id="layer-wipe" class="hidden">
+      <div id="layer-wipe-fill"></div>
+      <div id="layer-wipe-edge"></div>
+    </div>
+
     <div id="hud">
       <div class="top-right menu-wrap" id="menu-wrap">
         <button id="btn-menu" class="menu-toggle" data-i18n="menu.button" data-i18n-title="menu.button.title">Menu</button>

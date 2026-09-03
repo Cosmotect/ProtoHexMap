@@ -25,7 +25,7 @@ export const WORLD = {
   layers: {
     startLayer: 4,                              // where every new player begins
     unlockOrder: [4, 5, 3, 6, 2, 7, 1, 8, 0],   // gate unlocks walk this list; 0 = the core
-    rollMs: 2600,                               // the layer-switch camera roll (start screen)
+    rollMs: 5200,                                // the layer-switch camera roll (start screen); 2x the original 2600
   },
 
   // ----- Tile types ----------------------------------------------------
@@ -41,7 +41,7 @@ export const WORLD = {
   // data (impassable for now) so later mechanics can make it navigable.
   tileTypes: {
     ether: { passable: false, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 0, color: 0x0d1020, height: 0, biomeTint: false },
-    water: { passable: false, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 1, color: 0x3c7dc4, height: 0.1, biomeTint: false },
+    water: { passable: false, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 1, color: 0x23479c, height: 0.1, biomeTint: false },
     ground: { passable: true, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 0, color: 0x4d4f46, height: 0.25, biomeTint: true },
     hill: { passable: true, supplyCost: 3, hpCost: 0, revealBonus: 1, terrainHeight: 1, color: 0x8f8d74, height: 0.55, biomeTint: true },
     mountain: { passable: true, supplyCost: 10, hpCost: 5, revealBonus: 2, terrainHeight: 2, color: 0xb0bbc8, height: 0.95, biomeTint: true },
@@ -61,17 +61,19 @@ export const WORLD = {
   //    A layer without its own entry falls back to `color`. `color` doubles as
   //    the start layer's palette and the legend swatch.
   biomes: {
-    grasslands: { color: 0x62c454, color0: 0x4a2550, color1: 0x9d2c31, color2: 0xb84396, color3: 0xc08049, color4: 0x62c454, color5: 0x8bd256, color6: 0x7e56c1, color7: 0x5bcaa0, color8: 0xa1b79e },
-    forest: { color: 0x135b32, color0: 0x220b18, color1: 0x452809, color2: 0x50121c, color3: 0x555612, color4: 0x135b32, color5: 0x0c6818, color6: 0x541459, color7: 0x125361, color8: 0x355041 },
-    mesa: { color: 0xc4622e, color0: 0x1b3a4a, color1: 0x4e1995, color2: 0x2c4bad, color3: 0xb02bba, color4: 0xc4622e, color5: 0xde2a21, color6: 0x31c0aa, color7: 0xc1d12c, color8: 0xa78d7f },
-    desert: { color: 0xe0b360, color0: 0x213965, color1: 0x9c19cc, color2: 0x5248d7, color3: 0xdd52bd, color4: 0xe0b360, color5: 0xee9464, color6: 0x63cadc, color7: 0xb4e56a, color8: 0xcfc6b7 },
-    dunes: { color: 0xf0dca2, color0: 0x263e82, color1: 0xcc35ec, color2: 0x9282e7, color3: 0xed90ce, color4: 0xf0dca2, color5: 0xf9d0b0, color6: 0xa3dbee, color7: 0xd3f4b1, color8: 0xf7f6f3 },
-    tundra: { color: 0xd8ecf4, color0: 0x894f38, color1: 0xb4df6c, color2: 0xe8d9b5, color3: 0xcbeec6, color4: 0xd8ecf4, color5: 0xecfbfb, color6: 0xf3d8de, color7: 0xeae9f9, color8: 0xffffff },
+    grasslands: { color0: 0x4a2550, color1: 0x9d2c31, color2: 0xb84396, color3: 0xc08049, color4: 0x62c454, color5: 0x0c8b62, color6: 0x7e56c1, color7: 0x5bcaa0, color8: 0xa1b79e },
+    forest: { color0: 0x220b18, color1: 0x452809, color2: 0x50121c, color3: 0x555612, color4: 0x135b32, color5: 0x5f6be2, color6: 0x541459, color7: 0x125361, color8: 0x355041 },
+    mesa: { color0: 0x1b3a4a, color1: 0x4e1995, color2: 0x2c4bad, color3: 0xb02bba, color4: 0x23cf68, color5: 0x1cd5e3, color6: 0x31c0aa, color7: 0xc1d12c, color8: 0xa78d7f },
+    desert: { color0: 0x213965, color1: 0x9c19cc, color2: 0x5248d7, color3: 0xdd52bd, color4: 0xddda64, color5: 0xcdeef1, color6: 0x63cadc, color7: 0xb4e56a, color8: 0xcfc6b7 },
+    dunes: { color0: 0x263e82, color1: 0xcc35ec, color2: 0x9282e7, color3: 0xed90ce, color4: 0xdbe0b1, color5: 0xffaaaa, color6: 0xa3dbee, color7: 0xd3f4b1, color8: 0xf7f6f3 },
+    tundra: { color0: 0x894f38, color1: 0xb4df6c, color2: 0xe8d9b5, color3: 0xcbeec6, color4: 0xb8f5e8, color5: 0xc488cc, color6: 0xf3d8de, color7: 0xeae9f9, color8: 0xffffff },
     // Wither is not born with the world: the Stasis paints it over tiles during the
     // run (see game.js witherNear). The tile keeps its TYPE - its shape and movement
     // rules - but turns Stasis-purple, hurts to step onto and is seen from 1 further.
     // Withered water dries into walkable ground; ether is never withered.
-    // Deliberately the SAME on every layer, so the rot always reads as the rot.
+    // Deliberately the SAME on every layer, so the rot always reads as the rot: it is
+    // the ONLY biome that still carries a flat `color` instead of color0..color8,
+    // and map.js biomeColorFor falls back to it when no layer colour exists.
     wither: { color: 0x3b2a6e, generated: false, hpCost: 1, terrainHeight: 1, tintAmount: 0.5, tintAllTypes: true },
   },
 

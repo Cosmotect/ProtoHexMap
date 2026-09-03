@@ -22,7 +22,7 @@ export const ENCOUNTERS = {
       // below caps it at one. Entering it unlocks the next layer of the
       // worldflake (config.layers.unlockOrder; the chain is meta-progression,
       // remembered by the browser across runs).
-      gate: 0.03,
+      gate: 1,
     },
     guaranteed: { acolyte: 1 },   // ...but at least this many per map
     unique: ['gate'],             // types that appear at most ONCE per map

@@ -236,7 +236,7 @@ export const en = {
   'log.cost.supplies': '-{n} supplies',
   'log.cost.hp': '-{n} HP each',
   'log.perished': 'The whole party perished on the mountain after {turn} moves.',
-  'log.forced': 'Exhausted! The party stumbles straight into the {label} encounter ({chance}% roll failed).',
+  'log.forced': 'Ambushed! The party stumbles straight into the {label} encounter ({chance}% roll failed).',
   'log.encounterHere': '{label} encounter here. Press "Enter" to go in, or keep walking.',
   'log.entered': 'Entered {label}.',
   'log.forcedInto': 'Forced into {label}.',
@@ -512,6 +512,8 @@ export const en = {
   // The battle bar (interactive combat on the local map).
   'battle.ui.round': 'Round {n}',
   'battle.ui.ambush': 'Ambush!',
+  'battle.ui.fleeing': 'fleeing',
+  'battle.ui.fled': 'escaped',
   'battle.ui.endTurn': 'End turn',
   'battle.ui.endTurn.title': 'End the whole party\'s turn (E)',
   'battle.ui.hp': '{hp}/{max} HP',
@@ -561,7 +563,7 @@ export const en = {
   'acolyte.title': 'Acolyte of the Great Forge',
   'acolyte.text': 'The forge can return one disabled companion, at {pct} of their health. Choose who.',
   'acolyte.skip': 'Nobody will be restored. The Acolyte stays on this tile, so you can come back.',
-  'banner.forced': 'Exhausted! Stumbled into {label}',
+  'banner.forced': 'Ambushed! Stumbled into {label}',
   'banner.skipped': 'Guide skipped',
 
   // ----- settings ---------------------------------------------------------------------

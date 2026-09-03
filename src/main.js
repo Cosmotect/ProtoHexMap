@@ -299,6 +299,9 @@ function beginInteractiveBattle(ctx, placementOverride = null) {
     enemyKeys: placement.enemyKeys,
     forced: ctx.forced,
     partyDamageMod: ctx.damageMod ?? 0,   // the Stasis "damage" debuff
+    // The Stasis does not retreat: a Seed or a Colony is fought to the last body,
+    // however badly it is losing (config.combat.flee).
+    noFlee: !!ctx.stasis,
     // Built now (at the peak of the transition, so the HUD is already the
     // battle's when the clouds part) but a fatigue ambush does not swing until
     // battle.start() - otherwise its opening blow lands behind the clouds.
@@ -308,6 +311,10 @@ function beginInteractiveBattle(ctx, placementOverride = null) {
     // Every death, with the tile it happened on. Nothing reads this yet - it is
     // the hook loot dropped by beaten enemies will hang off.
     onUnitDeath: (spot) => { lastDeathSpots.push(spot); },
+    // An enemy that broke off and got away. Deliberately NOT onUnitDeath: it left
+    // the field alive, so it is not in lastDeathSpots and (when loot exists) must
+    // not drop any. The fight can still be won by everyone running.
+    onUnitFlee: (uid, done) => view.vanishToken(uid, done),
     onChange: () => { view.syncBattle(); ui.updateBattle(); syncPartyPanel(); },
     onFloater: (k, text, color) => view.addFloater(k, text, color),
     onLog: () => {},   // the floaters carry the story; a combat log can come later
@@ -556,7 +563,7 @@ function switchLayer(layer) {
   const seed = game.seed;
   const party = game.state.party;
   cinematic.localView.startLayerRoll({
-    durationMs: CONFIG.layers?.rollMs ?? 2600,
+    durationMs: CONFIG.layers?.rollMs ?? 5200,
     onHalf: () => startRun(seed, { layer, preserveParty: party }),
     onDone: () => {
       layerRolling = false;

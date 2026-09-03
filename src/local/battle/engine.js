@@ -32,12 +32,16 @@ import { abilityById, tagDefById, combatStatsFor } from '../../config/abilities.
 
 export function createBattle({ config, radius, heights, party, enemies, partyKeys, enemyKeys, forced,
                                partyDamageMod = 0, deferOpening = false, voidEdgeKeys = [],
-                               onChange, onFloater, onLog, onAnim, onEnd, onUnitDeath }) {
+                               rng = Math.random, noFlee = false,
+                               onChange, onFloater, onLog, onAnim, onEnd, onUnitDeath, onUnitFlee }) {
   const CFG = config.combat;
   const R = radius;
   const tiles = boardTiles(R);
   const inMap = (k) => { const [q, r] = PK(k); return Math.max(Math.abs(q), Math.abs(r), Math.abs(q + r)) <= R; };
   const tilePass = (k) => inMap(k);          // the arena has no blocked tiles (yet)
+  // How far out a tile sits: 0 at the centre, R on the rim. The retreat rule reads
+  // it to point a fleeing enemy at the nearest way off the board.
+  const ringOf = (k) => { const [q, r] = PK(k); return Math.max(Math.abs(q), Math.abs(r), Math.abs(q + r)); };
   // THE VOID EDGE. Off-board tiles are normally a wall to be crashed into. The
   // ones listed in voidEdgeKeys are a hole instead: the arena side facing them
   // borders an ether world tile (or the world's own rim), so there is nothing
@@ -66,6 +70,8 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     // creature can reach and then carry on with the unit they had picked.
     inspectUid: null, inspectReach: null,
     busy: false, over: null, deathQueue: [], ambush: !!forced,
+    // True for a Stasis Seed / Colony fight: this enemy never breaks and runs.
+    noFlee: !!noFlee,
     // Where every unit that died fell - see noteDeath below.
     deaths: [],
   };
@@ -118,6 +124,9 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   let i = 0;
   party.forEach((def, pi) => { if (partyKeys[pi]) sb.units.push(makeInstance({ ...def, partyIndex: def.partyIndex ?? pi }, false, partyKeys[pi], i++)); });
   enemies.forEach((def, ei) => { if (enemyKeys[ei]) sb.units.push(makeInstance(def, true, enemyKeys[ei], i++)); });
+  // What the enemy side was worth at the bell - the baseline the retreat rule
+  // measures "beaten" against (CFG.flee).
+  sb.enemyHp0 = sb.units.reduce((a2, u) => a2 + (u.isEnemy ? u.hp : 0), 0);
   sb.uidc = i;
 
   function tagInst(d, id, k) {
@@ -131,7 +140,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
 
   // ----- small queries --------------------------------------------------
   const sbH = (k) => sb.heights[k] ?? 0;
-  const alive = (f) => sb.units.filter((u) => u.hp > 0 && (f === undefined || u.isEnemy === f));
+  const alive = (f) => sb.units.filter((u) => u.hp > 0 && (f === undefined || u.isEnemy === f));   // fled units carry hp 0, so they drop out here too
   const unitAt = (k) => sb.units.find((u) => u.hp > 0 && u.pos === k);
   const curP = () => sb.units.find((u) => u.uid === sb.activeUid && !u.isEnemy && u.hp > 0);
   const speedFloor = (u) => Math.min(u.speed, CFG.minSpeed);
@@ -148,7 +157,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       units: sb.units.map((u) => ({ uid: u.uid, isEnemy: u.isEnemy, flying: u.flying, hp: u.hp, maxHp: u.maxHp, pos: u.pos, shield: u.shield, critBuff: u.critBuff, haste: u.haste, stunned: u.stunned, power: u.power })),
       tags: Object.fromEntries(Object.entries(sb.tags).map(([k, t]) => [k, { ...t }])),
       heights: { ...sb.heights }, deathQueue: [],
-      rec: { dmg: {}, moved: {}, killed: {}, stun: {}, tmoved: {}, tkilled: {} } };
+      rec: { dmg: {}, moved: {}, killed: {}, stun: {}, blocked: {}, tmoved: {}, tkilled: {} } };
   }
   const stH = (st, k) => st.heights[k] ?? 0;
   const sUnitAt = (st, k) => st.units.find((u) => u.hp > 0 && u.pos === k);
@@ -161,7 +170,16 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     if (v.uid !== undefined) {
       if (v.hp <= 0) return;
       if (v.shield || (st.shieldUsed && st.shieldUsed.has(v.uid))) {
-        if (v.shield) { v.shield = false; if (st.shieldUsed) st.shieldUsed.add(v.uid); }
+        // A blocked hit deals no damage, but it is not a wasted swing: it SPENDS the
+        // shield. The sim records that separately (st.rec.blocked) so the AI can value
+        // it - see aiTurn. Recording it as damage would be a lie; recording nothing at
+        // all is what used to make enemies ignore a shielded unit for the rest of the
+        // fight, and a shield that nobody attacks never expires.
+        if (v.shield) {
+          v.shield = false;
+          if (st.shieldUsed) st.shieldUsed.add(v.uid);
+          if (st.sim) st.rec.blocked[v.uid] = 1;
+        }
         if (!st.sim) { floater(v.pos, pre + 'SHIELD', '#5fc7e0'); blog(atk + v.name + ': blocked by shield'); }
         return;
       }
@@ -346,7 +364,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       const dist = (o[3] || 1) >= 2 ? 2 : 1;
       const u = sUnitAt(st, dt);
       if (u) { shoves.push({ ent: u, dir: rd, dist }); continue; }
-      const corpse = st.units.find((x) => x.hp <= 0 && x.pos === dt && preAlive.has(x.uid));
+      const corpse = st.units.find((x) => x.hp <= 0 && !x.fled && x.pos === dt && preAlive.has(x.uid));
       if (corpse) { sPushCorpse(st, corpse, rd); continue; }
       const t = st.tags[dt]; if (t && t.hp > 0 && t.pushable) shoves.push({ ent: t, dir: rd, dist });
     }
@@ -683,9 +701,79 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     if (onEnd) onEnd(won);
   }
 
+  // ----- the retreat rule (CFG.flee) --------------------------------------
+  // True while the enemy side is beaten badly enough, late enough in the fight,
+  // for its survivors to start breaking. Both numbers are config (abilities.js).
+  function fleeAllowed() {
+    // The Stasis never breaks: a Seed or Colony fight is to the last body, whatever
+    // is left of it. main.js sets this from the encounter (game.js ctx.stasis).
+    if (noFlee) return false;
+    const f = CFG.flee;
+    if (!f || !(f.hpFraction > 0) || !(sb.enemyHp0 > 0)) return false;
+    if (sb.round <= (f.afterRound ?? 7)) return false;
+    const left = alive(true).reduce((a, u) => a + u.hp, 0);
+    return left < sb.enemyHp0 * f.hpFraction;
+  }
+  // One roll, once, per enemy: 100 / (enemies still standing) percent. With four
+  // left that is a quarter each per turn; with one left it is a certainty. An
+  // enemy that has already broken never reconsiders - it just keeps running.
+  function rollFlee(e) {
+    if (e.fleeing) return true;
+    if (!fleeAllowed()) return false;
+    const n = alive(true).length;
+    if (n <= 0) return false;
+    if (rng() * 100 >= 100 / n) return false;
+    e.fleeing = true;
+    floater(e.pos, 'FLEEING', '#ffd166');
+    blog(e.name + ' breaks and runs');
+    return true;
+  }
+  // A broken enemy spends its turn walking for the nearest edge - the highest ring
+  // it can stop on - and is off the board the moment it stands on the rim. It does
+  // not fight on the way and is still a perfectly ordinary target while it runs.
+  function fleeTurn(e) {
+    const res = reach(e);
+    let bestK = e.pos, bestRing = ringOf(e.pos), bestCost = 0;
+    for (const k of Object.keys(res.d)) {
+      if (k !== e.pos && !canStop(res, k)) continue;
+      const ring = ringOf(k);
+      if (ring > bestRing || (ring === bestRing && res.d[k] < bestCost)) { bestK = k; bestRing = ring; bestCost = res.d[k]; }
+    }
+    const path = pathTo(res, e.pos, bestK) || [e.pos];
+    animateMove(e, path, () => {
+      sArrive(liveSt(), e); flushDeaths(liveSt());
+      emit();
+      setTimeout(() => {
+        if (sb.over) { sb.busy = false; return; }
+        if (e.hp > 0 && ringOf(e.pos) >= R) { escapeUnit(e); return; }
+        sb.busy = false;
+        if (!checkEnd()) stepEnemy();
+      }, 300);
+    });
+  }
+  // It made it out. The view plays the same pop a consumed world-map encounter
+  // gets, and then the unit is simply off the board: hp 0 so alive() and unitAt()
+  // stop seeing it, `fled` so nothing mistakes it for a corpse. noteDeath is NOT
+  // called - no death is reported, and (LOOT) nothing should ever drop here.
+  function escapeUnit(e) {
+    floater(e.pos, 'ESCAPED', '#ffd166');
+    blog(e.name + ' escapes the field');
+    const finish = () => {
+      e.fled = true;
+      e.hp = 0;
+      emit();
+      sb.busy = false;
+      if (!checkEnd()) stepEnemy();
+    };
+    if (onUnitFlee) onUnitFlee(e.uid, finish);
+    else finish();
+  }
+
   // ----- enemy AI (scores full simulated outcomes) ------------------------
   function aiTurn(e) {
     if (sb.over || e.hp <= 0) { sb.busy = false; if (!sb.over) stepEnemy(); return; }
+    // Breaking off comes before any thought of attacking.
+    if (rollFlee(e)) { fleeTurn(e); return; }
     const res = reach(e);
     let best = null;
     for (const abId of e.abilityIds) {
@@ -703,10 +791,14 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
           se.pos = startK;
           resolveCast(st, se, ab, t);
           let score = 0;
+          const strip = CFG.shieldStripScore ?? 14;
           for (const u of st.units) {
             const d = st.rec.dmg[u.uid] || 0;
-            if (!u.isEnemy) score += d * 10 + (st.rec.killed[u.uid] ? 45 : 0) + (st.rec.stun[u.uid] ? 12 : 0);
-            else score -= d * 9 + (st.rec.killed[u.uid] ? 40 : 0) + (st.rec.stun[u.uid] ? 10 : 0);
+            const blocked = st.rec.blocked[u.uid] ? 1 : 0;
+            // Stripping a party shield is worth something (it opens the unit up next
+            // turn); stripping an ALLY's shield is worth the same as a loss.
+            if (!u.isEnemy) score += d * 10 + (st.rec.killed[u.uid] ? 45 : 0) + (st.rec.stun[u.uid] ? 12 : 0) + blocked * strip;
+            else score -= d * 9 + (st.rec.killed[u.uid] ? 40 : 0) + (st.rec.stun[u.uid] ? 10 : 0) + blocked * strip;
           }
           if (score > 0 && (!best || score > best.score || (score === best.score && res.d[startK] < best.cost)))
             best = { ab, startK, t, score, cost: res.d[startK] };

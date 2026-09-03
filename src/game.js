@@ -740,7 +740,10 @@ export class Game {
 
     // `lore` and `title` are for the Local Map Info panel: what this fight IS,
     // shown while it is being played rather than only in the report afterwards.
+    // `stasis` rides along so the arena knows this is a Seed / Colony fight: those
+    // never break and run (see the retreat rule in src/local/battle/engine.js).
     return { hex, forced, opts, enemies, debuffs, saved, damageMod,
+             stasis: !!(hex.isSeed || hex.isColony),
              title: enemies.title ?? null, lore: this.pickFlavour('combatIntro') };
   }
 

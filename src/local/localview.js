@@ -1373,6 +1373,36 @@ export class LocalMapView {
     setTimeout(() => el.remove(), 2400);   // fallback
   }
 
+  // A unit leaves the board ALIVE: an enemy that broke off the fight and reached
+  // the edge (engine.js escapeUnit). It gets the very same pop a consumed
+  // encounter marker gets on the world map (render.js handleEncounterCleared), so
+  // "gone" reads the same in both maps. `done` fires when the pop finishes.
+  vanishToken(uid, done) {
+    const tok = this.battleTokens?.get(uid);
+    if (!tok) { done && done(); return; }
+    if (tok.userData.ring) tok.userData.ring.visible = false;
+    if (tok.userData.plaque) tok.userData.plaque.visible = false;
+    tok.userData.walking = true;   // stop the idle bob fighting the pop
+    this.vanishing = this.vanishing ?? [];
+    this.vanishing.push({ tok, t: 0, ms: 320, baseY: tok.position.y, scale: tok.scale.x || 1, done });
+  }
+
+  stepVanishes(dt) {
+    for (let i = this.vanishing.length - 1; i >= 0; i--) {
+      const v = this.vanishing[i];
+      v.t = Math.min(1, v.t + dt / v.ms);
+      const x = v.t;
+      const e = x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;   // inOutCubic
+      v.tok.scale.setScalar(v.scale * (1 + 0.6 * e) * (1 - e));
+      v.tok.position.y = v.baseY + e * 1.2;
+      if (v.t < 1) continue;
+      v.tok.visible = false;
+      v.tok.scale.setScalar(v.scale);
+      this.vanishing.splice(i, 1);
+      v.done && v.done();
+    }
+  }
+
   // Battle over: clean the combat chrome but leave the scene standing (the
   // results window and the fly-out still show it).
   endBattle() {
@@ -1388,6 +1418,8 @@ export class LocalMapView {
     if (this.floaterLayer) { this.floaterLayer.remove(); this.floaterLayer = null; }
     if (this.statusTip) { this.statusTip.remove(); this.statusTip = null; }
     this.hoverStatus = null;
+    for (const v of this.vanishing ?? []) { v.tok.visible = false; v.done && v.done(); }
+    this.vanishing = [];
     this.battle = null;
     this.battleTokens = new Map();
   }
@@ -1473,7 +1505,19 @@ export class LocalMapView {
   // roll survives the mid-roll scene rebuild (the rebuilt campfire composes
   // the same shot; only the camera object is new, and stepLayerRoll always
   // drives whichever camera is current).
-  startLayerRoll({ durationMs = 2600, onHalf = null, onDone = null } = {}) {
+  //
+  // Two purely-DOM effects ride along with the roll, both driven every frame
+  // from the same progress values as the camera (see stepLayerRoll below), so
+  // they always land on the exact moment they were asked for, whatever the
+  // easing curve does to time:
+  //   - a pure-black wipe with a soft edge (#layer-wipe in index.html) sweeps
+  //     the screen right-to-left, solid by 90 degrees ("under the ground"),
+  //     and uncovers the same right-to-left way starting at 270 degrees
+  //     ("emerging");
+  //   - the HUD (#hud) fades out across the first slice of the roll and back
+  //     in across the last slice, so no button is visible (or clickable)
+  //     while the world is spinning.
+  startLayerRoll({ durationMs = 5200, onHalf = null, onDone = null } = {}) {
     if (this.layerRoll || !this.camera) return false;
     const pose = { pos: this.camera.position.clone(), quat: this.camera.quaternion.clone(), up: this.camera.up.clone() };
     const axis = new THREE.Vector3();
@@ -1492,6 +1536,8 @@ export class LocalMapView {
     const t = Math.min(1, (performance.now() - r.t0) / r.dur);
     const e = t * t * (3 - 2 * t);              // smoothstep: eases in, fast underground, eases out
     const angle = e * Math.PI * 2;
+    this.updateLayerRollWipe(angle);
+    this.updateLayerRollFade(t);
     if (!r.halfFired && angle >= Math.PI) {
       r.halfFired = true;
       // The swap rebuilds the scene (and the camera object) under us; the roll
@@ -1503,6 +1549,7 @@ export class LocalMapView {
       this.camera.quaternion.copy(r.pose.quat);
       this.camera.up.copy(r.pose.up);
       this.layerRoll = null;
+      this.clearLayerRollDom();
       if (r.onDone) r.onDone();
       return;
     }
@@ -1510,6 +1557,77 @@ export class LocalMapView {
     this.camera.position.copy(r.pose.pos).sub(r.pivot).applyQuaternion(q).add(r.pivot);
     this.camera.quaternion.copy(q).multiply(r.pose.quat);
     this.camera.up.copy(r.pose.up).applyQuaternion(q);
+  }
+
+  // Grabs (once) the static DOM pieces the roll's side effects touch. Lazy,
+  // because a LocalMapView can exist before index.html's body has settled.
+  ensureLayerRollDom() {
+    if (this._wipeInited) return;
+    this._wipeInited = true;
+    this._wipeRoot = document.getElementById('layer-wipe');
+    this._wipeFill = document.getElementById('layer-wipe-fill');
+    this._wipeEdge = document.getElementById('layer-wipe-edge');
+    this._hud = document.getElementById('hud');
+  }
+
+  // angle: the roll's current angle in radians, 0 at the start of the roll to
+  // 2*PI at the end (see stepLayerRoll). Positions the solid fill and its
+  // soft feather edge so the black wipe is exactly solid at PI/2 (90 degrees)
+  // and exactly gone again at 2*PI, starting its uncover at 3*PI/2 (270
+  // degrees) - both sweeps moving the same way, right to left, only which
+  // side of the moving edge is "already black" flips between them.
+  updateLayerRollWipe(angle) {
+    this.ensureLayerRollDom();
+    if (!this._wipeRoot || !this._wipeFill || !this._wipeEdge) return;
+    this._wipeRoot.classList.remove('hidden');
+    const QUARTER = Math.PI / 2;
+    const vw = window.innerWidth;
+    const feather = Math.min(140, vw * 0.1);
+    const place = (fillLeft, fillRight, edgeLeft, edgeGrad) => {
+      this._wipeFill.style.left = `${fillLeft}px`;
+      this._wipeFill.style.right = `${fillRight}px`;
+      this._wipeEdge.style.left = `${edgeLeft}px`;
+      this._wipeEdge.style.width = `${feather}px`;
+      this._wipeEdge.style.background = edgeGrad;
+    };
+    if (angle <= QUARTER) {
+      // Covering: a soft-edged black block enters from the right and grows
+      // leftward, its leading (left) edge sweeping right -> left, landing
+      // solid across the whole screen exactly when angle hits 90 degrees.
+      const p = angle / QUARTER;
+      const boundary = vw + feather - p * (vw + 2 * feather);
+      place(boundary, 0, boundary - feather, 'linear-gradient(to right, transparent, #000)');
+    } else if (angle < 3 * QUARTER) {
+      // Fully underground: solid black, nothing left to animate.
+      place(0, 0, -feather, 'linear-gradient(to right, transparent, #000)');
+    } else {
+      // Uncovering: the exact same right -> left sweep, but now the CLEAR
+      // area (already swept, to the right of the moving edge) is the one
+      // eating into the black, so the right side of the screen clears first.
+      const p2 = Math.min(1, (angle - 3 * QUARTER) / QUARTER);
+      const boundary = vw + feather - p2 * (vw + 2 * feather);
+      place(0, Math.max(0, vw - boundary), boundary, 'linear-gradient(to right, #000, transparent)');
+    }
+  }
+
+  // t: raw 0..1 progress through the whole roll, NOT eased - the HUD
+  // cross-fade is plain and linear, independent of the camera's easing curve.
+  updateLayerRollFade(t) {
+    this.ensureLayerRollDom();
+    if (!this._hud) return;
+    const FADE = 0.12;   // fraction of the roll spent fading each way
+    let a = 0;
+    if (t < FADE) a = 1 - t / FADE;
+    else if (t > 1 - FADE) a = (t - (1 - FADE)) / FADE;
+    this._hud.style.opacity = String(a);
+    this._hud.style.pointerEvents = a > 0.98 ? '' : 'none';
+  }
+
+  // Called once the roll finishes: hides the wipe and hands the HUD back.
+  clearLayerRollDom() {
+    this.ensureLayerRollDom();
+    if (this._wipeRoot) this._wipeRoot.classList.add('hidden');
+    if (this._hud) { this._hud.style.opacity = ''; this._hud.style.pointerEvents = ''; }
   }
 
   // Called every frame while the local map is on screen.
@@ -1573,6 +1691,7 @@ export class LocalMapView {
     this.stepLayerRoll();
     if (this.controls) this.controls.update();
     if (this.walk) this.stepWalk(performance.now());
+    if (this.vanishing && this.vanishing.length) this.stepVanishes(dt);
     for (const m of this.tokens) {
       if (m.userData.walking || !m.visible) continue;
       m.position.y = m.userData.baseY + Math.sin(this.elapsed / 620 + m.userData.phase) * 0.05;

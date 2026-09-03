@@ -24,6 +24,28 @@ export const COMBAT_CONFIG = {
     lowPenalty: 1,      // damage removed when attacking from 2+ levels below
     voidEdges: false,   // true = shoves over the map edge kill instead of crashing
     powerPerDamage: 3,  // +1 ability damage per this much of the unit's world-map power
+    // What the enemy AI thinks POPPING A SHIELD is worth, in its own scoring units
+    // (a point of damage is worth 10, a kill 45, a stun 12). Without this the AI
+    // scored a blocked hit as zero, refused to swing at a shielded unit at all, and
+    // the shield - which only ever expires by blocking something - stayed up forever.
+    shieldStripScore: 14,
+    // ----- the retreat rule (stops a decided fight from being dragged out) -----
+    // A beaten enemy side starts to break. From the round AFTER `afterRound`, on
+    // every enemy's turn, while the enemy side's remaining HP is under `hpFraction`
+    // of what it had when the fight began, each enemy that has not broken yet rolls
+    //   100 / (enemies still standing)  percent
+    // to flee - so a crowd goes a few at a time and the last one standing always
+    // runs. The roll happens once per enemy: a fleeing enemy is locked in, and
+    // walks for the nearest arena edge until it gets there or is killed on the way.
+    // It is still a normal target while it runs.
+    // The STASIS is exempt: a Stasis Seed or Colony fight never offers the roll at
+    // all (createBattle's `noFlee`, set from the encounter in main.js) - that enemy
+    // has nowhere to run to and nothing to run for.
+    // Escaping is NOT a death: nothing is reported through onUnitDeath, so when
+    // LOOT exists this is exactly the branch that must not roll it - a killed enemy
+    // pays out, one that got away does not. The fight still counts as won, so the
+    // party keeps the encounter's completion reward.
+    flee: { afterRound: 7, hpFraction: 0.3 },
     elevationLevels: 4, // arena heights run 0..this (5 steps: 0,1,2,3,4)
                         // The MIDDLE step (2) is the arena's neutral ground: it renders
                         // flush with the surrounding world tiles, 3 and 4 stand above it,

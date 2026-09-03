@@ -213,6 +213,67 @@ fs.mkdirSync(OUT, { recursive: true });
   // Closing the last window flies the camera back out to the world map.
   await page.waitForFunction(() => window.__cinematic.mode() === 'idle', null, { timeout: 25000 }).catch(() => problems.push('did not fly back out after the reward chooser'));
 
+  // ----- the retreat rule (config.combat.flee) -----------------------------
+  // A fight the party has clearly won must not need mopping up: past
+  // flee.afterRound, with the enemy side under flee.hpFraction of its opening HP,
+  // the survivors break and run for the edge. Escaping is NOT a death (no loot
+  // when loot exists) but the fight still counts as a WIN.
+  await page.evaluate(() => {
+    const g = window.game; const hex = g.state.position;
+    hex.encounter = 'battle';
+    hex.enemies = [0, 1, 2].map((i) => ({ name: 'Husk ' + i, hp: 20, maxHp: 20, power: 6, alive: true }));
+    g.enter(false);
+  });
+  await placeParty();
+  await page.waitForFunction(() => !!window.__battle && window.__cinematic.mode() === 'local', null, { timeout: 30000 });
+  await page.waitForTimeout(600);
+  await page.evaluate(() => {
+    const sb = window.__battle.state;
+    sb.round = 9;                                     // past flee.afterRound
+    for (const u of sb.units) if (u.isEnemy) u.hp = 3;  // 9 of 60 = 15% of the pool
+  });
+  // Pass every player turn; the enemy phase is where the rolls happen. Each enemy
+  // rolls once per turn, so give the fight enough ROUNDS (not seconds) for the dice
+  // to speak: with three enemies at a third each, ten rounds without a single break
+  // is a one-in-a-million event, i.e. a real regression.
+  for (let round = 0; round < 10; round++) {
+    // Wait out the enemy phase rather than sleeping a fixed time: the AI's own
+    // timers are far slower than any wait worth hardcoding.
+    await page.waitForFunction(
+      () => { const b = window.__battle; return !b || b.state.over || (b.state.phase === 'player' && !b.state.busy); },
+      null, { timeout: 30000 }).catch(() => {});
+    if (await page.evaluate(() => !window.__battle || !!window.__battle.state.over)) break;
+    await page.evaluate(() => { const b = window.__battle; if (b && b.state.phase === 'player' && !b.state.busy && !b.state.over) b.endTurn(); });
+    await page.waitForTimeout(250);
+  }
+  await page.waitForTimeout(600);
+  const fled = await page.evaluate(() => {
+    const b = window.__battle;
+    if (!b) return { gone: true };
+    const sb = b.state;
+    if (sb.noFlee) return { gone: false, armed: false, over: sb.over, deaths: 0, fledCount: 0, total: 0, tokens: 0 };
+    const es = sb.units.filter((u) => u.isEnemy);
+    return {
+      over: sb.over, round: sb.round, deaths: sb.deaths.length,
+      fledCount: es.filter((u) => u.fled).length, total: es.length,
+      tokens: [...(window.__localView.battleTokens || new Map())].filter(([uid, t]) => t.visible && es.some((e) => e.uid === uid && e.fled)).length,
+    };
+  });
+  if (!fled.gone) {
+    if (fled.armed === false) problems.push('an ordinary fight came up exempt from the retreat rule: ' + JSON.stringify(fled));
+    if (fled.fledCount === 0) problems.push('nobody fled a hopeless fight past the retreat round: ' + JSON.stringify(fled));
+    if (fled.deaths > 0 && fled.fledCount === fled.total) problems.push('fleeing enemies were reported as deaths: ' + JSON.stringify(fled));
+    if (fled.tokens > 0) problems.push('an escaped enemy left its token on the board: ' + JSON.stringify(fled));
+    if (fled.fledCount === fled.total && fled.over !== 'win') problems.push('the fight did not end in a win once every enemy ran: ' + JSON.stringify(fled));
+    await page.screenshot({ path: path.join(OUT, '01f-retreat.png') });
+  }
+  // Whatever is left, finish and get back out to the world map.
+  await page.evaluate(() => { if (window.__battle && !window.__battle.state.over) window.__battle.debugResolve(true); });
+  await page.waitForTimeout(1200);
+  for (let i = 0; i < 6; i++) { await dismissDialog(); await page.waitForTimeout(200); }
+  await page.waitForFunction(() => window.__cinematic.mode() === 'idle', null, { timeout: 25000 }).catch(() => problems.push('did not fly back out after the retreat check'));
+  await waitIdle();
+
   // The combat cinematic + the playable fight: Enter on a battle dives into the
   // local map (clouds, scene swap), the engine takes over, the results window
   // opens when it ends, closing everything flies back.
@@ -998,6 +1059,8 @@ fs.mkdirSync(OUT, { recursive: true });
     return { cursedMax: u.maxHp, expected: Math.round(pre * (1 - frac)) };
   }, [preMax]);
   if (curse.cursedMax !== curse.expected) problems.push('colony curse (maxHp debuff) not applied in its fight: ' + JSON.stringify(curse));
+  // The Stasis never breaks and runs, however badly the fight is going for it.
+  if (!(await page.evaluate(() => window.__battle.state.noFlee))) problems.push('a Stasis Colony fight is not exempt from the retreat rule');
   await settleBattleIfAny();
   const cleared = await page.evaluate(() => ({
     cleared: window.game.stasis.colonies.filter((c) => c.cleared).length,
