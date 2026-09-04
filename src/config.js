@@ -62,6 +62,34 @@ export const CONFIG = {
                               // Change elevationLevels (src/config/abilities.js) and this should
                               // move to the middle of the new range. A smaller number lifts the
                               // whole arena, a bigger one sinks it.
+    // ----- arena tile colouring (LocalMapView.paintTile) ------------------
+    // Arena tiles are shades of the entered world tile's colour, with a strong
+    // VALUE ramp by elevation so all five height steps read at a glance. The
+    // ramp blends each tile TOWARDS BLACK (steps below the neutral middle) or
+    // TOWARDS WHITE (steps above it), NOT by multiplying its brightness: a
+    // multiply is invisible on a near-black tile (e.g. the start tile), while a
+    // blend to black / white separates the levels on ANY base colour.
+    tileShade: {
+      darkPerLevel: 0.22,     // blend toward black per level BELOW the middle (level 0 ~ 44% black)
+      lightPerLevel: 0.20,    // blend toward white per level ABOVE the middle (level 4 ~ 40% white)
+      jitter: 0.05,           // +- random per-tile brightness, keeps the ground from looking airbrushed
+      neighborBlend: 0.16,    // how hard a neighbouring world tile pulls edge tiles' colour
+                              // (was 0.5 before the elevation ramp: the bleed drowned it out)
+      neighborBlendMax: 0.25, // hard cap on that pull (was 0.6)
+    },
+    // ----- authored tile types (handcrafted maps, src/local/mapcode.js) ---
+    // wall: a non-interactive rock column - blocks walking, pushes crash on it.
+    // ether: a hole in the arena floor - blocks walking, pushes into it kill.
+    wallTile: {
+      color: 0x57504a,        // the rock's own colour...
+      blend: 0.35,            // ...pulled this much towards the arena's shade (sense of place)
+      extraHeight: 0.9,       // world units the column rises above its authored elevation
+    },
+    etherTile: {
+      color: 0x102e35,        // the still surface seen down in the hole
+      emissive: 0x14454d,     // its faint glow
+      height: 0.07,           // sliver of mesh left so the hole has a visible bottom
+    },
     // ----- deployment: choosing where the party stands -------------------
     // Walking into a fight on purpose lets the player place each unit by hand
     // before the first round (the cursor carries the unit's icon; left click

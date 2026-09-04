@@ -436,10 +436,15 @@ fs.mkdirSync(OUT, { recursive: true });
   await dismissDialog();
   await page.waitForFunction(() => window.__cinematic.mode() === 'idle', null, { timeout: 25000 }).catch(() => {});
 
-  // A FORCED fight places the party itself, as a group.
+  // A FORCED fight places the party itself, as a group. The cohesion guarantee
+  // (party within deploy.maxSpread) is about the RANDOM arena - a handcrafted
+  // map with walls, ether and a small radius may make it impossible - so this
+  // check picks a battle tile WITHOUT a crafted recipe on purpose.
   await page.evaluate(() => {
     const g = window.game;
-    const hex = [...g.map.hexes.values()].find((h) => h.encounter === 'battle') || g.state.position;
+    const hex = [...g.map.hexes.values()].find((h) => h.encounter === 'battle' && !h.recipe)
+      || [...g.map.hexes.values()].find((h) => h.encounter === 'battle')
+      || g.state.position;
     hex.encounter = 'battle';
     g.startCombat(hex, true);
   });
@@ -450,11 +455,18 @@ fs.mkdirSync(OUT, { recursive: true });
     const keys = window.__battle ? window.__battle.state.units.filter((u) => !u.isEnemy).map((u) => u.pos) : [];
     let worst = 0;
     for (const a of keys) for (const b of keys) worst = Math.max(worst, d(a, b));
-    return { deploying: !!window.__localView.deploy, battle: !!window.__battle, worst, spread: window.game.config.local.deploy.maxSpread };
+    return { deploying: !!window.__localView.deploy, battle: !!window.__battle, worst,
+      spread: window.game.config.local.deploy.maxSpread,
+      keys, radius: window.__localView.map?.radius, recipe: !!window.__localView.recipe };
   });
   if (forced.deploying) problems.push('a forced fight asked the player to place the party');
   if (!forced.battle) problems.push('a forced fight did not start');
-  if (forced.worst > forced.spread) problems.push(`a forced party landed ${forced.worst} tiles apart (max ${forced.spread})`);
+  // The group-cohesion guarantee (party within deploy.maxSpread) is about the
+  // GENERATED arena. A handcrafted map can be deliberately fragmented - e.g.
+  // the-causeway is split by an ether trench - so a forced spawn there may
+  // straddle it by design; the author owns that arena's spawn layout. Assert
+  // cohesion only when the fight landed on a non-crafted arena.
+  if (!forced.recipe && forced.worst > forced.spread) problems.push(`a forced party landed ${forced.worst} tiles apart (max ${forced.spread}) - ${JSON.stringify(forced)}`);
   await page.evaluate(() => window.__battle && window.__battle.debugResolve(true));
   await dismissDialog();
   await dismissDialog();
@@ -1105,6 +1117,78 @@ fs.mkdirSync(OUT, { recursive: true });
   }));
   if (!/scenario=tutorial3/.test(menuBoot.url)) problems.push('the tutorial did not land in the address bar: ' + menuBoot.url);
   if (!menuBoot.card) problems.push('starting the tutorial from the menu did not show the opening card');
+
+  // ----- HANDCRAFTED MAPS: crafted assignment + the map code preview tool -----
+  await page.goto(URL.replace(/\?.*$/, '') + '?seed=777&nostart=1', { waitUntil: 'load', timeout: 60000 });
+  await page.waitForTimeout(1200);
+  // World generation hands some battle / shop tiles an authored recipe, whose
+  // enemies replace the rolled group and whose danger line drives the chevrons.
+  const craftedGen = await page.evaluate(() => {
+    const hexes = [...window.game.map.hexes.values()];
+    const battle = hexes.find((h) => h.encounter === 'battle' && h.recipe);
+    const shop = hexes.find((h) => h.encounter === 'shop' && h.recipe);
+    return {
+      battles: hexes.filter((h) => h.encounter === 'battle' && h.recipe).length,
+      shops: hexes.filter((h) => h.encounter === 'shop' && h.recipe).length,
+      danger: battle ? window.game.dangerRank(battle) : null,
+      declared: battle ? battle.recipe.danger : null,
+      enemies: battle ? battle.enemies.length : 0,
+      authoredSpawns: battle ? (battle.recipe.spawns?.enemies?.length ?? 0) : 0,
+      shopHasRecipe: !!shop,
+    };
+  });
+  if (!craftedGen.battles) problems.push('no battle tile got a crafted map on seed 777: ' + JSON.stringify(craftedGen));
+  if (craftedGen.declared != null && craftedGen.danger !== craftedGen.declared) problems.push('crafted danger override ignored: ' + JSON.stringify(craftedGen));
+  if (craftedGen.enemies && craftedGen.enemies !== craftedGen.authoredSpawns) problems.push('crafted enemies do not match authored spawns: ' + JSON.stringify(craftedGen));
+  // The debug preview: Menu -> Preview map code, paste a code with a wall, an
+  // ether hole, fire and one enemy; the camera dives into that arena.
+  await page.click('#btn-menu');
+  await page.waitForTimeout(150);
+  await page.click('#btn-mapcode');
+  await page.waitForTimeout(200);
+  const dlgOpen = await page.evaluate(() => !document.getElementById('dialog').classList.contains('hidden') && !!document.getElementById('mapcode-input'));
+  if (!dlgOpen) problems.push('the map code dialog did not open');
+  const TEST_CODE = ['id: smoke-test-arena', 'radius: 3', 'danger: 1',
+    '0,0: ground 4', '1,0: wall', '2,0: ether', '1,-1: ground 2 fire', '0,1: ground 3 !Husk'].join('\n');
+  // A broken code must stay in the dialog and list its problems.
+  await page.evaluate((code) => { document.getElementById('mapcode-input').value = code + '\n9,9: lava'; }, TEST_CODE);
+  await page.click('#dialog-actions button:first-child');
+  await page.waitForTimeout(200);
+  const errShown = await page.evaluate(() => !!document.querySelector('.mapcode-errors'));
+  if (!errShown) problems.push('a broken map code did not show its errors');
+  await page.evaluate((code) => { document.getElementById('mapcode-input').value = code; }, TEST_CODE);
+  await page.click('#dialog-actions button:first-child');
+  await page.waitForTimeout(2200);   // the fly-in
+  const preview = await page.evaluate(() => {
+    const v = window.__localView;
+    const tile = (k) => v.map.hexes.get(k);
+    return {
+      radius: v.map.radius,
+      wall: tile('1,0')?.type, ether: tile('2,0')?.type,
+      wallTaller: (tile('1,0')?.top ?? 0) > (tile('0,0')?.top ?? 0),
+      fireSprite: v.tagSprites?.has('1,-1') ?? false,
+      exitShown: !document.getElementById('preview-exit').classList.contains('hidden'),
+      // the elevation value ramp: a level-4 tile paints brighter than a level-2 one
+      hi: tile('0,0')?.mesh.material.color.getHSL({}).l,
+      mid: tile('-1,0')?.mesh.material.color.getHSL({}).l,
+    };
+  });
+  if (preview.radius !== 3) problems.push('preview arena radius is not the code\'s: ' + JSON.stringify(preview));
+  if (preview.wall !== 'wall' || preview.ether !== 'ether') problems.push('preview tile types wrong: ' + JSON.stringify(preview));
+  if (!preview.wallTaller) problems.push('a wall column is not taller than ground: ' + JSON.stringify(preview));
+  if (!preview.fireSprite) problems.push('an authored fire tag has no sprite in the preview');
+  if (!preview.exitShown) problems.push('the preview exit button is hidden during a preview');
+  if (!(preview.hi > preview.mid)) problems.push('elevation shading: a level-4 tile is not brighter than level-2: ' + JSON.stringify(preview));
+  await page.screenshot({ path: path.join(OUT, '68-mapcode-preview.png') });
+  await page.click('#preview-exit');
+  await page.waitForTimeout(1800);   // the fly-out
+  const backHome = await page.evaluate(() => ({
+    exitHidden: document.getElementById('preview-exit').classList.contains('hidden'),
+    turn: window.game.state.turn,
+  }));
+  if (!backHome.exitHidden) problems.push('the preview exit button survived leaving the preview');
+  if (backHome.turn !== 0) problems.push('the preview touched game state: ' + JSON.stringify(backHome));
+  await page.screenshot({ path: path.join(OUT, '69-mapcode-back.png') });
 
   console.log(problems.length ? 'PROBLEMS:\n' + problems.join('\n') : 'OK: no errors, all checks passed.');
   await browser.close();

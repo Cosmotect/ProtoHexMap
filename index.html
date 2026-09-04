@@ -51,6 +51,7 @@
             <div class="menu-title" data-i18n="menu.section.tuning">Tuning</div>
             <div class="menu-row">
               <button id="btn-settings" data-i18n="menu.settings" data-i18n-title="menu.settings.title">Settings</button>
+              <button id="btn-mapcode" data-i18n="menu.mapcode" data-i18n-title="menu.mapcode.title">Preview map code</button>
             </div>
           </div>
           <div class="menu-section">
@@ -81,6 +82,10 @@
       <!-- Local Map Info (right side, in combat only): what this fight is, the
            buffs and debuffs riding on it, then the enemy roster - one card per
            enemy in turn order. src/ui.js fills it from the combat engine. -->
+      <!-- Debug: shown only while a pasted map code is being previewed in the
+           arena (Menu -> Preview map code). Click (or Esc) flies back out. -->
+      <button id="preview-exit" class="panel preview-exit hidden" data-i18n="mapcode.exit">Exit preview</button>
+
       <div class="panel right-mid local-info hidden" id="local-info">
         <div class="li-title" id="li-title"></div>
         <div class="li-desc" id="li-desc"></div>

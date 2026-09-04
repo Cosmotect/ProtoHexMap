@@ -4,7 +4,8 @@ import { createRng } from './rng.js';
 import { generateMap, setType, setBiome } from './map.js';
 import { buildScenarioMap, cloneEnemies } from './scenarios/scenario.js';
 import { hexKey, neighbors, hexesInRange, hexDistance } from './hex.js';
-import { simulateBattle, makeEnemies, makeRegulars, renameDuplicates } from './battle.js';
+import { simulateBattle, makeEnemies, makeRegulars, renameDuplicates, makeEnemyOfType } from './battle.js';
+import { recipeFromCode } from './local/mapcode.js';
 import { availableUpgrades, unlockUpgrade, upgradeCount } from './upgrades.js';
 import { EVENTS } from './events.js';
 import { t, tn } from './i18n.js';
@@ -104,12 +105,50 @@ export class Game {
       if (h.encounter === 'shop' && !h.shop) h.shop = this.rollShopStock();
     }
 
+    // Handcrafted arenas (config.craftedMaps): some battle and shop tiles trade
+    // the random arena for an authored map code. Rolled on a rng of its OWN,
+    // after every other generation roll, so tuning the rates never reshuffles
+    // the map, the enemies or the shop stock of an existing seed. Scenario maps
+    // are authored already and skip this entirely.
+    if (!scenario) this.assignCraftedMaps();
+
     this.map.start.visited = true;
     this.reveal(this.map.start.q, this.map.start.r, run.revealStartRadius, true);
     if (run.seedAlwaysVisible && this.map.seed) this.map.seed.revealed = true;
 
     if (scenario) this.addLog('log.scenarioStart', { name: { key: `scenario.${scenario.id}.name` } });
     else this.addLog('log.newRun', { seed, n: this.map.colonies.length, steps: pathLength });
+  }
+
+  // ----- handcrafted arenas -------------------------------------------
+  // Rolls which battle / shop tiles use an authored map code instead of the
+  // random arena generator (config.craftedMaps: per-kind rate + map list).
+  // A crafted battle brings its own garrison - the authored enemies REPLACE
+  // the group rolled at generation - and may declare the danger chevrons its
+  // tile advertises (the map code's `danger:` line). A code that fails to
+  // parse is skipped with a console warning: a typo in a config map must
+  // never take the run down with it.
+  assignCraftedMaps() {
+    const crafted = this.config.craftedMaps ?? {};
+    const rng = createRng((this.seed ^ 0x5eedca) >>> 0);
+    for (const h of this.map.hexes.values()) {
+      const set = h.encounter === 'battle' ? crafted.combat
+        : h.encounter === 'shop' ? crafted.shop : null;
+      if (!set?.maps?.length || !rng.chance(set.rate ?? 0)) continue;
+      const recipe = recipeFromCode(rng.pick(set.maps), this.config);
+      if (recipe.errors.length) {
+        console.warn(`crafted map "${recipe.id}" skipped:`, recipe.errors.join('; '));
+        continue;
+      }
+      h.recipe = recipe;
+      if (h.encounter === 'battle') {
+        if (recipe.enemyTypeIds.length) {
+          const units = recipe.enemyTypeIds.map((id) => makeEnemyOfType(this.config.battle, id)).filter(Boolean);
+          if (units.length === recipe.enemyTypeIds.length) h.enemies = renameDuplicates(units);
+        }
+        if (recipe.danger != null) h.dangerOverride = recipe.danger;
+      }
+    }
   }
 
   // ----- events -------------------------------------------------------
@@ -250,6 +289,9 @@ export class Game {
     const d = this.config.battle.danger;
     if (hex.isSeed) return d.seed;
     if (hex.isColony) return d.colony;
+    // A handcrafted arena advertises what its author wrote (the map code's
+    // `danger:` line): the chevrons are a notice to the player, not a formula.
+    if (hex.dangerOverride != null) return Math.min(d.maxChevrons ?? 8, hex.dangerOverride);
     const total = hex.enemies.reduce((a, e) => a + e.power, 0);
     const rank = (d.bands ?? []).filter((threshold) => total >= threshold).length;
     return Math.min(d.maxChevrons ?? 8, rank);

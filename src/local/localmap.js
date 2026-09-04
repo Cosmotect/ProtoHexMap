@@ -42,8 +42,12 @@ export function neutralElevation(levels = COMBAT_CONFIG.combat.elevationLevels) 
 export function generateLocalMap(config, recipe = null) {
   const cfg = config.local;
   const orientation = localOrientation(config.map.orientation);
+  // A handcrafted map (src/local/mapcode.js) may come in any size: its radius
+  // wins over the default arena size, and everything downstream reads the
+  // radius off the returned map rather than the config.
+  const radius = recipe?.radius ?? cfg.radius;
   const hexes = new Map();
-  for (const [q, r] of hexesInRange(0, 0, cfg.radius)) {
+  for (const [q, r] of hexesInRange(0, 0, radius)) {
     const plane = axialToPlane(q, r, cfg.hexSize, orientation);
     const tile = {
       q, r,
@@ -53,31 +57,34 @@ export function generateLocalMap(config, recipe = null) {
       y: plane.y,
       elevation: neutralElevation(),  // the middle step = untouched ground level
                                       // (recipes and the wave move tiles up / down from here)
-      type: 'ground',      // future: recipes set local tile types
+      type: 'ground',      // 'ground' | 'wall' | 'ether' - recipes set these
+      tags: null,          // authored tile tag ids (e.g. ['fire']) - recipes set these
       decor: null,         // future: set dressing (rocks, trees, ruins...)
     };
     hexes.set(tile.key, tile);
   }
-  const map = { hexes, radius: cfg.radius, orientation, hexSize: cfg.hexSize };
+  const map = { hexes, radius, orientation, hexSize: cfg.hexSize };
   applyRecipe(map, recipe);
   return map;
 }
 
 /**
- * RECIPE HOOK (intentionally almost empty for now).
+ * RECIPE HOOK. A recipe is a handcrafted arena description assigned to the
+ * encounter when it spawns on the world map (src/local/mapcode.js builds one
+ * from a map code; game.js rolls which encounters get one). It is applied
+ * HERE, while the camera is still flying in, right before the world/local
+ * visibility swap - so the arena is ready the instant it shows.
  *
- * The plan: every encounter gets a handcrafted "recipe" assigned when it spawns
- * on the world map - a coded description of the arena rather than a saved mesh:
- * per-tile types and elevations, set dressing, lighting conditions and so on.
- * The recipe is applied HERE, while the camera is still flying in, right before
- * the world/local visibility swap - so the arena is ready the instant it shows.
- *
- * Expected shape (subject to change when the first real recipes land):
+ * Shape (see mapcode.js buildRecipe):
  *   recipe = {
- *     tiles:   { 'q,r': { type, elevation, decor } },   // per-tile overrides
+ *     radius,                                        // handled by generateLocalMap above
+ *     tiles: { 'q,r': { type, elevation, tags } },   // per-tile overrides
+ *                     // type: 'ground' | 'wall' | 'ether'
  *                     // elevation is a LEVEL, 0..COMBAT_CONFIG.combat.elevationLevels.
  *                     // 2 = untouched ground, 3/4 = one/two steps up, 1/0 = one/two down.
- *     lighting: { ... },                                // picked up by localview
+ *     spawns: { enemies: [keys] },                   // read by LocalMapView.placeUnits
+ *     startTags: [{ k, id }],                        // pre-lit tile tags (fire...)
+ *     lighting: { ... },                             // future: picked up by localview
  *   }
  */
 export function applyRecipe(map, recipe) {
@@ -142,10 +149,14 @@ export function pickRandomTiles(map, count, random, exclude = new Set()) {
  * choose (a fatigue ambush) lands - scattered, but still a group that can reach
  * each other, instead of one unit alone in a far corner.
  *
- * How: the first tile is free, and every pick afterwards narrows the pool to
- * the tiles still within range of EVERY tile already taken. A pick near the rim
- * can leave nothing in range for the last unit; that unit falls back to a plain
- * random tile rather than going unplaced.
+ * How: the first tile (the anchor) is free, and every pick afterwards narrows
+ * the pool to the tiles still within range of EVERY tile already taken. A pick
+ * near the rim, or a map broken up by walls / ether, can empty that pool before
+ * the group is complete; the remaining units then fall back to whichever free
+ * tile keeps the group TIGHTEST - the one whose farthest distance to any tile
+ * already taken is smallest. That holds the party together even when no tile is
+ * within range of everyone (the old fallback rolled a plain random tile and
+ * could fling one unit many tiles away).
  */
 export function pickClusteredTiles(map, count, random, exclude = new Set(), maxSpread = 6) {
   if (count <= 0) return [];
@@ -153,12 +164,24 @@ export function pickClusteredTiles(map, count, random, exclude = new Set(), maxS
   let pool = [...map.hexes.values()].filter((t) => !exclude.has(t.key));
   while (picked.length < count && pool.length) {
     const t = pool[Math.floor(random() * pool.length)];
-    picked.push(t.key);
+    picked.push(t);
     pool = pool.filter((o) => o.key !== t.key && hexDistance(o.q, o.r, t.q, t.r) <= maxSpread);
   }
   if (picked.length < count) {
-    const used = new Set([...exclude, ...picked]);
-    picked.push(...pickRandomTiles(map, count - picked.length, random, used));
+    const used = new Set([...exclude, ...picked.map((t) => t.key)]);
+    let free = [...map.hexes.values()].filter((t) => !used.has(t.key));
+    // Greedily add the free tile that grows the group's spread the least: the
+    // one whose WORST distance to any already-taken tile is smallest.
+    while (picked.length < count && free.length) {
+      let best = null, bestWorst = Infinity;
+      for (const t of free) {
+        let worst = 0;
+        for (const p of picked) worst = Math.max(worst, hexDistance(t.q, t.r, p.q, p.r));
+        if (worst < bestWorst) { bestWorst = worst; best = t; }
+      }
+      picked.push(best);
+      free = free.filter((t) => t.key !== best.key);
+    }
   }
-  return picked;
+  return picked.map((t) => t.key);
 }

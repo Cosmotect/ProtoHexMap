@@ -13,6 +13,8 @@ import { createCombatCinematic } from './local/transition.js';
 import { createBattle } from './local/battle/engine.js';
 import { COMBAT_CONFIG } from './config/abilities.js';
 import { resolvedAbilitiesFor, availableUpgrades } from './upgrades.js';
+import { recipeFromCode } from './local/mapcode.js';
+import { makeEnemyOfType } from './battle.js';
 import { t, tn, initLanguage, applyStaticTexts, onLanguageChange } from './i18n.js';
 import { tc } from './text.js';
 import { initAudio } from './audio.js';
@@ -291,7 +293,9 @@ function beginInteractiveBattle(ctx, placementOverride = null) {
   lastDeathSpots = [];
   battle = createBattle({
     config: COMBAT_CONFIG,
-    radius: CONFIG.local.radius,
+    // The arena's ACTUAL radius: a handcrafted map may be smaller or larger
+    // than the default (the recipe's radius wins in generateLocalMap).
+    radius: view.map?.radius ?? CONFIG.local.radius,
     heights: placement.heights,
     party: partyDefs,
     enemies: enemyDefs,
@@ -308,6 +312,11 @@ function beginInteractiveBattle(ctx, placementOverride = null) {
     deferOpening: true,
     // Arena sides facing a hole in the world kill whatever is shoved over them.
     voidEdgeKeys: view.voidEdgeKeys(),
+    // Authored terrain from a handcrafted map: rock columns (crash), ether
+    // holes (death by shove) and pre-lit tile tags like braziers of fire.
+    wallKeys: view.wallKeys(),
+    etherKeys: view.etherKeys(),
+    startTags: view.startTagList(),
     // Every death, with the tile it happened on. Nothing reads this yet - it is
     // the hook loot dropped by beaten enemies will hang off.
     onUnitDeath: (spot) => { lastDeathSpots.push(spot); },
@@ -442,6 +451,65 @@ function deployAllowed(recipe) {
   return (CONFIG.local.deploy?.enabled ?? true) && !recipe?.spawns?.party;
 }
 
+// ----- map code preview (debug tool) ----------------------------------------
+// Menu -> Preview map code: paste a handcrafted map code (src/local/mapcode.js)
+// and the camera dives into the CURRENT tile's arena built from it - the same
+// fly-in a fight uses, with the code's enemies standing as mannequins and no
+// battle bound. The floating button (or Esc) flies back out. Purely a debug
+// tool: no game state is touched, the world continues exactly where it was.
+let mapPreview = false;
+let lastMapCode = '';
+
+function openMapCodeDialog(errorText = '') {
+  ui.openDialog({
+    title: t('mapcode.title'),
+    html: `<p>${t('mapcode.text')}</p>
+      <textarea id="mapcode-input" class="mapcode-input" rows="12" spellcheck="false"></textarea>
+      ${errorText ? `<div class="effect mapcode-errors">${escapeHtml(errorText)}</div>` : ''}`,
+    actions: [
+      { label: t('mapcode.preview'), onClick: () => {
+        const text = document.getElementById('mapcode-input')?.value ?? '';
+        lastMapCode = text;   // survives an error round-trip and a reopen
+        const recipe = recipeFromCode(text, CONFIG);
+        if (recipe.errors.length) { openMapCodeDialog(recipe.errors.join('\n')); return; }
+        if (cinematic.isActive() || startScreen) { openMapCodeDialog(t('mapcode.error.busy')); return; }
+        ui.closeDialog();
+        startMapPreview(recipe);
+      } },
+      { label: t('mapcode.cancel'), onClick: () => ui.closeDialog() },
+    ],
+  });
+  const ta = document.getElementById('mapcode-input');
+  if (ta) { ta.value = lastMapCode; ta.placeholder = 'id: my-arena\nradius: 4\n0,0: ground 4\n1,0: wall\n2,0: ether\n1,-1: ground 2 fire\n0,1: ground 3 !Husk'; }
+}
+
+function startMapPreview(recipe) {
+  const hex = game.state.position;
+  const enemies = recipe.enemyTypeIds.map((id) => makeEnemyOfType(CONFIG.battle, id)).filter(Boolean);
+  mapPreview = true;
+  document.getElementById('preview-exit')?.classList.remove('hidden');
+  cinematic.flyIn({
+    worldHex: hex,
+    baseColor: renderer.targetColorFor(hex).getHex(),
+    party: [],
+    enemies,
+    seed: game.seed,
+    recipe,
+    neighbors: worldNeighborsFor(hex),
+    edges: worldEdgesFor(hex),
+    deployParty: false,
+    onSwap: () => {},
+    onArrived: () => {},
+  });
+}
+
+function endMapPreview() {
+  if (!mapPreview) return;
+  mapPreview = false;
+  document.getElementById('preview-exit')?.classList.add('hidden');
+  cinematic.flyOut({});
+}
+
 ui = createUI(CONFIG, {
   isInputBlocked: () => tutorial.isBlocking(),
   isSubWindowOpen: () => settings.isOpen(),
@@ -449,8 +517,13 @@ ui = createUI(CONFIG, {
   // body into screen space, and only the local view knows where the bodies are.
   getLocalView: () => (cinematic.isActive() ? cinematic.localView : null),
   onOpenSettings: () => { settings.open(); ui.updateBlur(); },
-  onEscape: () => { if (settings.isOpen()) { settings.close(); ui.updateBlur(); } },
+  onMapCodePreview: () => openMapCodeDialog(),
+  onEscape: () => {
+    if (mapPreview) { endMapPreview(); return; }
+    if (settings.isOpen()) { settings.close(); ui.updateBlur(); }
+  },
   onDialogClosed: () => {
+    if (mapPreview) return;   // the preview leaves through its own exit button / Esc
     const finishEnd = () => { if (pendingEnd && game.state.status !== 'playing' && !tutorial.isBlocking()) { pendingEnd = false; ui.showEnd(game); } };
     // The results window just closed inside the arena: fly back out first.
     // (Not on the start screen - there the arena stays until Begin journey.)
@@ -489,6 +562,8 @@ ui = createUI(CONFIG, {
   },
   onLoadSeed: (value) => startRun(resolveSeed(value)),
 });
+// The map code preview's floating exit button (index.html; shown by startMapPreview).
+document.getElementById('preview-exit')?.addEventListener('click', () => endMapPreview());
 const tutorial = createTutorial({ config: CONFIG, ui, renderer });
 // The end screen waits for the guide's last card.
 tutorial.setOnIdle(() => { if (pendingEnd && game && game.state.status !== 'playing' && !ui.dialogOpen()) { pendingEnd = false; ui.showEnd(game); } });
@@ -601,6 +676,10 @@ function startRun(seed, opts = {}) {
   pendingEnd = false;
   startScreen = false;
   ui.setStartScreen(false);
+  // A restart mid-preview: the arena goes with the run, so the flag and the
+  // floating exit button must not survive it.
+  mapPreview = false;
+  document.getElementById('preview-exit')?.classList.add('hidden');
   abortBattle();
   cinematic.abort();
   ui.closeDialog();

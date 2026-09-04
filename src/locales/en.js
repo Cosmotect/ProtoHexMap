@@ -33,7 +33,18 @@ export const en = {
   'menu.tutorial.title': 'Short hand-built training maps: learn the road one lesson at a time',
   'menu.settings': 'Settings',
   'menu.settings.title': 'Every config value, editable at runtime',
+  'menu.mapcode': 'Preview map code',
+  'menu.mapcode.title': 'Debug: paste a handcrafted map code and walk around the arena it builds',
   'menu.route': 'route to the Seed {n} {n:step|steps}',
+
+
+  // ----- map code preview (debug tool) ------------------------------------
+  'mapcode.title': 'Map code preview',
+  'mapcode.text': 'Paste a map code below. Preview dives into the current tile\'s arena built from that code: enemies stand as mannequins, nothing fights, and the exit button (or Esc) flies you back to the world.',
+  'mapcode.preview': 'Preview',
+  'mapcode.cancel': 'Cancel',
+  'mapcode.exit': 'Exit preview',
+  'mapcode.error.busy': 'The preview needs the world map on screen: leave the current arena or the start screen first.',
 
   // ----- status bar / party ----------------------------------------------
   'status.turn': 'Turn',

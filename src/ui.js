@@ -98,6 +98,8 @@ export function createUI(config, handlers) {
   $('btn-enter').addEventListener('click', () => handlers.onEnter());
   $('btn-menu').addEventListener('click', () => toggleMenu());
   $('btn-settings').addEventListener('click', () => { closeMenu(); handlers.onOpenSettings(); });
+  // Debug: paste a handcrafted map code and walk around the arena it builds.
+  $('btn-mapcode').addEventListener('click', () => { closeMenu(); handlers.onMapCodePreview && handlers.onMapCodePreview(); });
   // The tutorial: the first unfinished hand-authored map of the chain.
   $('btn-tutorial').addEventListener('click', () => { closeMenu(); handlers.onStartTutorial && handlers.onStartTutorial(); });
   function toggleMenu() { els.menu.classList.toggle('hidden'); updateBlur(); }

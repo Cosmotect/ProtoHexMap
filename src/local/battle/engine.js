@@ -32,6 +32,7 @@ import { abilityById, tagDefById, combatStatsFor } from '../../config/abilities.
 
 export function createBattle({ config, radius, heights, party, enemies, partyKeys, enemyKeys, forced,
                                partyDamageMod = 0, deferOpening = false, voidEdgeKeys = [],
+                               wallKeys = [], etherKeys = [], startTags = [],
                                rng = Math.random, noFlee = false, instant = false,
                                onChange, onFloater, onLog, onAnim, onEnd, onUnitDeath, onUnitFlee }) {
   const CFG = config.combat;
@@ -44,7 +45,14 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   const R = radius;
   const tiles = boardTiles(R);
   const inMap = (k) => { const [q, r] = PK(k); return Math.max(Math.abs(q), Math.abs(r), Math.abs(q + r)) <= R; };
-  const tilePass = (k) => inMap(k);          // the arena has no blocked tiles (yet)
+  // AUTHORED TILES (handcrafted maps, src/local/mapcode.js). Walls and ether
+  // holes are tiles inside the board that nobody may stand on - walking and
+  // flying alike route around them. What tells them apart is what a SHOVE
+  // into one does: a wall crashes the victim like the arena rim, an ether
+  // hole swallows it like the void past a lethal edge (see isVoid below).
+  const wallSet = new Set(wallKeys ?? []);
+  const etherSet = new Set(etherKeys ?? []);
+  const tilePass = (k) => inMap(k) && !wallSet.has(k) && !etherSet.has(k);
   // How far out a tile sits: 0 at the centre, R on the rim. The retreat rule reads
   // it to point a fleeing enemy at the nearest way off the board.
   const ringOf = (k) => { const [q, r] = PK(k); return Math.max(Math.abs(q), Math.abs(r), Math.abs(q + r)); };
@@ -56,7 +64,8 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // that knows how the arena sits inside the world map (LocalMapView.voidEdgeKeys).
   // config.combat.voidEdges = true still makes EVERY edge lethal, as before.
   const voidSet = new Set(voidEdgeKeys ?? []);
-  const isVoid = (k) => !tilePass(k) && (CFG.voidEdges || voidSet.has(k));
+  const isVoid = (k) => etherSet.has(k)
+    || (!inMap(k) && (CFG.voidEdges || voidSet.has(k)));
   const activeTiles = () => tiles;
   const abById = abilityById;
   // A unit's view of an ability: its own resolved (upgraded) def when it has
@@ -142,6 +151,19 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       onDestroy: d.onDestroy, onExpire: d.onExpire, onPickup: d.onPickup, onPeriodic: d.onPeriodic,
       everyX: d.everyX || 0, everyOff: d.everyOff || 0,
       everyCd: (d.everyOff > 0 ? d.everyOff : d.everyX) || 0 };
+  }
+
+  // Pre-lit tile tags from a handcrafted map (braziers of fire and the like):
+  // the same instances an ability's tagZone would create, burning from round
+  // one - except PERMANENT (life 0): authored hazards are part of the arena,
+  // they do not gutter out after a couple of rounds the way a cast does.
+  for (const s of startTags ?? []) {
+    const d = tagDefById(s.id);
+    if (d && tilePass(s.k) && !sb.tags[s.k]) {
+      const inst = tagInst(d, s.id, s.k);
+      inst.life = 0;
+      sb.tags[s.k] = inst;
+    }
   }
 
   // ----- small queries --------------------------------------------------

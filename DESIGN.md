@@ -178,9 +178,16 @@ balance must be re-measured against interactive play.
 ## The local map and interactive combat (src/local/)
 
 * **The arena**: a hex grid of `local.radius` (6) rings in the OPPOSITE orientation to
-  the world map, so one world tile visually breaks into a sub-grid. Tile colours are
-  shades of the entered world tile, pulled towards each IMMEDIATE neighbouring world
-  tile near the edge facing it (squared falloff, per-tile jitter). Arena tiles have a
+  the world map, so one world tile visually breaks into a sub-grid (a handcrafted
+  map's own radius wins - see "Handcrafted local maps" below). Tile colours are
+  shades of the entered world tile with a strong ELEVATION VALUE RAMP on top
+  (`local.tileShade`): each level away from the neutral middle brightens or darkens
+  the tile by `perLevel` (0.17), so all five height steps read at a glance, and the
+  ramp is re-applied when an ability reshapes the ground mid-fight
+  (`LocalMapView.paintTile`). The pull towards each IMMEDIATE neighbouring world
+  tile near the edge facing it (squared falloff, per-tile jitter) was cut hard for
+  that readability - `neighborBlend` 0.16 capped at 0.25, where the old constants
+  were 0.5 / 0.6 and drowned the terrain. Arena tiles have a
   BASELINE height from the entered world tile's TYPE - max(`local.tileHeight`, type's
   visual height x `local.typeHeightScale` (16)) - so a hill arena starts taller than a
   plains one; battle arenas then add rolling heights on top: `applyElevationWave`
@@ -202,8 +209,8 @@ balance must be re-measured against interactive play.
   tile - FOV stretch, screenshake, cloud layers, blur and flash peaking at
   `local.swapPoint`, where the world scene swaps for the arena (`local.flyInMs` /
   `flyOutMs`). The climb out starts from wherever the player left the arena camera.
-  A recipe hook (`applyRecipe` in localmap.js, fed by `hex.recipe`) is reserved for
-  future handcrafted arenas and runs before the swap.
+  The recipe hook (`applyRecipe` in localmap.js, fed by `hex.recipe`) applies a
+  handcrafted arena before the swap - see "Handcrafted local maps" below.
 * **The combat engine** (`local/battle/engine.js` + `bhex.js`; definitions in
   `src/config/abilities.js`, deliberately NOT in the settings window):
   * **Player phase - one simultaneous turn**: select any unit and reposition it
@@ -304,6 +311,52 @@ balance must be re-measured against interactive play.
     instantly).
 * **Balance is RAW**: ability numbers are first guesses; the difficulty ladder was
   tuned for the auto-simulation and needs re-measuring against interactive play.
+
+## Handcrafted local maps - map codes (src/local/mapcode.js)
+
+Any encounter that opens a local map can trade the random generator for an
+AUTHORED arena. The authoring format is the MAP CODE: plain text, one line per
+statement, built to be scanned by human eyes and pasted around.
+
+* **The format**: `id:` (required), `radius:` (optional - the arena takes the
+  code's size, any 1..12 rings), `danger:` (optional - the chevrons a crafted
+  battle tile advertises; a NOTICE to the player, not a formula), then tile
+  lines `q,r: <type> [elevation] [tags...] [!Enemy Name]`. Only tiles that
+  differ from plain ground at the neutral elevation are listed. Types:
+  `ground`; `wall` (a rock column - nobody walks or flies through, a shove
+  against it crashes like the arena rim); `ether` (a hole - nobody walks in, a
+  shove over it kills, exactly like a lethal void edge). Tags are tile tag ids
+  from `COMBAT_TAGS` (today: `fire`) and come up PERMANENT - an authored
+  brazier is terrain, it does not gutter out like a cast's fire. `!` pins one
+  bestiary enemy (by id or display name) to the tile. `#` comments. The parser
+  (`parseMapCode` / `buildRecipe` / `recipeFromCode`) validates everything
+  against the config and reports readable per-line errors; a broken code is
+  skipped with a console warning, never crashes a run.
+* **Storage + rates** (`config/encounters.js craftedMaps`): per encounter kind
+  - `combat` and `shop` for now - a `rate` (chance a placed encounter uses a
+  crafted map instead of a generated arena) and a `maps` list of code strings.
+  Three sample maps ship: the-causeway (radius 4), ember-hollow (radius 6),
+  wayside-hollow (shop, radius 3).
+* **Assignment** (`Game.assignCraftedMaps`): rolled at world generation on a
+  rng of its OWN (seed ^ 0x5eedca), after every other roll - tuning the rates
+  never reshuffles an existing seed's map, enemies or shop stock. A crafted
+  battle's authored enemies REPLACE the rolled group (so the tile's hover, the
+  fight and the simulation all agree), and its `danger:` line overrides the
+  power-band chevron formula (`dangerRank`). Shops only STORE their recipe for
+  now - the shop flow does not open a local map yet. Scenario maps skip
+  crafted assignment entirely; the Virtual Playtester's world runs keep the
+  crafted ENEMIES but fight them on a generated arena (the headless harness
+  does not read recipes yet - a known divergence).
+* **Engine support**: `createBattle` takes `wallKeys` / `etherKeys`
+  (impassable for walking AND flying; wall = crash on shove, ether = death on
+  shove) and `startTags` (pre-lit tile tags, made permanent). Placement,
+  deployment clicks and random spawns all refuse non-ground tiles.
+* **The preview tool** (Menu -> Tuning -> Preview map code): paste any code,
+  fix what it lists as errors, and the camera dives into the CURRENT world
+  tile's arena built from that code - the same fly-in a fight uses, enemies
+  standing as mannequins, no battle bound, no game state touched. The floating
+  "Exit preview" button (or Esc) flies back to the world. A debug tool by
+  design: it lives in the menu next to Settings.
 
 ## Ability upgrades - how the party grows (src/upgrades.js + src/config/upgrades.js)
 
@@ -452,8 +505,9 @@ stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }
 
 ## Roadmap (suggested order)
 
-1. Combat content: more abilities and unit kits, handcrafted arena recipes (tile
-   layouts, set dressing, lighting) assigned to encounters at spawn.
+1. Combat content: more abilities and unit kits, more handcrafted map codes
+   (the format, walls / ether / tags / pinned enemies and the preview tool are
+   live - see "Handcrafted local maps"); still open: set dressing and lighting.
 2. Re-balance the difficulty ladder against interactive combat.
 3. Path preview on hover (total cost to reach a tile).
 4. Save / load a run in the browser (localStorage), so a refresh does not reset.

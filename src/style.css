@@ -1089,3 +1089,35 @@ button.small { padding: 2px 8px; font-size: 12px; }
   75%  { opacity: 1; }
   100% { opacity: 0; margin-top: -46px; }
 }
+
+/* ----- map code preview (debug tool) ------------------------------------------
+   The paste box inside the Menu -> Preview map code window, and the floating
+   exit button shown while the pasted arena is on screen. */
+.mapcode-input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+  padding: 8px 10px;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #dfe6f2;
+  background: rgba(10, 12, 24, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  resize: vertical;
+}
+.mapcode-errors { white-space: pre-line; color: #ff8d9d; }
+.preview-exit {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 70px;
+  margin: 0 auto;
+  width: fit-content;
+  padding: 8px 16px;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  z-index: 30;
+}

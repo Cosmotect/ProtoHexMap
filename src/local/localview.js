@@ -11,12 +11,15 @@ import * as THREE from 'three';
 import { MapControls } from 'three/addons/controls/MapControls.js';
 import { generateLocalMap, pickRandomTiles, pickClusteredTiles, applyElevationWave, neutralElevation } from './localmap.js';
 import { hexKey, hexesInRange, hexDistance, axialToPlane } from '../hex.js';
-import { COMBAT_CONFIG } from '../config/abilities.js';
+import { COMBAT_CONFIG, tagDefById } from '../config/abilities.js';
 import { createRng } from '../rng.js';
 import { t, hasKey } from '../i18n.js';
 import { statusesFor, badgeNumber } from '../status.js';
 
 const SQRT3 = Math.sqrt(3);
+// Ramp endpoints for the elevation value shading (LocalMapView.paintTile).
+const BLACK = new THREE.Color(0x000000);
+const WHITE = new THREE.Color(0xffffff);
 const deg = (d) => (d * Math.PI) / 180;
 
 // Canvas rounded-rectangle path (roundRect is not in every browser yet).
@@ -230,37 +233,58 @@ export class LocalMapView {
       return { ...nb, ux: nb.dx / len, uy: nb.dy / len, color3: new THREE.Color(nb.color) };
     });
     // How far out a tile sits towards a given edge, 0 at the centre, ~1 at the rim.
-    const rim = 1.5 * cfg.radius * cfg.hexSize;
+    const rim = 1.5 * this.map.radius * cfg.hexSize;
     // Only the IMMEDIATE neighbours pull the arena's edge colours; the outer
     // backdrop rings are scenery too far away to bleed in.
     const edgeNbs = nbs.filter((nb) => (nb.ring ?? 1) === 1);
 
+    // Tile colouring (cfg.tileShade): each tile starts as a lightly jittered
+    // shade of the entered world tile, gets a WEAK pull towards neighbouring
+    // world tiles near the matching edge (kept far below the old strength on
+    // purpose - the bleed used to drown the terrain), and then paintTile()
+    // lays the ELEVATION VALUE RAMP on top: sunken tiles darken, raised tiles
+    // brighten, step by step, so all five height levels read at a glance.
+    const shade = cfg.tileShade ?? {};
+    const jitterAmt = shade.jitter ?? 0.06;
+    const nbStrength = shade.neighborBlend ?? 0.16;
+    const nbMax = shade.neighborBlendMax ?? 0.25;
+
     this.tileMeshes = [];
+    this.tagSprites = new Map();
     for (const tile of this.map.hexes.values()) {
-      // Base shade of the entered world tile, pulled towards each neighbouring
-      // world tile the closer this arena tile gets to the edge facing it. The
-      // jitter keeps the gradient ragged instead of a clean airbrushed fade.
-      const col = base.clone().multiplyScalar(0.9 + rng.random() * 0.2);
+      const col = base.clone().multiplyScalar(1 - jitterAmt + rng.random() * jitterAmt * 2);
       for (const nb of edgeNbs) {
         const proj = (tile.x * nb.ux + tile.y * nb.uy) / rim;
         if (proj <= 0.15) continue;
         const t01 = Math.min(1, (proj - 0.15) / 0.85);
         const jitter = 0.65 + rng.random() * 0.7;
-        col.lerp(nb.color3, Math.min(0.6, t01 * t01 * 0.5 * jitter));
+        col.lerp(nb.color3, Math.min(nbMax, t01 * t01 * nbStrength * jitter));
       }
-      const mat = new THREE.MeshStandardMaterial({ color: col, roughness: 0.85 });
+      const mat = new THREE.MeshStandardMaterial({ color: col.clone(), roughness: 0.85 });
       const mesh = new THREE.Mesh(geo, mat);
-      const h = this.tileHeightFor(tile.elevation);
-      mesh.scale.y = Math.max(0.05, h);
       mesh.position.set(tile.x, 0, -tile.y);
-      mesh.castShadow = true;
+      mesh.castShadow = tile.type !== 'ether';
       mesh.receiveShadow = true;
       mesh.userData.key = tile.key;
       this.scene.add(mesh);
       tile.mesh = mesh;
-      tile.top = Math.max(0.05, h);
+      tile.shadeBase = col;   // the pre-elevation shade paintTile() ramps from
       tile.lift = 0;
+      this.applyTileForm(tile);
+      this.paintTile(tile);
       this.tileMeshes.push(mesh);
+      // Authored tile tags (a handcrafted map's braziers): visible from the
+      // fly-in, before any battle is bound. bindBattle() adopts these sprites,
+      // so the engine's own tag sync continues from them seamlessly.
+      for (const tagId of tile.tags ?? []) {
+        const def = tagDefById(tagId);
+        if (!def || this.tagSprites.has(tile.key)) continue;
+        const sprite = this.makePortrait(def.icon ?? '⭐');
+        sprite.scale.setScalar(0.5);
+        sprite.position.set(tile.x, tile.top + 0.35, -tile.y);
+        this.scene.add(sprite);
+        this.tagSprites.set(tile.key, sprite);
+      }
     }
     this.buildNeighborBackdrop(nbs);
 
@@ -325,6 +349,67 @@ export class LocalMapView {
     return Math.max(0.05, base + ((level ?? mid) - mid) * (cfg.elevationStep ?? 0.35));
   }
 
+  // The tile's SHAPE by its type: a ground tile is elevation-thick, a wall
+  // column rises extraHeight above its authored elevation, an ether hole keeps
+  // only a sliver of glowing floor. Sets mesh.scale.y and tile.top; called at
+  // build and whenever an ability reshapes the ground (syncBattle).
+  applyTileForm(tile) {
+    const cfg = this.config.local;
+    let h;
+    if (tile.type === 'ether') h = cfg.etherTile?.height ?? 0.07;
+    else if (tile.type === 'wall') h = this.tileHeightFor(tile.elevation) + (cfg.wallTile?.extraHeight ?? 0.9);
+    else h = this.tileHeightFor(tile.elevation);
+    h = Math.max(0.05, h);
+    tile.mesh.scale.y = h;
+    tile.top = h;
+  }
+
+  // The tile's COLOUR: the stored pre-elevation shade (shadeBase) with the
+  // elevation value ramp applied - tiles BELOW the neutral middle blend towards
+  // black, tiles ABOVE it towards white, so the five height steps read as five
+  // distinct values on ANY base colour (a plain multiply vanishes on a
+  // near-black tile like the start tile). Walls trade most of that for their
+  // rock colour; ether keeps its own still-water look. Re-run when an ability
+  // changes a tile's level, so the ramp stays truthful mid-fight.
+  paintTile(tile) {
+    if (!tile.mesh || !tile.shadeBase) return;
+    const cfg = this.config.local;
+    if (tile.type === 'ether') {
+      const et = cfg.etherTile ?? {};
+      tile.mesh.material.color.set(et.color ?? 0x102e35);
+      tile.mesh.material.emissive.set(et.emissive ?? 0x14454d);
+      tile.mesh.material.roughness = 0.4;
+      return;
+    }
+    const shade = cfg.tileShade ?? {};
+    const mid = cfg.elevationMid ?? neutralElevation(COMBAT_CONFIG.combat.elevationLevels);
+    const steps = (tile.elevation ?? mid) - mid;   // -2..+2 around the neutral middle
+    const col = tile.shadeBase.clone();
+    if (steps < 0) col.lerp(BLACK, Math.min(0.85, -steps * (shade.darkPerLevel ?? 0.22)));
+    else if (steps > 0) col.lerp(WHITE, Math.min(0.85, steps * (shade.lightPerLevel ?? 0.20)));
+    if (tile.type === 'wall') {
+      const wt = cfg.wallTile ?? {};
+      col.copy(new THREE.Color(wt.color ?? 0x57504a).lerp(col, wt.blend ?? 0.35));
+    }
+    tile.mesh.material.color.copy(col);
+  }
+
+  // ----- authored terrain, keyed the way the battle engine wants it -------
+  wallKeys() {
+    return [...this.map.hexes.values()].filter((t) => t.type === 'wall').map((t) => t.key);
+  }
+  etherKeys() {
+    return [...this.map.hexes.values()].filter((t) => t.type === 'ether').map((t) => t.key);
+  }
+  // Authored tile tags (a recipe's braziers): [{ k, id }] for createBattle.
+  startTagList() {
+    const out = [];
+    for (const t of this.map.hexes.values()) {
+      for (const id of t.tags ?? []) out.push({ k: t.key, id });
+    }
+    return out;
+  }
+
   // The surrounding world tiles (three rings of them) as giant background hexes
   // past the arena rim. Purely scenery: not pickable, not in tileMeshes, no
   // gameplay. Their bottoms sit on the arena's floor level (y = 0) and their
@@ -333,8 +418,9 @@ export class LocalMapView {
   buildNeighborBackdrop(nbs) {
     if (!nbs || !nbs.length) return;
     const cfg = this.config.local;
-    const aR = SQRT3 * (cfg.radius + 0.5) * cfg.hexSize;      // circumradius of the arena outline
-    const centerDist = 3 * (cfg.radius + 0.5) * cfg.hexSize;  // one world-tile step at arena scale
+    const R = this.map?.radius ?? cfg.radius;                 // recipes may resize the arena
+    const aR = SQRT3 * (R + 0.5) * cfg.hexSize;               // circumradius of the arena outline
+    const centerDist = 3 * (R + 0.5) * cfg.hexSize;           // one world-tile step at arena scale
     // World-plane offsets are scaled uniformly, so all rings land where the world
     // map would put them (world neighbour spacing -> centerDist).
     const spacing = SQRT3 * (this.config.map?.hexSize ?? 1);
@@ -774,6 +860,11 @@ export class LocalMapView {
   // other - a group that landed together instead of a scatter across the arena.
   placeUnits(party, enemies, rng, fixed = null, { partySpread = 0 } = {}) {
     const used = new Set();
+    // Authored walls and ether holes are terrain: random placement never
+    // lands anyone there (a recipe's own spawn keys are validated ground).
+    for (const t of this.map.hexes.values()) {
+      if (t.type && t.type !== 'ground') used.add(t.key);
+    }
     const resolve = (defs, authored, spread = 0) => {
       const keys = [];
       for (let i = 0; i < defs.length; i++) {
@@ -891,7 +982,9 @@ export class LocalMapView {
 
   deployTileFree(k) {
     const d = this.deploy;
-    return !!(d && this.map?.hexes.has(k) && !d.taken.has(k));
+    const tile = this.map?.hexes.get(k);
+    // Authored walls and ether holes are terrain: nobody deploys onto them.
+    return !!(d && tile && (!tile.type || tile.type === 'ground') && !d.taken.has(k));
   }
 
   placeDeployUnit(k) {
@@ -1080,7 +1173,9 @@ export class LocalMapView {
       if (tok) { tok.userData.uid = u.uid; this.battleTokens.set(u.uid, tok); }
     }
     this.highlights = [];
-    this.tagSprites = new Map();
+    // Keep the sprites build() made for a recipe's authored tags: the engine's
+    // startTags carry the same tiles, so syncBattle() simply adopts them.
+    this.tagSprites = this.tagSprites ?? new Map();
     this.walk = null;
     // Floating combat text lives in the DOM, projected from tile positions.
     const layer = document.createElement('div');
@@ -1168,14 +1263,16 @@ export class LocalMapView {
     if (!battle || !this.map) return;
     const sb = battle.state;
 
-    // Tile heights (abilities can raise / lower ground).
+    // Tile heights (abilities can raise / lower ground). Authored walls and
+    // ether holes are terrain, not ground - the engine never moves them and
+    // their shape stays what the recipe wrote.
     for (const tile of this.map.hexes.values()) {
+      if (tile.type === 'wall' || tile.type === 'ether') continue;
       const lvl = sb.heights[tile.key] ?? neutralElevation(COMBAT_CONFIG.combat.elevationLevels);
       if (lvl === (tile.elevation ?? 0)) continue;
       tile.elevation = lvl;
-      const h = this.tileHeightFor(lvl);
-      tile.mesh.scale.y = h;
-      tile.top = h;
+      this.applyTileForm(tile);
+      this.paintTile(tile);   // the elevation value ramp follows the new level
     }
 
     // Tokens: dead ones vanish, live ones stand on their engine tile.

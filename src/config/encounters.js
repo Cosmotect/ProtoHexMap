@@ -45,6 +45,117 @@ export const ENCOUNTERS = {
     },
   },
 
+  // ----- Handcrafted local maps (map codes) ----------------------------
+  // Authored arenas for encounters that open a local map. When such an
+  // encounter is placed at world generation it rolls `rate` to use a crafted
+  // map instead of the random generator; a crafted battle also brings its own
+  // enemies (they REPLACE the rolled group) and may declare its own danger
+  // chevrons. Parsed by src/local/mapcode.js; paste any of these codes into
+  // Menu -> Preview map code to walk around it.
+  //
+  // MAP CODE FORMAT - one line per statement, '#' starts a comment:
+  //   id: <name>            required, the map's id
+  //   radius: <n>           optional, rings of local hexes (default config.local.radius)
+  //   danger: <n>           optional, chevrons the world tile shows (battle maps)
+  //   q,r: <type> [elevation] [tags...] [!Enemy Name]
+  // Tile lines list only the tiles that differ from plain ground at the
+  // neutral elevation (2); everything unlisted stays that. Types: ground,
+  // wall (blocks walking, pushes crash on it), ether (a hole: pushes into it
+  // kill). Elevation is a level 0..4 (walls default to 4, ether needs none).
+  // Tags are tile tag ids from src/config/abilities.js (e.g. fire). '!' pins
+  // an enemy from the bestiary (config/units.js battle.enemyTypes, by id or
+  // display name) to the tile; the rest of the line is its name.
+  craftedMaps: {
+    combat: {
+      rate: 0.25,             // chance a battle encounter uses a crafted map
+      maps: [
+`# A sunken ether trench splits the arena; the only way across is a walled
+# causeway held by raiders, with braziers of fire guarding the mouth.
+id: the-causeway
+radius: 4
+danger: 1
+1,-4: ether
+1,-3: ether
+1,-2: ether
+1,1: ether
+1,2: ether
+1,3: ether
+1,-1: ground 2
+1,0: ground 2
+0,-1: wall 4
+0,1: wall 4
+2,-2: wall 4
+2,0: wall 4
+0,0: ground 2 fire
+2,-1: ground 2 fire
+2,1: ground 3
+3,-1: ground 3 !Raider
+3,-3: ground 3 !Raider
+2,2: ground 3 !Husk
+3,0: ground 4 !Drifter`,
+`# A ring of high ground around a burning hollow: whoever holds the rim
+# rains shots down; whoever falls in fights out of a firepit.
+id: ember-hollow
+radius: 6
+danger: 2
+0,0: ground 0 fire
+1,0: ground 0
+0,1: ground 0 fire
+-1,1: ground 0
+-1,0: ground 1
+0,-1: ground 1 fire
+1,-1: ground 1
+2,-1: ground 3
+2,0: ground 3
+1,1: ground 3
+0,2: ground 3
+-1,2: ground 3
+-2,2: ground 3
+-2,1: ground 3
+-2,0: ground 3
+-1,-1: ground 3
+0,-2: ground 3
+1,-2: ground 3
+2,-2: ground 3
+3,0: wall 4
+0,3: wall 4
+-3,3: wall 4
+-3,0: wall 4
+0,-3: wall 4
+3,-3: wall 4
+4,-2: ground 2 !Brute
+-2,4: ground 2 !Stalker
+-2,-2: ground 2 !Husk
+4,0: ground 2 !Husk`,
+      ],
+    },
+    shop: {
+      rate: 0.25,             // shops do not open a local map yet: the recipe is
+                              // stored on the tile now so the flow can use it later
+      maps: [
+`# A calm terraced hollow for a wayside trader: no enemies, just a bowl of
+# steps sheltered by two standing stones.
+id: wayside-hollow
+radius: 3
+0,0: ground 1
+1,0: ground 1
+0,1: ground 1
+1,-1: ground 2
+-1,1: ground 2
+-1,0: ground 2
+0,-1: ground 2
+2,0: ground 3
+0,2: ground 3
+-2,2: ground 3
+-2,0: ground 3
+0,-2: ground 3
+2,-2: ground 3
+3,-1: wall 4
+-3,2: wall 4`,
+      ],
+    },
+  },
+
   // ----- The Stasis ----------------------------------------------------
   // A single Stasis Seed spawns with the map; destroying it wins the run.
   // Four future Colony sites are picked at generation. After every player turn a line
