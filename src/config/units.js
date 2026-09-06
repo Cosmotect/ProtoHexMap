@@ -235,5 +235,14 @@ export const UNITS = {
 export function combatStatsFor(name) {
   const base = String(name ?? '').replace(/ \d+$/, '');
   const p = UNITS.party;
-  return p.roster.find((u) => u.name === base) ?? p.defaultCombat;
+  const row = p.roster.find((u) => u.name === base);
+  if (!row) return p.defaultCombat;
+  // A row can be INCOMPLETE: one invented in the Settings window, or one restored
+  // from settings saved by an older build, before the roster carried init / speed /
+  // flying / abilities at all. Fill whatever is missing from defaultCombat rather
+  // than hand back a character with no abilities - which used to throw on the first
+  // draw of the party panel and take the whole page with it.
+  const out = { ...p.defaultCombat };
+  for (const [k, v] of Object.entries(row)) if (v !== undefined) out[k] = v;
+  return out;
 }

@@ -97,7 +97,19 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
   let overrides = loadOverrides();
 
   // ----- apply saved overrides on startup ------------------------------
-  for (const [path, value] of Object.entries(overrides)) setPath(config, path, value);
+  // A saved override is a snapshot of the config AS IT WAS WHEN IT WAS SAVED, so
+  // one made before a table grew a column arrives without that column. Records are
+  // merged over today's defaults instead of replacing them wholesale, and an
+  // override pointing at config that no longer exists is dropped.
+  // (Written 2026-09-06 after settings saved before the roster carried its own
+  // abilities restored a party with no abilities at all and threw on the first
+  // draw of the party panel, taking the page with it.)
+  for (const [path, value] of Object.entries(overrides)) {
+    const def = getPath(defaults, path);
+    if (def === undefined) { delete overrides[path]; continue; }
+    setPath(config, path, healOverride(def, value));
+  }
+  saveOverrides();
 
   $('btn-settings-close').addEventListener('click', close);
   // "Copy changes": every property that differs from the config-file default goes
@@ -618,6 +630,31 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
   }
 
   return { open, close, isOpen, refresh, hasOverrides: () => Object.keys(overrides).length > 0 };
+}
+
+// Merges a SAVED value over today's default so a snapshot taken against an older
+// config shape still arrives complete. Lists of records match up by `name` (the
+// roster), then by position; tables of records match by key (the bestiary, the
+// groups). Anything the save does not contain keeps the default's value; anything
+// it does contain wins, and a record the save dropped stays dropped.
+function healOverride(def, saved) {
+  const isRecord = (v) => v && typeof v === 'object' && !Array.isArray(v);
+  if (Array.isArray(saved)) {
+    if (!Array.isArray(def)) return saved;
+    return saved.map((row, i) => {
+      if (!isRecord(row)) return row;
+      const from = def.find((d) => isRecord(d) && d.name !== undefined && d.name === row.name) ?? def[i];
+      return isRecord(from) ? { ...from, ...row } : row;
+    });
+  }
+  if (isRecord(saved) && isRecord(def)) {
+    const out = {};
+    for (const [k, v] of Object.entries(saved)) {
+      out[k] = isRecord(v) && isRecord(def[k]) ? { ...def[k], ...v } : v;
+    }
+    return out;
+  }
+  return saved;
 }
 
 // ----- path helpers ---------------------------------------------------------

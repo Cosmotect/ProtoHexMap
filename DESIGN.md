@@ -616,6 +616,24 @@ stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }
     Encounters > Battles**, which replaces the wall of tick boxes that used to sit
     on the Units tab: press + for a searchable list of groups, press a group to
     take it out, list one twice to double its odds.
+* 2026-09-06 (d) **Fixed: saved settings from an older build took the page down.**
+  Settings are stored as a snapshot of the config AS IT WAS THAT DAY, so a save made
+  before the roster rows carried their own `abilities` restored a party of rows with
+  none, `unitAbilityIds` handed back undefined and the first party card threw
+  (`ui.js`, `.map` of undefined) - the whole page with it. Reported from the hosted
+  build by the owner, who had added a character through the Settings window; that is
+  what saves the WHOLE roster and freezes its shape.
+  Two guards now, because either alone leaves a hole:
+  * `combatStatsFor` fills anything a roster row is missing from `party.defaultCombat`,
+    so an incomplete row can never crash the game again - it just plays plainly.
+  * saved overrides are MERGED over today's defaults on load rather than replacing
+    them (`healOverride` in settings.js: lists of records match by `name` then by
+    position, tables of records by key), and an override pointing at config that no
+    longer exists is dropped. This heals an old save in place: the owner's characters
+    get their real abilities back rather than a generic fallback, and the settings
+    they actually chose survive.
+  The smoke test now boots a second page with exactly that stale save and checks it
+  comes up, keeps what it should and heals the rest.
 
 ## Open questions
 

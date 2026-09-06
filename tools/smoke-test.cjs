@@ -1283,6 +1283,50 @@ fs.mkdirSync(OUT, { recursive: true });
   if (backHome.turn !== 0) problems.push('the preview touched game state: ' + JSON.stringify(backHome));
   await page.screenshot({ path: path.join(OUT, '69-mapcode-back.png') });
 
+  // ----- settings saved by an OLDER build -----------------------------------
+  // Saved settings are a snapshot of the config as it was that day, so one made
+  // before a table grew a column arrives without it. A roster saved before the
+  // characters carried their own abilities once took the whole page down on load
+  // (ui.js drew a card, asked for the abilities, got undefined). A fresh page with
+  // that exact stale save must come up, keep the settings it can, and heal the rest.
+  {
+    const stale = {
+      // rows as they were written before the roster grew its combat fields, plus a
+      // character invented in the Settings window - which is how this was found
+      'party.roster': [
+        { name: 'Vanguard', icon: '🛡️', hp: 40 },
+        { name: 'Archer', icon: '🏹', hp: 28 },
+        { name: 'Mystic', icon: '🔮', hp: 22 },
+        { name: 'New character', icon: '🙂', hp: 24 },
+      ],
+      'battle.bosses': ['forgeTyrant'],   // a setting whose config no longer exists
+      'camera.followPlayer': false,       // an ordinary setting, which must survive
+    };
+    const fresh = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    const stalePains = [];
+    fresh.on('pageerror', (e) => stalePains.push('PAGE ERROR: ' + e.message));
+    await fresh.addInitScript((v) => { localStorage.setItem('hexmap-settings-v1', JSON.stringify(v)); }, stale);
+    await fresh.goto(URL.includes('?') ? `${URL}&nostart=1` : `${URL}?nostart=1`, { waitUntil: 'load', timeout: 60000 });
+    await fresh.waitForTimeout(2500);
+    const healed = await fresh.evaluate(() => ({
+      alive: !!window.game,
+      cards: document.querySelectorAll('#party-units .unit').length,
+      slots: document.querySelectorAll('#party-units .u-slot.ab:not(.empty)').length,
+      vanguardAbilities: (window.game.config.party.roster.find((r) => r.name === 'Vanguard') || {}).abilities,
+      deadDropped: window.game.config.battle.bosses === undefined,
+      kept: window.game.config.camera.followPlayer,
+    }));
+    if (stalePains.length) problems.push('stale settings threw on load: ' + stalePains.join(' | '));
+    if (!healed.alive || healed.cards !== 3) problems.push('stale settings did not boot a party: ' + JSON.stringify(healed));
+    if (healed.slots !== 6) problems.push('stale settings lost the party\'s abilities: ' + JSON.stringify(healed));
+    if (!Array.isArray(healed.vanguardAbilities) || healed.vanguardAbilities.length !== 2) {
+      problems.push('a roster row saved by an older build was not healed: ' + JSON.stringify(healed));
+    }
+    if (!healed.deadDropped) problems.push('an override pointing at config that is gone was kept: ' + JSON.stringify(healed));
+    if (healed.kept !== false) problems.push('healing a stale save threw away a setting it should have kept: ' + JSON.stringify(healed));
+    await fresh.close();
+  }
+
   console.log(problems.length ? 'PROBLEMS:\n' + problems.join('\n') : 'OK: no errors, all checks passed.');
   await browser.close();
   process.exit(problems.length ? 1 : 0);
