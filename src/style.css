@@ -542,6 +542,9 @@ button.small { padding: 2px 8px; font-size: 12px; }
 .settings-note { column-span: all; margin: 0 0 8px; }
 .settings-group { break-inside: avoid; margin-bottom: 12px; padding: 8px 10px; border: 1px solid var(--panel-border); border-radius: 8px; }
 .settings-group .settings-group { margin: 6px 0 4px; padding: 6px 8px; }
+/* A record table nested inside a group (encounters > visuals) is a group too,
+   so it keeps the same frame; it just holds a table instead of rows. */
+.settings-group .settings-matrix { margin: 6px 0 4px; padding: 6px 8px; border: 1px solid var(--panel-border); border-radius: 8px; }
 .settings-group-title { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
 .settings-row { display: flex; align-items: center; gap: 8px; padding: 2px 0; font-size: 12.5px; }
 .settings-row .settings-label { flex: 1 1 120px; min-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -552,32 +555,30 @@ button.small { padding: 2px 8px; font-size: 12px; }
 .settings-row input[type="color"] { width: 44px; height: 24px; padding: 0; border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 6px; background: none; }
 .settings-row.changed .settings-label { color: var(--accent); }
 .settings-row.changed .settings-label::after { content: ' *'; }
+/* The reset button appears only while the value differs from the config file -
+   the same rule the table cells follow. The slot keeps its width either way so
+   rows do not jump sideways as values are edited. */
 .settings-reset { width: 48px; flex: none; text-align: center; }
+.settings-row .settings-reset { visibility: hidden; }
+.settings-row.changed .settings-reset { visibility: visible; }
 @media (max-width: 720px) { .settings-body { columns: 1; } }
 
-/* ----- tabs that contain a table (tile types, biomes) --------------------
-   A table is one wide item among narrow ones, and multi-column layout has no
-   way to say "this one is three columns wide" - the old code spanned it across
-   ALL of them, which parked both tables on their own rows under everything
-   else. A grid can: ordinary groups take one track, a table takes three, and
-   everything sits side by side. `align-items: start` keeps a short group from
-   being stretched to the height of the table next to it. */
-.settings-body.has-matrix {
-  columns: auto;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-  gap: 12px 22px;
-  align-items: start;
-  grid-auto-flow: row dense;
-}
-.settings-body.has-matrix .settings-note { grid-column: 1 / -1; }
-.settings-body.has-matrix > .settings-group { margin-bottom: 0; }
-.settings-body.has-matrix > .settings-matrix { grid-column: span 2; }
-.settings-body.has-matrix > .settings-matrix.wide { grid-column: span 3; }
-@media (max-width: 1280px) { .settings-body.has-matrix > .settings-matrix.wide { grid-column: span 2; } }
-@media (max-width: 980px) { .settings-body.has-matrix { grid-template-columns: 1fr; }
-                            .settings-body.has-matrix > .settings-matrix,
-                            .settings-body.has-matrix > .settings-matrix.wide { grid-column: span 1; } }
+/* ----- tabs that contain a table --------------------------------------
+   Two piles, built by render() in settings.js: the small groups go into one
+   multi-column FLOW, the tables sit under it at full width.
+
+   This replaces a grid. A grid row is exactly as tall as its tallest item, so
+   one long group - encounters > visuals, a colour per encounter kind - stretched
+   the entire first row and left a screen-sized void beside all the short groups.
+   A multi-column flow has no rows to stretch: it fills column by column and
+   packs items of any height with no gaps, which is the tightest footprint the
+   small groups can have. The tables then get the FULL width, which is also what
+   stops the Battles table needing a horizontal scrollbar. */
+.settings-body.has-matrix { columns: auto; display: block; }
+.settings-flow { columns: 268px; column-gap: 20px; margin-bottom: 12px; }
+.settings-flow > .settings-group { break-inside: avoid; }
+.settings-body.has-matrix > .settings-matrix { margin-bottom: 12px; }
+@media (max-width: 720px) { .settings-flow { columns: 1; } }
 
 /* Matrix sections (tile types, biomes): one table, rows = entries, columns = attributes. */
 .settings-matrix { break-inside: avoid; }
@@ -626,12 +627,28 @@ button.small { padding: 2px 8px; font-size: 12px; }
 
 /* Settings > Encounters > Battles: which groups each kind of fight may roll, a row
    per kind and a column per layer. A cell is a wrap of group buttons plus a "+". */
-.settings-battles { grid-column: 1 / -1; }
-.settings-battles table { table-layout: auto; }
+/* Full width, and every layer column the same share of it, so the table fits
+   the window instead of scrolling sideways. */
+.settings-battles .settings-matrix-scroll { overflow-x: visible; }
+.settings-battles table { table-layout: fixed; width: 100%; }
 .settings-battles th { white-space: nowrap; }
-.settings-battles tbody th { text-align: left; font-size: 12px; font-weight: 600; padding-right: 10px; }
-.settings-battles td { vertical-align: top; padding: 3px 4px; }
-.spawn-cell { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 132px; }
+/* The row label column is fixed; the layer columns split whatever is left. */
+.settings-battles col.bt-row { width: 130px; }
+.settings-battles thead th {
+  padding: 4px 8px; font-size: 11.5px; color: var(--accent);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
+}
+.settings-battles tbody th {
+  text-align: left; font-size: 12px; font-weight: 600;
+  padding: 6px 10px 6px 2px; vertical-align: top;
+}
+.settings-battles td { vertical-align: top; padding: 6px 8px; }
+/* Separators. Without them the cells run together into one field of chips and
+   there is nothing to tell the eye where a layer or a row of fights begins. */
+.settings-battles th + th, .settings-battles td { border-left: 1px solid rgba(255, 255, 255, 0.12); }
+.settings-battles tbody tr + tr th, .settings-battles tbody tr + tr td { border-top: 1px solid rgba(255, 255, 255, 0.12); }
+.settings-battles tbody tr:hover th, .settings-battles tbody tr:hover td { background: rgba(255, 255, 255, 0.025); }
+.spawn-cell { display: flex; flex-wrap: wrap; gap: 4px; align-items: flex-start; align-content: flex-start; }
 .spawn-chip {
   font: inherit; font-size: 11px; line-height: 1.4;
   padding: 2px 7px; border-radius: 6px; cursor: pointer;
@@ -649,8 +666,11 @@ button.small { padding: 2px 8px; font-size: 12px; }
 /* The group picker floats over everything, anchored under the "+" that opened it. */
 .spawn-picker {
   position: fixed; z-index: 60; width: 230px; max-height: 280px; display: flex; flex-direction: column;
-  background: var(--panel); border: 1px solid var(--panel-border); border-radius: 8px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); padding: 6px;
+  /* Solid, not var(--panel-bg): this floats over the group names underneath and
+     any transparency makes both unreadable. (--panel never existed at all, so
+     the popup was drawing with no background whatsoever.) */
+  background: #12172a; border: 1px solid rgba(255, 255, 255, 0.22); border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.65); padding: 6px;
 }
 .spawn-search {
   font: inherit; font-size: 12px; color: var(--text); margin-bottom: 6px;

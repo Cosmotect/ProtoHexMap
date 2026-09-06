@@ -71,8 +71,11 @@ const BATTLE_OWNED = new Set(['enemyTypes', 'enemyGroups', 'spawns']);
 // notes come from the locale tables (settings.tab.<id>, settings.note.<id>).
 const TABS = [
   { id: 'world', sections: ['map', 'worldBackground', 'localBackground', 'noise', 'tileTypes', 'biomes'] },
-  { id: 'encounters', sections: ['encounters', 'stasis', 'rest', 'acolyte', 'shop', 'treasure', 'events', 'fatigue'] },
-  { id: 'units', sections: ['party', 'battle', 'combat', 'statuses', 'intellect'] },
+  // `battle` is listed here (not on Units) so that "Reset tab" reaches it; the
+  // render loop skips it and renders it explicitly next to the Battles table.
+  { id: 'encounters', sections: ['encounters', 'stasis', 'rest', 'acolyte', 'shop', 'treasure', 'events', 'fatigue', 'battle'] },
+  { id: 'units', sections: ['party', 'combat', 'statuses', 'intellect'] },
+  // NOTE: `battle` lives on the ENCOUNTERS tab - see battleScalars() in render().
   { id: 'general', sections: ['run', 'camera', 'local', 'anim', 'fatigueBar', 'colors'] },
   { id: 'audio', sections: ['audio'] },
 ];
@@ -158,6 +161,9 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
 
   // ----- rendering ---------------------------------------------------------
   function render() {
+    // A picker anchored to a "+" that is about to be replaced would be left
+    // floating over the new tab (it is appended to <body>, not to the table).
+    closeGroupPicker();
     tabsEl.innerHTML = TABS.map((tab) => `<button class="tab ${tab.id === activeTab ? 'active' : ''}" data-tab="${tab.id}">${t(`settings.tab.${tab.id}`)}</button>`).join('');
     tabsEl.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { activeTab = b.dataset.tab; render(); }));
     const tab = TABS.find((x) => x.id === activeTab);
@@ -177,21 +183,36 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
         <div class="settings-row"><span class="settings-label">${t('settings.showlog')}</span>
         <input type="checkbox" id="settings-showlog" ${getShowLog && getShowLog() ? 'checked' : ''}><span class="settings-reset"></span></div></div>`);
     }
-    if (tab.id === 'units') parts.push(...renderUnitsTab());
+    // The tab's content is built in two piles. SMALL groups (a handful of rows
+    // each) go into `flow`, which style.css lays out as a multi-column flow: it
+    // packs items of wildly different heights with no gaps. WIDE items - the
+    // tables - go into `wide` and take the full width, one under another.
+    //
+    // The previous layout put everything on one grid. A grid row is as tall as
+    // its tallest item, so a single long group (encounters > visuals, a colour
+    // per encounter kind) stretched the whole first row and left an enormous
+    // void beside the short groups. A flow has no rows to stretch.
+    const flow = [];
+    const wide = [];
+    if (tab.id === 'units') renderUnitsTab(flow, wide);
     else {
       for (const section of tab.sections) {
-        parts.push(MATRIX_SECTIONS.has(section)
-          ? renderMatrix(section, config[section], defaults[section], section)
-          : renderGroup(section, config[section], defaults[section], section));
+        if (section === 'battle') continue;   // rendered below, with only the keys no editor owns
+        if (MATRIX_SECTIONS.has(section)) wide.push(renderMatrix(section, config[section], defaults[section], section));
+        else flow.push(...renderSection(section));
       }
-      // Which groups each kind of fight rolls, per layer.
-      if (tab.id === 'encounters') parts.push(battlesBlock());
+      if (tab.id === 'encounters') {
+        // The battle numbers used to live on the Units tab, which put the rules
+        // of a fight in one place and the fights themselves in another. They
+        // belong here, beside the table that says which fight spawns where.
+        flow.push(renderGroup('battle', battleScalars(), defaults.battle, 'battle'));
+        wide.push(battlesBlock());
+      }
     }
+    if (flow.length) parts.push(`<div class="settings-flow">${flow.join('')}</div>`);
+    parts.push(...wide);
     bodyEl.innerHTML = parts.join('');
-    // Tabs with a table switch from the multi-column flow to a grid, where the
-    // table can be told to occupy several columns and still sit beside the
-    // ordinary groups instead of below them (style.css).
-    bodyEl.classList.toggle('has-matrix', tab.id === 'units' || tab.id === 'encounters' || tab.sections.some((s) => MATRIX_SECTIONS.has(s)));
+    bodyEl.classList.toggle('has-matrix', wide.length > 0);
     if (tab.id === 'units') wireUnitsTab();
     if (tab.id === 'encounters') wireBattlesBlock();
     bodyEl.querySelector('#settings-language')?.addEventListener('change', (e) => { setLanguage(e.target.value); render(); });
@@ -220,40 +241,64 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
   // ===================================================================
   //  The Units tab
   // ===================================================================
-  function renderUnitsTab() {
+  // A section as one or more flow items: the plain rows in one box, and each
+  // group of look-alike records (encounters > visuals) HOISTED into a box of its
+  // own. Left nested, a long table is one unbreakable item that sets the height
+  // of its whole column; hoisted, the flow can put it wherever it fits.
+  function renderSection(section) {
+    const obj = config[section];
+    const def = defaults[section];
+    const rest = {};
+    const tables = [];
+    for (const [k, v] of Object.entries(obj)) {
+      if (v && typeof v === 'object' && !Array.isArray(v) && looksLikeRecords(v)) {
+        tables.push(renderMatrix(`${section} - ${k}`, v, def?.[k], `${section}.${k}`));
+      } else rest[k] = v;
+    }
+    return [renderGroup(section, rest, def, section), ...tables];
+  }
+
+  // Everything under `battle` that no hand-built editor owns: the damage curve,
+  // the danger bands, the simulation numbers. Rendered on the ENCOUNTERS tab,
+  // beside the table that decides which fight happens where.
+  function battleScalars() {
+    const rest = {};
+    for (const [k, v] of Object.entries(config.battle)) if (!BATTLE_OWNED.has(k)) rest[k] = v;
+    return rest;
+  }
+
+  function renderUnitsTab(flow, wide) {
     const b = config.battle;
-    const groupIds = Object.keys(b.enemyGroups ?? {});
-    const out = [];
 
     // The party: everything except the roster stays an ordinary group, and the
     // roster becomes a table with the same add / delete row as the bestiary.
     const partyScalars = {};
     for (const [k, v] of Object.entries(config.party)) if (k !== 'roster') partyScalars[k] = v;
-    out.push(renderGroup('party', partyScalars, defaults.party, 'party'));
-    out.push(recordTable({
+    flow.push(renderGroup('party', partyScalars, defaults.party, 'party'));
+    // The arena rules that are NOT about one fight's numbers stay here with the
+    // units they govern.
+    for (const section of ['combat', 'statuses', 'intellect']) {
+      if (!config[section]) continue;
+      if (MATRIX_SECTIONS.has(section)) wide.push(renderMatrix(section, config[section], defaults[section], section));
+      else flow.push(renderGroup(section, config[section], defaults[section], section));
+    }
+    wide.push(recordTable({
       title: t('settings.units.roster'), coll: 'party.roster', obj: config.party.roster,
       cols: ROSTER_COLS, addLabel: t('settings.units.addChar'), rowLabel: t('settings.units.character'),
       note: t('settings.units.roster.note'), list: true,
     }));
 
     // The bestiary: one row per creature, everything about it on that row.
-    out.push(recordTable({
+    wide.push(recordTable({
       title: t('settings.units.bestiary'), coll: 'battle.enemyTypes', obj: b.enemyTypes,
       cols: BESTIARY_COLS, addLabel: t('settings.units.addEnemy'), rowLabel: t('settings.units.id'),
       note: t('settings.units.bestiary.note'), wide: true,
     }));
 
     // The groups: a title and a line-up of bestiary ids.
-    out.push(groupsTable(b));
-
-    // (Which groups spawn where is its own table now: Settings > Encounters > Battles.)
-
-    // Whatever else lives under `battle` (the damage curve, the danger bands,
-    // the simulation numbers) keeps the plain generated form.
-    const rest = {};
-    for (const [k, v] of Object.entries(b)) if (!BATTLE_OWNED.has(k)) rest[k] = v;
-    out.push(renderGroup('battle', rest, defaults.battle, 'battle'));
-    return out;
+    wide.push(groupsTable(b));
+    // (Which groups spawn where, and the battle numbers themselves, are on the
+    // Encounters tab.)
   }
 
   // A table of records that can grow and shrink. `coll` is the config path of
@@ -308,7 +353,7 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
   // These editors save the collection whole, so a per-row reset makes no sense:
   // the whole table goes back to the config file at once.
   function resetCollButton(coll) {
-    if (!(coll in overrides)) return '';
+    if (!isChanged(coll)) return '';
     return `<button class="small rt-reset" data-reset="${coll}">${t('settings.units.resetTable')}</button>`;
   }
 
@@ -354,7 +399,9 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
     return `<div class="settings-group settings-matrix settings-battles wide">
       <div class="settings-group-title">${t('settings.battles')}</div>
       <p class="muted rt-note">${escapeAttr(t('settings.battles.note'))}</p>
-      <div class="settings-matrix-scroll"><table><thead>${head}</thead><tbody>${body}</tbody></table></div>
+      <div class="settings-matrix-scroll"><table>
+        <colgroup><col class="bt-row">${layers.map(() => '<col>').join('')}</colgroup>
+        <thead>${head}</thead><tbody>${body}</tbody></table></div>
     </div>`;
   }
 
@@ -522,12 +569,44 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
         if (value.every((v) => typeof v !== 'object')) rows.push(renderRow(key, p, value, d, 'list'));
         else value.forEach((item, i) => rows.push(renderGroup(`${key} ${i + 1}`, item, d?.[i], `${p}.${i}`)));
       } else if (value && typeof value === 'object') {
-        rows.push(renderGroup(key, value, d, p));
+        // A NESTED group of look-alike records (encounters > visuals: a colour
+        // per encounter kind) becomes a small table rather than a stack of
+        // boxes. Eleven boxes holding one row each were the tallest thing on
+        // the Encounters tab by a wide margin, and a column of a multi-column
+        // flow can never be shorter than its tallest unbreakable item.
+        rows.push(looksLikeRecords(value) ? renderMatrix(key, value, d, p) : renderGroup(key, value, d, p));
       } else {
         rows.push(renderRow(key, p, value, d, kindOf(key, value, p)));
       }
     }
     return `<div class="settings-group"><div class="settings-group-title">${title}</div>${rows.join('')}</div>`;
+  }
+
+  // Is this object a set of records that would read better as a table? Three or
+  // more sub-objects, only scalars inside them, and few enough distinct
+  // attributes that the table stays narrow. Arrays disqualify it: a matrix cell
+  // has no list editor and would save the array back as a string.
+  function looksLikeRecords(obj) {
+    const vals = Object.values(obj);
+    if (vals.length < 3) return false;
+    if (!vals.every((v) => v && typeof v === 'object' && !Array.isArray(v))) return false;
+    const keys = new Set();
+    const own = [];
+    for (const v of vals) {
+      let n = 0;
+      for (const [k, x] of Object.entries(v)) {
+        if (SKIP_KEYS.has(k)) continue;
+        if (x !== null && typeof x === 'object') return false;   // nested deeper, or an array
+        keys.add(k);
+        n += 1;
+      }
+      own.push(n);
+    }
+    if (keys.size === 0 || keys.size > 4) return false;
+    // And they must really share those attributes. stasis > debuffs looks like
+    // records but each one has a different single key, so the table would be
+    // three rows of one value and six dashes - worse than the boxes it replaced.
+    return own.every((n) => n >= keys.size / 2);
   }
 
   // One table for a section of uniform records: rows = entries (tile types /
@@ -567,10 +646,20 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
     else if (kind === 'color') control = `<input type="color" data-path="${path}" data-kind="color"${colorShapeAttr(value)} value="${cssColor(value)}">`;
     else if (kind === 'number') control = `<input type="number" step="any" data-path="${path}" data-kind="number" value="${value ?? ''}">`;
     else control = `<input type="text" data-path="${path}" data-kind="text" value="${escapeAttr(String(value ?? ''))}">`;
-    const changed = path in overrides;
+    const changed = isChanged(path);
     const defText = def === undefined ? '' : kind === 'color' ? cssColor(def) : String(def);
     return `<span class="settings-cell ${changed ? 'changed' : ''}" title="${path}">
       ${control}<button class="small cell-reset" data-reset="${path}" title="${escapeAttr(t('settings.reset.title', { value: defText }))}">&#8634;</button></span>`;
+  }
+
+  // Is this path actually different from the config FILE? `path in overrides`
+  // is not enough: an override is also written when a value is typed back to
+  // its default, and the reset button is only meaningful when there is
+  // something to undo. (2026-09-06: every row was showing "reset" and pressing
+  // it did nothing, because the button was drawn unconditionally.)
+  function isChanged(path) {
+    if (!(path in overrides)) return false;
+    return JSON.stringify(getPath(config, path)) !== JSON.stringify(getPath(defaults, path));
   }
 
   function kindOf(key, value, path) {
@@ -587,7 +676,7 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
   }
 
   function renderRow(label, path, value, def, kind) {
-    const changed = path in overrides;
+    const changed = isChanged(path);
     let control;
     if (kind === 'bool') control = `<input type="checkbox" data-path="${path}" data-kind="bool" ${value ? 'checked' : ''}>`;
     else if (kind === 'color') control = `<input type="color" data-path="${path}" data-kind="color"${colorShapeAttr(value)} value="${cssColor(value)}">`;

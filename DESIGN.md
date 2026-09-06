@@ -150,8 +150,32 @@ balance must be re-measured against interactive play.
   log switch are browser preferences (localStorage), not config.
 * **Settings window** (`settings.js`): the whole config on tabs named after the files
   (World, Encounters, Units, General, Audio). The form is generated from the config's
-  shape, changes apply immediately, persist in localStorage over the file defaults,
-  and every row / tab has a reset. Map, terrain and party values apply on the next run.
+  shape, changes apply immediately, and persist in localStorage over the file
+  defaults. Map, terrain and party values apply on the next run.
+  * **A row's reset button appears only when there is something to undo** - when the
+    live value really differs from the config file, not merely when an override
+    exists for that path (typing a value back to its default writes an override
+    too). `isChanged()` compares the two; before 2026-09-06 the button was drawn
+    on every row and pressing it did nothing.
+  * **Layout**: each tab is two piles. The small groups go into one `.settings-flow`
+    - a multi-column flow, which packs items of any height with no gaps - and the
+    tables sit under it at full width. This replaced a grid, where a row is as tall
+    as its tallest item: one long group (encounters > visuals, a colour per
+    encounter kind) stretched the first row and left a screen-sized void beside
+    every short group. Giving the tables the full width is also what stops the
+    Battles table needing a horizontal scrollbar.
+  * A **nested group of look-alike records** is rendered as a small table instead of
+    a stack of one-row boxes, and hoisted out of its parent into its own flow item
+    (`looksLikeRecords` / `renderSection`). The test is deliberately strict - three
+    or more sub-objects, scalars only, at most four attributes, and every record
+    carrying at least half of them - so `stasis > debuffs`, where each entry has a
+    different single key, stays as boxes rather than becoming a table of dashes.
+  * **Where the battle numbers live**: `battle`'s plain values (the damage curve,
+    the danger bands, the simulation numbers) are on the ENCOUNTERS tab, beside the
+    Battles table that decides which fight happens where. The Units tab keeps the
+    party, the arena rules and the editors for creatures and groups. `battle` is
+    still listed in the encounters tab's `sections` so that "Reset tab" reaches it;
+    the render loop skips it and renders `battleScalars()` explicitly.
 * **Languages** (`i18n.js`): every user-facing string is a key in a flat per-language
   table (`locales/`); only languages registered in i18n.js are selectable (English
   now). `t(key, params)` / `tn(name)`, `data-i18n` for static HTML, plurals
