@@ -269,6 +269,7 @@ function beginInteractiveBattle(ctx, placementOverride = null) {
   const enemyDefs = ctx.enemies.map((e) => ({
     name: e.name, hp: e.hp, maxHp: e.maxHp, power: e.power,
     shape: e.shape, color: e.color, typeId: e.typeId,
+    intellect: e.intellect,   // its INTELLECT CLASS - how well it plays its turn
   }));
   // The arena is holding the party back so the player can place them: park the
   // fight here and hand over to the deployment step. It runs when the camera

@@ -134,6 +134,9 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       pos, isEnemy, idx: i, partyIndex: def.partyIndex ?? null,
       startPos: pos, moveLocked: false, done: false, tagTicked: false,
       status: {}, summoned: false,
+      // INTELLECT CLASS (config.intellect): which facts this creature can weigh on
+      // its turn. Anything hand-authored without one is treated as the dimmest.
+      intellect: def.intellect ?? 'C',
     };
   }
   let i = 0;
@@ -224,8 +227,11 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     if (!def || !u || u.uid === undefined || u.hp <= 0) return;
     let amount;
     if (def.amountIs) {
-      const n = Number(buffX);
-      amount = Number.isFinite(n) ? n : def[def.amountIs];
+      // No number from the ability = the status's own value. Anything else and a
+      // multiplier status applied by an ability that never thought about buffX
+      // would land as a meaningless x1.
+      const given = buffX === undefined || buffX === null || buffX === '' ? NaN : Number(buffX);
+      amount = Number.isFinite(given) ? given : def[def.amountIs];
     }
     if (!u.status) u.status = {};
     u.status[id] = { turns: def.turns || 0, charges: def.charges || 0, amount };
@@ -277,6 +283,35 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       }
     }
   }
+  // ----- intellect classes (config.intellect) ------------------------------
+  // What a creature is able to WEIGH when it plans its turn. It changes no rule:
+  // a witless brute still takes the high-ground bonus if it happens to stand high
+  // and still dies in the void, it just never thinks about either. See the table
+  // in src/config/abilities.js for what each flag covers.
+  const DIM = { statuses: false, elevation: false, tags: false, ether: false, injuries: false };
+  const mindOf = (u) => (config.intellect ?? {})[u && u.intellect] ?? (config.intellect ?? {}).C ?? DIM;
+  // The blindfold a simulation wears while this creature imagines a move. The
+  // resolution reads it too, so a mind that cannot weigh height simply never sees
+  // the height bonus in the outcome it is judging.
+  const blindfold = (mind) => ({ elevation: !mind.elevation, ether: !mind.ether });
+
+  // How much THIS target wants (or dreads) a status, for a mind clever enough to
+  // ask. `v` is the status's worth: negative means it is a good thing to carry.
+  //  * a blessing counts for more on an ally that is hurt or already in reach of
+  //    the party - that is the difference between handing a shield to whoever is
+  //    nearest and handing it to whoever is about to be hit;
+  //  * a curse counts for less on someone who will not live long enough to suffer it.
+  // Always at least a little, so a clever mind never refuses a target outright.
+  function statusNeed(u, was, v) {
+    if (!was || !was.maxHp) return 1;
+    const hpFrac = Math.max(0, Math.min(1, was.hp / was.maxHp));
+    if (v < 0) {
+      const exposed = alive(false).some((p) => hexDist(p.pos, u.pos) <= 1) ? 0.5 : 0;
+      return 0.5 + (1 - hpFrac) + exposed;
+    }
+    return 0.5 + hpFrac;
+  }
+
   // What the AI thinks a status is worth on a unit: the table's aiValue, flipped
   // when the amount went negative (a slow is as bad as a haste is good).
   function statusValue(id, amount) {
@@ -291,15 +326,15 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
 
   // ----- live / simulated effect state (hex-box 10-battle-effects) -------
   function liveSt() { return { sim: false, units: sb.units, tags: sb.tags, heights: sb.heights, deathQueue: sb.deathQueue, rec: null }; }
-  function simSt() {
-    return { sim: true,
+  function simSt(blind) {
+    return { sim: true, blind: blind || null,
       units: sb.units.map((u) => ({ uid: u.uid, isEnemy: u.isEnemy, flying: u.flying, hp: u.hp, maxHp: u.maxHp, pos: u.pos, power: u.power,
         // the whole status bag, copied one level deep - forgetting this is what used
         // to make the AI simulate a board it could not actually see
         status: Object.fromEntries(Object.entries(u.status || {}).map(([id, v]) => [id, { ...v }])) })),
       tags: Object.fromEntries(Object.entries(sb.tags).map(([k, t]) => [k, { ...t }])),
       heights: { ...sb.heights }, deathQueue: [],
-      rec: { dmg: {}, moved: {}, killed: {}, applied: {}, stripped: {}, tmoved: {}, tkilled: {} } };
+      rec: { dmg: {}, moved: {}, killed: {}, applied: {}, stripped: {}, voided: {}, tmoved: {}, tkilled: {} } };
   }
   const stH = (st, k) => st.heights[k] ?? 0;
   const sUnitAt = (st, k) => st.units.find((u) => u.hp > 0 && u.pos === k);
@@ -372,7 +407,12 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   function sVoid(st, ent) {
     if (!ent || ent.hp <= 0) return;
     if (ent.uid !== undefined) {
-      if (st.sim) { st.rec.dmg[ent.uid] = (st.rec.dmg[ent.uid] || 0) + ent.hp; st.rec.killed[ent.uid] = 1; }
+      if (st.sim) {
+        // The hole is always lethal; it is only an OPPORTUNITY to a mind that can
+        // weigh it. A blind one records the shove and none of its worth.
+        st.rec.voided[ent.uid] = 1;
+        if (!(st.blind && st.blind.ether)) { st.rec.dmg[ent.uid] = (st.rec.dmg[ent.uid] || 0) + ent.hp; st.rec.killed[ent.uid] = 1; }
+      }
       else { floater(ent.pos, '🕳 VOID', '#c66dff'); blog(ent.name + ' is shoved into the void'); }
       // Reported BEFORE hp drops, while ent.pos is still the tile it stood on:
       // that tile, not the hole, is where anything it was carrying stays.
@@ -490,12 +530,14 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       if (!tgt) { if (!st.sim) floater(dt, '✸', ab.color); continue; }
       if (ab.damage > 0) {
         let dmg = Math.max(0, ab.damage + powBonus(caster) + dmgMod(caster)), lbl = '';
-        if (u) {
+        // A mind blind to elevation judges the blow as if the ground were flat. The
+        // REAL cast (st.sim false) always counts the height - the rule is the rule.
+        if (u && !(st.blind && st.blind.elevation)) {
           const hd = stH(st, caster.pos) - stH(st, dt);
           if (hd >= 2 && CFG.highBonus > 0) { dmg += CFG.highBonus; lbl = 'HIGH'; }
           else if (hd <= -2 && CFG.lowPenalty > 0) { dmg = Math.max(0, dmg - CFG.lowPenalty); lbl = 'LOW'; }
-          if (dealtMul !== 1) { dmg = Math.max(0, Math.round(dmg * dealtMul)); lbl = (lbl ? lbl + ' ' : '') + dealtLabel; }
         }
+        if (u && dealtMul !== 1) { dmg = Math.max(0, Math.round(dmg * dealtMul)); lbl = (lbl ? lbl + ' ' : '') + dealtLabel; }
         if (dmg > 0) sHit(st, tgt, dmg, lbl, '✸ ');
         else if (!st.sim) floater(dt, '✸ 0 ' + lbl, '#9aa7bd');
       } else if (!st.sim) floater(dt, '✸', ab.color);
@@ -940,6 +982,13 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     // Breaking off comes before any thought of attacking.
     if (rollFlee(e)) { fleeTurn(e); return; }
     const res = reach(e);
+    const mind = mindOf(e);              // what this creature is able to weigh
+    const blind = blindfold(mind);
+    const live = new Map(sb.units.map((u) => [u.uid, u]));
+    const flat = CFG.blindStatusValue ?? 8;
+    // How much damage a tile does to whatever stands on it (0 = none). Only a mind
+    // that weighs tags ever asks.
+    const tagHarm = (k) => { const t = sb.tags[k]; return t && !(t.hp > 0) ? (t.dmg || 0) : 0; };
     let best = null;
     for (const abId of e.abilityIds) {
       const ab = abFor(e, abId); if (!ab) continue;
@@ -955,22 +1004,47 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
         for (const t of tlist) {
           if (!inMap(t)) continue;
           if (ab.moveToTarget && t !== startK && !dashOk(e, t)) continue;
-          const st = simSt();
+          const st = simSt(blind);
           const se = st.units.find((u) => u.uid === e.uid);
           se.pos = startK;
           resolveCast(st, se, ab, t);
           let score = 0;
           for (const u of st.units) {
             const d = st.rec.dmg[u.uid] || 0;
-            // Statuses are scored straight from the table (aiValue = how BAD it is to
-            // carry), so a status invented in config is understood here on its own:
-            // landing a bad one on the party is good, landing it on an ally is bad,
-            // and stripping one off is worth exactly its opposite.
+            const was = live.get(u.uid);
+            // ----- statuses -------------------------------------------------
+            // A mind that READS statuses uses the table's own aiValue and weighs
+            // the target: a blessing is worth most on the ally that is about to
+            // need it, a curse is wasted on someone already carrying it or already
+            // nearly dead. A mind that cannot read them still knows friend from
+            // foe - it applies them at a flat worth, to whoever it can reach.
+            // `sv` ends up POSITIVE when the cast made this unit worse off. The
+            // score below then adds it for a party unit and subtracts it for an ally,
+            // so one number covers curses, blessings, friend and foe.
             let sv = 0;
-            for (const [id, amt] of Object.entries(st.rec.applied[u.uid] || {})) sv += statusValue(id, amt);
-            for (const [id, amt] of Object.entries(st.rec.stripped[u.uid] || {})) sv -= statusValue(id, amt);
-            if (!u.isEnemy) score += d * 10 + (st.rec.killed[u.uid] ? 45 : 0) + sv;
-            else score -= d * 9 + (st.rec.killed[u.uid] ? 40 : 0) + sv;
+            for (const [id, amt] of Object.entries(st.rec.applied[u.uid] || {})) {
+              const v = statusValue(id, amt);          // <0 = a good thing to carry
+              if (!mind.statuses) { sv += (v < 0 ? -1 : 1) * flat; continue; }
+              const already = was && was.status && was.status[id] ? 0.15 : 1;
+              sv += v * already * statusNeed(u, was, v);
+            }
+            // A blow that only pops a shield is still a blow worth landing, whether
+            // or not the creature understands what it broke. Without this, anything
+            // dimmer than S would refuse to attack a shielded unit at all - the very
+            // deadlock this AI was fixed for.
+            for (const [id, amt] of Object.entries(st.rec.stripped[u.uid] || {})) {
+              const v = statusValue(id, amt);
+              sv += mind.statuses ? -v : (v < 0 ? 1 : -1) * flat;
+            }
+            // ----- injuries: finishing the wounded rather than spreading damage --
+            const killBonus = mind.injuries ? (u.isEnemy ? 40 : 45) : 0;
+            const focus = mind.injuries && was && was.maxHp
+              ? d * 5 * Math.max(0, 1 - Math.max(0, was.hp) / was.maxHp) : 0;
+            // ----- tile tags: a fire is a place to shove someone into, and a place
+            // not to stand. One rule covers both ends of it.
+            const harm = mind.tags ? tagHarm(u.pos) * 8 : 0;
+            if (!u.isEnemy) score += d * 10 + (st.rec.killed[u.uid] ? killBonus : 0) + sv + focus + harm;
+            else score -= d * 9 + (st.rec.killed[u.uid] ? killBonus : 0) + sv + harm;
           }
           if (score > 0 && (!best || score > best.score || (score === best.score && res.d[startK] < best.cost)))
             best = { ab, startK, t, score, cost: res.d[startK] };
@@ -1006,7 +1080,17 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       for (const k of Object.keys(res.d)) {
         if (k !== e.pos && !canStop(res, k)) continue;
         const td = fld[k] !== undefined ? fld[k] : 1000 + Math.min(...players.map((p) => hexDist(k, p.pos)));
-        const sc = td * 100 + res.d[k];
+        // Nothing worth casting, so it walks. Closing the distance comes first for
+        // every creature; what it does with the tiles that are equally close is
+        // where the mind shows. One that weighs HEIGHT takes the higher of them, so
+        // it arrives with the high ground already won; one that weighs TAGS will not
+        // stop in a fire to save a step. A dim one takes the first tile it finds.
+        // Fire is counted as EXTRA DISTANCE - a tile that burns for 2 is worth
+        // walking two tiles further to avoid - while height only breaks ties
+        // between tiles that are equally close, so nobody climbs away from the fight.
+        const burn = mind.tags ? tagHarm(k) : 0;
+        const climb = mind.elevation ? -sbH(k) : 0;
+        const sc = (td + burn) * 100 + climb * 10 + res.d[k];
         if (sc < bs) { bs = sc; bestK = k; }
       }
       const path = pathTo(res, e.pos, bestK) || [e.pos];

@@ -94,38 +94,48 @@ export const UNITS = {
     //  the party keep working unchanged.
     // =================================================================
     enemyTypes: {
+      // `intellect` is the creature's INTELLECT CLASS (S / A / B / C): which facts
+      // about the arena it is able to weigh on its turn. The classes themselves are
+      // spelled out in src/config/abilities.js; it changes no rule, only how well
+      // the creature plays. Rough rule of thumb below: mindless swarm C, ordinary
+      // soldiery B, elites A, the leaders S.
       // --- the wandering rabble of the world map ---
-      husk: { name: 'Husk', shape: 'dodecahedron', color: 0x9c5a4a, hp: 10, power: 2, init: 4, speed: 3, flying: false, abilities: ['strike'] },
-      drifter: { name: 'Drifter', shape: 'tetrahedron', color: 0xd6803c, hp: 8, power: 2, init: 5, speed: 4, flying: false, abilities: ['volley'] },
-      raider: { name: 'Raider', shape: 'octahedron', color: 0xe2474b, hp: 9, power: 3, init: 6, speed: 4, flying: false, abilities: ['strike'] },
-      stalker: { name: 'Stalker', shape: 'spike', color: 0xc0455f, hp: 8, power: 5, init: 7, speed: 5, flying: false, abilities: ['lance'] },
-      warden: { name: 'Warden', shape: 'box', color: 0xb0714a, hp: 12, power: 5, init: 6, speed: 4, flying: false, abilities: ['strike', 'guard'] },
-      brute: { name: 'Brute', shape: 'slab', color: 0x8f4436, hp: 17, power: 8, init: 3, speed: 3, flying: false, abilities: ['strike', 'shove'] },
-      ravager: { name: 'Ravager', shape: 'star', color: 0xd93a55, hp: 15, power: 10, init: 8, speed: 5, flying: false, abilities: ['lance', 'strike'] },
+      frailTick: { name: 'Frail Tick', shape: 'spike', color: 0xa1254a, hp: 4, power: 2, init: 4, speed: 3, flying: false, intellect: 'C', abilities: ['softeningBite'] },
+      weakTick: { name: 'Lethargy Tick', shape: 'spike', color: 0xb0714a, hp: 4, power: 2, init: 4, speed: 3, flying: false, intellect: 'C', abilities: ['weakeningBite'] },
+      rageTick: { name: 'Rage Tick', shape: 'spike', color: 0xc0455f, hp: 4, power: 2, init: 4, speed: 3, flying: false, intellect: 'C', abilities: ['rageBite'] },
+      rushTick: { name: 'Rusher Tick', shape: 'spike', color: 0xe2474b, hp: 4, power: 2, init: 4, speed: 3, flying: false, intellect: 'C', abilities: ['headbutt'] },
+
+      husk: { name: 'Husk', shape: 'dodecahedron', color: 0x9c5a4a, hp: 10, power: 2, init: 4, speed: 3, flying: false, intellect: 'C', abilities: ['strike'] },
+      drifter: { name: 'Drifter', shape: 'tetrahedron', color: 0xd6803c, hp: 8, power: 2, init: 5, speed: 4, flying: false, intellect: 'C', abilities: ['volley'] },
+      raider: { name: 'Raider', shape: 'octahedron', color: 0xe2474b, hp: 9, power: 3, init: 6, speed: 4, flying: false, intellect: 'B', abilities: ['strike'] },
+      stalker: { name: 'Stalker', shape: 'spike', color: 0xc0455f, hp: 8, power: 5, init: 7, speed: 5, flying: false, intellect: 'B', abilities: ['lance'] },
+      warden: { name: 'Warden', shape: 'box', color: 0xb0714a, hp: 12, power: 5, init: 6, speed: 4, flying: false, intellect: 'B', abilities: ['strike', 'guard'] },
+      brute: { name: 'Brute', shape: 'slab', color: 0x8f4436, hp: 17, power: 8, init: 3, speed: 3, flying: false, intellect: 'B', abilities: ['strike', 'shove'] },
+      ravager: { name: 'Ravager', shape: 'star', color: 0xd93a55, hp: 15, power: 10, init: 8, speed: 5, flying: false, intellect: 'A', abilities: ['lance', 'strike'] },
 
       // --- the Stasis Seed's court (the bosses) ---
-      forgeTyrant: { name: 'Forge Tyrant', shape: 'torusKnot', color: 0xff7a3c, hp: 55, power: 26, init: 6, speed: 4, flying: false, abilities: ['strike', 'burst'] },
-      tyrantsShadow: { name: "Tyrant's Shadow", shape: 'shard', color: 0x6b3fa0, hp: 26, power: 17, init: 7, speed: 5, flying: false, abilities: ['lance'] },
-      forgeHound: { name: 'Forge Hound', shape: 'cone', color: 0xff9950, hp: 11, power: 11, init: 7, speed: 5, flying: false, abilities: ['strike'] },
-      wardenOfTheRim: { name: 'Warden of the Rim', shape: 'slab', color: 0x7f8fa6, hp: 72, power: 29, init: 5, speed: 4, flying: false, abilities: ['strike', 'shove'] },
-      rimSentry: { name: 'Rim Sentry', shape: 'prism', color: 0x9aa7b8, hp: 13, power: 12, init: 4, speed: 3, flying: false, abilities: ['strike', 'guard'] },
-      choirHusk: { name: 'Choir Husk', shape: 'sphere', color: 0x8c7a9c, hp: 10, power: 12, init: 4, speed: 3, flying: false, abilities: ['strike'] },
-      etherLeviathan: { name: 'Ether Leviathan', shape: 'torus', color: 0x5fc7e0, hp: 82, power: 32, init: 6, speed: 3, flying: true, abilities: ['burst', 'bolt'] },
-      etherSpawn: { name: 'Ether Spawn', shape: 'diamond', color: 0x7fe0f0, hp: 14, power: 11, init: 6, speed: 4, flying: true, abilities: ['bolt'] },
-      paleStalker: { name: 'Pale Stalker', shape: 'spike', color: 0xe0dcd2, hp: 35, power: 23, init: 8, speed: 5, flying: false, abilities: ['lance'] },
-      darkStalker: { name: 'Dark Stalker', shape: 'spike', color: 0x4a4358, hp: 35, power: 23, init: 8, speed: 5, flying: false, abilities: ['strike', 'shove'] },
-      stalkerShade: { name: 'Stalker Shade', shape: 'pyramid', color: 0x5d5570, hp: 9, power: 10, init: 7, speed: 5, flying: false, abilities: ['strike'] },
+      forgeTyrant: { name: 'Forge Tyrant', shape: 'torusKnot', color: 0xff7a3c, hp: 55, power: 26, init: 6, speed: 4, flying: false, intellect: 'S', abilities: ['strike', 'burst'] },
+      tyrantsShadow: { name: "Tyrant's Shadow", shape: 'shard', color: 0x6b3fa0, hp: 26, power: 17, init: 7, speed: 5, flying: false, intellect: 'A', abilities: ['lance'] },
+      forgeHound: { name: 'Forge Hound', shape: 'cone', color: 0xff9950, hp: 11, power: 11, init: 7, speed: 5, flying: false, intellect: 'C', abilities: ['strike'] },
+      wardenOfTheRim: { name: 'Warden of the Rim', shape: 'slab', color: 0x7f8fa6, hp: 72, power: 29, init: 5, speed: 4, flying: false, intellect: 'S', abilities: ['strike', 'shove'] },
+      rimSentry: { name: 'Rim Sentry', shape: 'prism', color: 0x9aa7b8, hp: 13, power: 12, init: 4, speed: 3, flying: false, intellect: 'B', abilities: ['strike', 'guard'] },
+      choirHusk: { name: 'Choir Husk', shape: 'sphere', color: 0x8c7a9c, hp: 10, power: 12, init: 4, speed: 3, flying: false, intellect: 'C', abilities: ['strike'] },
+      etherLeviathan: { name: 'Ether Leviathan', shape: 'torus', color: 0x5fc7e0, hp: 82, power: 32, init: 6, speed: 3, flying: true, intellect: 'S', abilities: ['burst', 'bolt'] },
+      etherSpawn: { name: 'Ether Spawn', shape: 'diamond', color: 0x7fe0f0, hp: 14, power: 11, init: 6, speed: 4, flying: true, intellect: 'B', abilities: ['bolt'] },
+      paleStalker: { name: 'Pale Stalker', shape: 'spike', color: 0xe0dcd2, hp: 35, power: 23, init: 8, speed: 5, flying: false, intellect: 'A', abilities: ['lance'] },
+      darkStalker: { name: 'Dark Stalker', shape: 'spike', color: 0x4a4358, hp: 35, power: 23, init: 8, speed: 5, flying: false, intellect: 'A', abilities: ['strike', 'shove'] },
+      stalkerShade: { name: 'Stalker Shade', shape: 'pyramid', color: 0x5d5570, hp: 9, power: 10, init: 7, speed: 5, flying: false, intellect: 'C', abilities: ['strike'] },
 
       // --- the Stasis Colonies' garrisons ---
-      colonyWarden: { name: 'Colony Warden', shape: 'icosahedron', color: 0x9a5cff, hp: 40, power: 18, init: 5, speed: 3, flying: false, abilities: ['strike', 'guard'] },
-      wardenServitor: { name: 'Warden Servitor', shape: 'octahedron', color: 0xb28cff, hp: 14, power: 8, init: 4, speed: 4, flying: false, abilities: ['strike'] },
-      broodHusk: { name: 'Brood Husk', shape: 'sphere', color: 0x7d5ba6, hp: 10, power: 10, init: 4, speed: 3, flying: false, abilities: ['strike'] },
-      paleSentinel: { name: 'Pale Sentinel', shape: 'cylinder', color: 0xd9cfe8, hp: 27, power: 15, init: 6, speed: 3, flying: false, abilities: ['volley'] },
-      darkSentinel: { name: 'Dark Sentinel', shape: 'cylinder', color: 0x4b3a66, hp: 27, power: 15, init: 6, speed: 3, flying: false, abilities: ['bolt'] },
-      stasisMote: { name: 'Stasis Mote', shape: 'diamond', color: 0xc0a0ff, hp: 10, power: 7, init: 8, speed: 5, flying: true, abilities: ['strike'] },
-      colonyAnchor: { name: 'Colony Anchor', shape: 'torusKnot', color: 0x8a4fd8, hp: 57, power: 22, init: 3, speed: 2, flying: false, abilities: ['burst', 'shove'] },
-      anchorTether: { name: 'Anchor Tether', shape: 'capsule', color: 0xa87ae8, hp: 17, power: 9, init: 5, speed: 4, flying: false, abilities: ['strike'] },
-      rotChorister: { name: 'Rot Chorister', shape: 'tetrahedron', color: 0x6f7d4a, hp: 8, power: 9, init: 5, speed: 4, flying: false, abilities: ['strike'] },
+      colonyWarden: { name: 'Colony Warden', shape: 'icosahedron', color: 0x9a5cff, hp: 40, power: 18, init: 5, speed: 3, flying: false, intellect: 'S', abilities: ['strike', 'guard'] },
+      wardenServitor: { name: 'Warden Servitor', shape: 'octahedron', color: 0xb28cff, hp: 14, power: 8, init: 4, speed: 4, flying: false, intellect: 'B', abilities: ['strike'] },
+      broodHusk: { name: 'Brood Husk', shape: 'sphere', color: 0x7d5ba6, hp: 10, power: 10, init: 4, speed: 3, flying: false, intellect: 'C', abilities: ['strike'] },
+      paleSentinel: { name: 'Pale Sentinel', shape: 'cylinder', color: 0xd9cfe8, hp: 27, power: 15, init: 6, speed: 3, flying: false, intellect: 'A', abilities: ['volley'] },
+      darkSentinel: { name: 'Dark Sentinel', shape: 'cylinder', color: 0x4b3a66, hp: 27, power: 15, init: 6, speed: 3, flying: false, intellect: 'A', abilities: ['bolt'] },
+      stasisMote: { name: 'Stasis Mote', shape: 'diamond', color: 0xc0a0ff, hp: 10, power: 7, init: 8, speed: 5, flying: true, intellect: 'C', abilities: ['strike'] },
+      colonyAnchor: { name: 'Colony Anchor', shape: 'torusKnot', color: 0x8a4fd8, hp: 57, power: 22, init: 3, speed: 2, flying: false, intellect: 'A', abilities: ['burst', 'shove'] },
+      anchorTether: { name: 'Anchor Tether', shape: 'capsule', color: 0xa87ae8, hp: 17, power: 9, init: 5, speed: 4, flying: false, intellect: 'B', abilities: ['strike'] },
+      rotChorister: { name: 'Rot Chorister', shape: 'tetrahedron', color: 0x6f7d4a, hp: 8, power: 9, init: 5, speed: 4, flying: false, intellect: 'C', abilities: ['strike'] },
     },
 
     // =================================================================
@@ -141,7 +151,8 @@ export const UNITS = {
       loneRaider: { title: 'Lone raider', units: ['raider'] },                                  // 3
       strays: { title: 'Strays', units: ['husk', 'drifter'] },                          // 4
       scoutPair: { title: 'Scouting pair', units: ['raider', 'drifter'] },                        // 5
-      huskTrio: { title: 'Shambling trio', units: ['husk', 'husk', 'husk'] },                     // 6
+      huskTrio: { title: 'Shambling trio', units: ['husk', 'husk', 'husk'] },                    // 6
+      tickSwarm: { title: 'Tick piper', units: ['rageTick', 'weakTick', 'frailTick', 'rushTick', 'drifter'] },
 
       // --- regular groups, middle rings (total power 23-25) ---
       raidParty: { title: 'Raiding party', units: ['raider', 'raider', 'raider', 'stalker', 'stalker', 'warden'] },   // 24

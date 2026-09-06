@@ -9,7 +9,7 @@
 
 import { t, LANGUAGES, getLanguage, setLanguage } from './i18n.js';
 import { SHAPE_NAMES } from './local/localview.js';
-import { ABILITIES } from './config/abilities.js';
+import { ABILITIES, INTELLECT } from './config/abilities.js';
 
 const STORAGE_KEY = 'hexmap-settings-v1';
 
@@ -34,11 +34,13 @@ const BESTIARY_COLS = [
   { key: 'init', kind: 'number', w: 44 },
   { key: 'speed', kind: 'number', w: 44 },
   { key: 'flying', kind: 'bool' },
+  // The creature's INTELLECT CLASS: which facts it can weigh on its turn.
+  { key: 'intellect', kind: 'select', w: 56, options: () => Object.keys(INTELLECT) },
   { key: 'abilities', kind: 'idlist', w: 130, valid: () => Object.keys(ABILITIES) },
 ];
 // A brand new creature: deliberately weak and plain, so an unfinished row that
 // finds its way into a fight cannot wreck a run.
-const NEW_ENEMY = () => ({ name: 'New enemy', shape: 'octahedron', color: 0xe2474b, hp: 10, power: 2, init: 5, speed: 4, flying: false, abilities: ['strike'] });
+const NEW_ENEMY = () => ({ name: 'New enemy', shape: 'octahedron', color: 0xe2474b, hp: 10, power: 2, init: 5, speed: 4, flying: false, intellect: 'C', abilities: ['strike'] });
 const NEW_GROUP = () => ({ title: 'New group', units: [] });
 const NEW_ROSTER = () => ({ name: 'New character', icon: '🙂', hp: 24 });
 const ROSTER_COLS = [
@@ -55,7 +57,7 @@ const BATTLE_OWNED = new Set(['enemyTypes', 'enemyGroups', 'enemies', 'bosses', 
 const TABS = [
   { id: 'world', sections: ['map', 'worldBackground', 'localBackground', 'noise', 'tileTypes', 'biomes'] },
   { id: 'encounters', sections: ['encounters', 'stasis', 'rest', 'acolyte', 'shop', 'treasure', 'events', 'fatigue'] },
-  { id: 'units', sections: ['party', 'battle', 'combat', 'statuses'] },
+  { id: 'units', sections: ['party', 'battle', 'combat', 'statuses', 'intellect'] },
   { id: 'general', sections: ['run', 'camera', 'local', 'anim', 'fatigueBar', 'colors'] },
   { id: 'audio', sections: ['audio'] },
 ];
@@ -69,7 +71,7 @@ const SKIP_KEYS = new Set(['shape', 'info', 'flavour', 'names', 'icon', 'negativ
 // containing one lays its sections out on a GRID (where a section can be told to
 // span several columns) instead of the CSS multi-column flow the other tabs use -
 // see `has-matrix` in render() and style.css.
-const MATRIX_SECTIONS = new Set(['tileTypes', 'biomes', 'statuses']);
+const MATRIX_SECTIONS = new Set(['tileTypes', 'biomes', 'statuses', 'intellect']);
 
 export function createSettings({ config, defaults, onChange, getUiScale, onSetUiScale, getShowLog, onSetShowLog, onClose }) {
   const $ = (id) => document.getElementById(id);

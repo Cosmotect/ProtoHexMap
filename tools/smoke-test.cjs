@@ -217,6 +217,29 @@ fs.mkdirSync(OUT, { recursive: true });
     const u = window.__battle.state.units.find((x) => !x.isEnemy && x.hp > 0);
     delete u.status.shield; delete u.status.poison;
   });
+  // ----- intellect classes (config.intellect) -------------------------------
+  // Every creature carries a class saying which facts it can weigh on its turn.
+  // Check the table arrived, that no bestiary row was left without one, and that
+  // the class reaches the unit the engine is actually running.
+  const minds = await page.evaluate(() => {
+    const cfg = window.game.config;
+    const table = cfg.intellect || {};
+    const rows = Object.entries(cfg.battle.enemyTypes || {});
+    return {
+      classes: Object.keys(table),
+      flags: Object.keys(table.S || {}),
+      missing: rows.filter(([, t]) => !t.intellect).map(([id]) => id),
+      unknown: rows.filter(([, t]) => t.intellect && !table[t.intellect]).map(([id]) => id),
+      onUnits: window.__battle.state.units.filter((u) => u.isEnemy).map((u) => u.intellect),
+    };
+  });
+  for (const c of ['S', 'A', 'B', 'C']) if (!minds.classes.includes(c)) problems.push(`intellect class ${c} is missing: ${minds.classes.join(', ')}`);
+  for (const f of ['statuses', 'elevation', 'tags', 'ether', 'injuries']) {
+    if (!minds.flags.includes(f)) problems.push(`the intellect table lost the "${f}" flag: ${minds.flags.join(', ')}`);
+  }
+  if (minds.missing.length) problems.push('bestiary rows with no intellect class: ' + minds.missing.join(', '));
+  if (minds.unknown.length) problems.push('bestiary rows with an unknown intellect class: ' + minds.unknown.join(', '));
+  if (!minds.onUnits.length || minds.onUnits.some((c) => !c)) problems.push('an enemy in the arena carries no intellect class: ' + JSON.stringify(minds.onUnits));
   await page.screenshot({ path: path.join(OUT, '01e-battle-engine.png') });
   await page.evaluate(() => window.__battle.debugResolve(true));
   await page.waitForFunction(() => !document.getElementById('dialog').classList.contains('hidden'), null, { timeout: 25000 });

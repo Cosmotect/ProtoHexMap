@@ -137,7 +137,7 @@ export function makeEnemyOfType(cfg, typeId) {
     power: t.power,
     shape: t.shape ?? 'octahedron',
     color: t.color ?? 0xe2474b,
-    init: t.init, speed: t.speed, flying: t.flying,
+    init: t.init, speed: t.speed, flying: t.flying, intellect: t.intellect,
     abilityIds: Array.isArray(t.abilities) && t.abilities.length ? [...t.abilities] : undefined,
     alive: true,
   };

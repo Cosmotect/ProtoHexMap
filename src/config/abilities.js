@@ -44,11 +44,15 @@ export const COMBAT_CONFIG = {
     // pays out, one that got away does not. The fight still counts as won, so the
     // party keeps the encounter's completion reward.
     flee: { afterRound: 7, hpFraction: 0.3 },
+    // What a status is worth to a creature that cannot read them (see the intellect
+    // classes below): enough to bless allies and curse the party, not enough to
+    // choose between two targets.
+    blindStatusValue: 8,
     elevationLevels: 4, // arena heights run 0..this (5 steps: 0,1,2,3,4)
-                        // The MIDDLE step (2) is the arena's neutral ground: it renders
-                        // flush with the surrounding world tiles, 3 and 4 stand above it,
-                        // 1 and 0 are sunk below it. Keep this number EVEN so a middle
-                        // step exists (see config.local.elevationMid).
+    // The MIDDLE step (2) is the arena's neutral ground: it renders
+    // flush with the surrounding world tiles, 3 and 4 stand above it,
+    // 1 and 0 are sunk below it. Keep this number EVEN so a middle
+    // step exists (see config.local.elevationMid).
   },
 };
 
@@ -56,13 +60,27 @@ export const COMBAT_CONFIG = {
 // A small starter kit; balance numbers are first guesses.
 const A = (o) => Object.assign({
   name: 'Ability', icon: '💥', color: '#5fc7e0',
-  damage: 0, heal: 0, buff: '', buffX: 1,
+  damage: 0, heal: 0, buff: '', buffX: null,   // buffX null = "use the status's own value"
   castZone: [], castAny: false, dmgZone: [], tagZone: [], tagId: null,
   hZone: [], hMode: 'rel', pushZone: [], rotatable: false, moveToTarget: false,
   spawnId: null, spawnZone: [],
 }, o);
 
 export const ABILITIES = {
+  //Enemy Abilities
+  softeningBite: A({ name: 'Softening Bite', icon: '⚔️', color: '#e0b25f', buff: 'vulnerable', castZone: ringOffsets(1, 1), dmgZone: [[0, 0]] }),
+  rageBite: A({ name: 'Enraging Bite', icon: '🤬', color: '#E84A27', buff: 'enraged', castZone: ringOffsets(1, 1), dmgZone: [[0, 0]] }),
+  headbutt: A({ name: 'Headbutt', icon: '🐏', color: '#e0b25f', damage: 0, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], pushZone: [[0, 0, 0]], rotatable: true }),
+  weakeningBite: A({ name: 'Weakening Bite', icon: '🩼', color: '#38D1AC', buff: 'weaken', castZone: ringOffsets(1, 1), dmgZone: [[0, 0]] }),
+  //strike
+  //heavy strike
+  //thundering strike
+  //nerve agent salvo
+  //Razeing Antler Swipe
+  //Rushing Headbutt
+  //Web
+
+  //Player Abilities
   strike: A({ name: 'Strike', icon: '⚔️', color: '#e0b25f', damage: 3, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]] }),
   shove: A({ name: 'Shove', icon: '🌀', color: '#ffd75f', damage: 1, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], pushZone: [[0, 0, 0]], rotatable: true }),
   volley: A({ name: 'Volley', icon: '🎯', color: '#a8e05f', damage: 2, castZone: ringOffsets(2, 4), dmgZone: [[0, 0]] }),
@@ -126,6 +144,10 @@ export const ABILITIES = {
 //                 nothing at all. The number an ability actually applied is
 //                 remembered per unit, so two sources of the same status do not
 //                 have to agree.
+//                 An ability that leaves buffX alone (null) hands over the value
+//                 written HERE - which is what you almost always want, and what
+//                 keeps a multiplier status like `vulnerable` from being applied
+//                 as a meaningless x1.
 //
 //  THE ENEMY AI:
 //    aiValue      how BAD carrying this status is, in the AI's own scoring units
@@ -196,15 +218,21 @@ export const STATUSES = {
     aiValue: -18,
   }),
   weaken: S({
-    name: 'Weakened', icon: '🥀', color: '#b58fd1',
+    name: 'Weakened', icon: '🩼', color: '#b58fd1',
     damageDealt: 0.5, turns: 2,
     amountIs: 'damageDealt',
     aiValue: 16,
   }),
-  expose: S({
-    name: 'Exposed', icon: '🎯', color: '#e2474b',
+  vulnerable: S({
+    name: 'Vulnerable', icon: '🎯', color: '#e2474b',
     damageTaken: 1.5, turns: 2,
     amountIs: 'damageTaken',
+    aiValue: 18,
+  }),
+  enraged: S({
+    name: 'Enraged', icon: '🤬', color: '#e2474b',
+    damageTaken: 1.5, turns: 2,
+    amountIs: 'speed',
     aiValue: 18,
   }),
 };
@@ -224,6 +252,59 @@ export function statusAmount(id, buffX) {
   const n = Number(buffX);
   return Number.isFinite(n) && buffX !== undefined && buffX !== null ? n : def[def.amountIs];
 }
+
+// ----- Intellect classes ------------------------------------------------
+//  Not every creature thinks as well as every other one. A unit's INTELLECT CLASS
+//  says which facts about the board it is capable of WEIGHING when it decides what
+//  to do on its turn. It does not change the rules one bit: a witless brute still
+//  gets the high-ground damage bonus if it happens to be standing high, still dies
+//  in the void, still burns in a fire. It simply does not think about any of that
+//  when choosing where to go and what to cast.
+//
+//  Nor does it change WHOSE side an effect is aimed at. Every class knows a curse
+//  is for the party and a blessing is for its own allies - that is not cleverness,
+//  it is knowing friend from foe. What the clever ones have is the ability to pick
+//  the BEST target: a C-class creature hands its shield to whichever ally it can
+//  reach, an S-class one hands it to the ally that is actually about to be hit.
+//
+//  ----- what each flag lets a mind weigh -----
+//    statuses    the statuses on the board: which of them are worth applying to
+//                whom, that a shield can be popped, that a target already carries
+//                what it was about to be given, and which ally most needs a buff.
+//                Blind minds still apply statuses, at a flat worth, to any legal
+//                target of the right side.
+//    elevation   the damage a height difference is worth, and the value of
+//                claiming high ground while walking towards the party.
+//    tags        the tiles that burn: worth avoiding to stand on, worth shoving
+//                someone onto.
+//    ether       the holes in the arena's edge: worth shoving someone into.
+//    injuries    how hurt a target is: worth finishing the wounded rather than
+//                spreading damage evenly.
+//
+//  These are the four classes the design asks for. The table is data like
+//  everything else - a class can be re-tuned, and a fifth one invented, in the
+//  Settings window without touching the engine.
+const M = (o) => Object.assign({
+  statuses: false, elevation: false, tags: false, ether: false, injuries: false,
+}, o);
+
+export const INTELLECT = {
+  S: M({ statuses: true, elevation: true, tags: true, ether: true, injuries: true }),
+  A: M({ elevation: true, ether: true, injuries: true }),
+  B: M({ elevation: true }),
+  C: M({}),
+};
+
+// What a status is worth to a mind that cannot read them: enough that it still
+// blesses its allies and curses the party, not enough to choose well between two
+// targets. (A reading mind uses the status table's own aiValue instead.)
+export const BLIND_STATUS_VALUE = 8;
+
+// Part of the combat config too, so the classes are editable in Settings and the
+// engine can read them off the same object (config.intellect).
+COMBAT_CONFIG.intellect = INTELLECT;
+
+export const intellectOf = (cls) => INTELLECT[cls] ?? INTELLECT.C;
 
 // ----- Tile tags -------------------------------------------------------
 const T = (o) => Object.assign({

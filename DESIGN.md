@@ -229,6 +229,29 @@ balance must be re-measured against interactive play.
     blocked hit deals no damage: without it the AI scored such a swing as worthless,
     refused to attack a shielded unit at all, and since a shield only ever expires by
     blocking something, it stayed up for the rest of the fight (fixed 2026-09-02).
+  * **Intellect classes** (`config.intellect`, the table in src/config/abilities.js;
+    since 2026-09-06). Every creature carries an `intellect` of S / A / B / C on its
+    bestiary row, and the class says which facts it is able to WEIGH when it plans
+    its turn: `statuses`, `elevation`, `tags`, `ether`, `injuries`.
+    S weighs all five, A drops statuses and tags, B keeps only elevation, C weighs
+    nothing and simply closes to attack. It changes NO rule - a witless brute still
+    takes the high-ground bonus when it happens to stand high, still dies in the
+    void, still burns - it only changes what it thinks about. Mechanically: the AI
+    simulates each candidate cast wearing a `blindfold`, so a mind that cannot weigh
+    height sees the blow scored as if the ground were flat and a mind that cannot
+    weigh the void sees the shove but not the kill; `injuries` gates the kill bonus
+    and the focus-fire term; `tags` counts a burning tile as extra distance while
+    walking and as a place worth shoving someone onto; `elevation` also breaks ties
+    between equally close tiles in favour of the higher one.
+    **Knowing friend from foe is not cleverness**: every class blesses its own side
+    and curses the party. What the clever have is TARGETING - a status-reading mind
+    uses each status's own `aiValue`, weighs how much the target needs it (a shield
+    is worth most on a hurt ally already in reach of the party), and discounts a
+    status the target already carries; a blind mind applies the same status at a
+    flat `combat.blindStatusValue` to whoever it can reach. Popping a shield is
+    valued by EVERY class - a creature does not need to understand shields to notice
+    its blow bounced off, and without that the old refuse-to-attack deadlock would
+    come back for everything below S.
   * **Statuses are a TABLE, not code** (`config.statuses`, written out in
     src/config/abilities.js; since 2026-09-05). A unit carries a bag,
     `u.status = { <id>: { turns, charges, amount } }`, and the engine only knows the
@@ -246,7 +269,7 @@ balance must be re-measured against interactive play.
     added to the table is understood, inflicted and avoided from the next fight on,
     with no AI change - the exact hole that made enemies ignore shielded units.
     The four originals (shield, crit, stun, haste/slow) are written in this
-    vocabulary and behave exactly as before; poison, regen, weaken and expose ship
+    vocabulary and behave exactly as before; poison, regen, weaken and vulnerable ship
     as worked examples, applied by nothing yet. A status needing a verb the list
     lacks still needs engine work, but then the VERB is added once and every later
     status can use it. The badges (src/status.js), the arena plaque, the party panel
@@ -524,6 +547,25 @@ stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }
   thrown away before it was ever scored, so **enemies carrying Guard had never once
   used it**. Verified by A/B in the engine (each of the four originals measured
   against a control run) and by a new browser check on the table and the badges.
+* 2026-09-06 **Intellect classes added** (see the bullet above): enemies no longer
+  all think alike. Assigned across the bestiary as mindless swarm C, ordinary
+  soldiery B, elites A, leaders S - a first pass, and every row is a dropdown in
+  Settings > Units. Verified by head-to-head runs where only the class changes:
+  B and up take the high ground while C walks the flat; A and up shove a party unit
+  into a rim hole while B and C never see it; A and up finish a unit that is one blow
+  from death while B and C spread their blows; only S walks around a fire; S covers
+  the ally that is about to be hit while the rest shield themselves; and every class
+  still swings at a shielded unit.
+* 2026-09-06 (b) Merged the owner's in-progress edits found on disk mid-session: the
+  **Soft Tick** bestiary row (its key had a space and its colour was written as CSS
+  `#A1254A`, so the file did not parse - now `softTick` with `0xa1254a`, plus the
+  `power` and `intellect` it was missing) and the **Softening Bite** ability, whose
+  `buff: 'vulnerable'` named a status that did not exist; the worked example
+  `expose` was renamed to `vulnerable` to match, since the ability said it first.
+  That surfaced a trap worth knowing: an ability's `buffX` used to default to 1, so
+  a multiplier status applied by an ability that never set it landed as a
+  meaningless x1. `buffX` now defaults to null, meaning "use the value in the status
+  table", which is what a designer expects.
 
 ## Open questions
 
