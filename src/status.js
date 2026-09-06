@@ -21,14 +21,14 @@ export function statusesFor(unit) {
   for (const [id, def] of Object.entries(STATUSES)) {
     const slot = unit.status[id];
     if (!slot) continue;
-    const amount = slot.amount !== undefined ? slot.amount : (def.amountIs ? def[def.amountIs] : null);
-    // A signed status wears its other face when the amount went negative: the
-    // same row is both "hastened" and "slowed", with its own icon and texts.
-    const neg = !!(def.negative && typeof amount === 'number' && amount < 0);
+    // Back to the magnitude the designer wrote: a `slow` stores speed -2 but was
+    // authored, and reads, as "2" (config/abilities.js, amountSign).
+    const stored = slot.amount !== undefined ? slot.amount : (def.amountIs ? def[def.amountIs] : null);
+    const amount = typeof stored === 'number' ? stored * (def.amountSign || 1) : stored;
     out.push({
-      id: neg ? (def.negative.id || id) : id,
-      icon: neg ? (def.negative.icon || def.icon) : def.icon,
-      color: neg ? (def.negative.color || def.color) : def.color,
+      id,
+      icon: def.icon,
+      color: def.color,
       turns: Number(slot.turns) || 0,
       charges: Number(slot.charges) || 0,
       amount: def.amountIs ? amount : null,

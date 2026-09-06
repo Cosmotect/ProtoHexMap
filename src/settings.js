@@ -42,15 +42,30 @@ const BESTIARY_COLS = [
 // finds its way into a fight cannot wreck a run.
 const NEW_ENEMY = () => ({ name: 'New enemy', shape: 'octahedron', color: 0xe2474b, hp: 10, power: 2, init: 5, speed: 4, flying: false, intellect: 'C', abilities: ['strike'] });
 const NEW_GROUP = () => ({ title: 'New group', units: [] });
-const NEW_ROSTER = () => ({ name: 'New character', icon: '🙂', hp: 24 });
+
+// Colours are written two ways in the config: as CSS strings ('#a1254a', what the
+// abilities and the bestiary use) and as JS numbers (0xa1254a, what the tile types,
+// biomes and the colours block still use). The widgets speak CSS; these two keep
+// each value in the shape its config file wrote it in, so editing a colour never
+// silently rewrites the file's style.
+const cssColor = (v) => (typeof v === 'string' ? v : `#${Number(v ?? 0).toString(16).padStart(6, '0')}`);
+// Stamped onto the input and read back on change: "css" hands the '#rrggbb' string
+// back, anything else goes back as the 0xrrggbb number that config file had.
+const colorShapeAttr = (v) => (typeof v === 'string' ? ' data-cshape="css"' : '');
+const readColor = (el) => (el.dataset.cshape === 'css' ? el.value : parseInt(el.value.slice(1), 16));
+const NEW_ROSTER = () => ({ name: 'New character', icon: '🙂', hp: 24, init: 5, speed: 4, flying: false, abilities: ['strike'] });
 const ROSTER_COLS = [
   { key: 'name', kind: 'text', w: 118 },
   { key: 'icon', kind: 'text', w: 44 },
   { key: 'hp', kind: 'number', w: 48 },
+  { key: 'init', kind: 'number', w: 44 },
+  { key: 'speed', kind: 'number', w: 44 },
+  { key: 'flying', kind: 'bool' },
+  { key: 'abilities', kind: 'idlist', w: 130, valid: () => Object.keys(ABILITIES) },
 ];
 // Keys of `battle` the hand-built editors own; the leftovers render as an
 // ordinary group of numbers so nothing silently disappears from the tab.
-const BATTLE_OWNED = new Set(['enemyTypes', 'enemyGroups', 'enemies', 'bosses', 'colonies']);
+const BATTLE_OWNED = new Set(['enemyTypes', 'enemyGroups', 'spawns']);
 
 // Which config sections live on which tab (mirrors the config files). Labels and
 // notes come from the locale tables (settings.tab.<id>, settings.note.<id>).
@@ -63,7 +78,7 @@ const TABS = [
 ];
 
 // Keys that are not meant to be edited by hand (visual placeholders, long texts).
-const SKIP_KEYS = new Set(['shape', 'info', 'flavour', 'names', 'icon', 'negative']);
+const SKIP_KEYS = new Set(['shape', 'info', 'flavour', 'names', 'icon']);
 
 // Sections shown as one table (rows = entries, columns = attributes) instead of
 // one group per entry, so an attribute name is written once rather than repeated
@@ -112,7 +127,7 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
     // value can be an object; print it as JSON rather than "[object Object]".
     if (value && typeof value === 'object') return JSON.stringify(value);
     const key = path.split('.').pop();
-    if (kindOf(key, value, path) === 'color') return `#${Number(value).toString(16).padStart(6, '0')}`;
+    if (kindOf(key, value, path) === 'color') return cssColor(value);
     return String(value);
   }
   $('btn-settings-reset-tab').addEventListener('click', () => {
@@ -126,7 +141,7 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
 
   function open() { render(); win.classList.remove('hidden'); }
   function refresh() { if (isOpen()) render(); }
-  function close() { win.classList.add('hidden'); if (onClose) onClose(); }
+  function close() { closeGroupPicker(); win.classList.add('hidden'); if (onClose) onClose(); }
   function isOpen() { return !win.classList.contains('hidden'); }
 
   // ----- rendering ---------------------------------------------------------
@@ -151,17 +166,22 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
         <input type="checkbox" id="settings-showlog" ${getShowLog && getShowLog() ? 'checked' : ''}><span class="settings-reset"></span></div></div>`);
     }
     if (tab.id === 'units') parts.push(...renderUnitsTab());
-    else for (const section of tab.sections) {
-      parts.push(MATRIX_SECTIONS.has(section)
-        ? renderMatrix(section, config[section], defaults[section], section)
-        : renderGroup(section, config[section], defaults[section], section));
+    else {
+      for (const section of tab.sections) {
+        parts.push(MATRIX_SECTIONS.has(section)
+          ? renderMatrix(section, config[section], defaults[section], section)
+          : renderGroup(section, config[section], defaults[section], section));
+      }
+      // Which groups each kind of fight rolls, per layer.
+      if (tab.id === 'encounters') parts.push(battlesBlock());
     }
     bodyEl.innerHTML = parts.join('');
     // Tabs with a table switch from the multi-column flow to a grid, where the
     // table can be told to occupy several columns and still sit beside the
     // ordinary groups instead of below them (style.css).
-    bodyEl.classList.toggle('has-matrix', tab.id === 'units' || tab.sections.some((s) => MATRIX_SECTIONS.has(s)));
+    bodyEl.classList.toggle('has-matrix', tab.id === 'units' || tab.id === 'encounters' || tab.sections.some((s) => MATRIX_SECTIONS.has(s)));
     if (tab.id === 'units') wireUnitsTab();
+    if (tab.id === 'encounters') wireBattlesBlock();
     bodyEl.querySelector('#settings-language')?.addEventListener('change', (e) => { setLanguage(e.target.value); render(); });
     bodyEl.querySelector('#settings-uiscale')?.addEventListener('change', (e) => { if (onSetUiScale) onSetUiScale(Number(e.target.value)); });
     bodyEl.querySelector('#settings-showlog')?.addEventListener('change', (e) => { if (onSetShowLog) onSetShowLog(e.target.checked); });
@@ -214,9 +234,7 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
     // The groups: a title and a line-up of bestiary ids.
     out.push(groupsTable(b));
 
-    // The pools: which groups a regular fight (by ring band), a Colony or the
-    // Seed may roll.
-    out.push(poolsBlock(b, groupIds));
+    // (Which groups spawn where is its own table now: Settings > Encounters > Battles.)
 
     // Whatever else lives under `battle` (the damage curve, the danger bands,
     // the simulation numbers) keeps the plain generated form.
@@ -254,7 +272,7 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
     const a = `data-coll="${coll}" data-row="${escapeAttr(row)}" data-field="${col.key}" data-kind="${col.kind}"`;
     const w = col.w ? ` style="width:${col.w}px"` : '';
     if (col.kind === 'bool') return `<input type="checkbox" ${a} ${value ? 'checked' : ''}>`;
-    if (col.kind === 'color') return `<input type="color" ${a} value="#${Number(value ?? 0).toString(16).padStart(6, '0')}">`;
+    if (col.kind === 'color') return `<input type="color" ${a}${colorShapeAttr(value)} value="${cssColor(value)}">`;
     if (col.kind === 'number') return `<input type="number" step="any" ${a} value="${value ?? ''}"${w}>`;
     if (col.kind === 'select') {
       const opts = col.options().map((o) => `<option value="${o}" ${o === value ? 'selected' : ''}>${o}</option>`).join('');
@@ -297,26 +315,110 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
     });
   }
 
-  // Which groups each pool may roll: one checkbox per group, per pool. A band
-  // also carries the ring it reaches out to.
-  function poolsBlock(b, groupIds) {
-    const rows = [];
-    for (const [bandId, band] of Object.entries(b.enemies.bands ?? {})) {
-      rows.push(poolRow(t('settings.units.band', { name: bandId }), `battle.enemies.bands.${bandId}.groups`, band.groups ?? [], groupIds,
-        `<span class="pool-ring">maxRing ${renderCell(`battle.enemies.bands.${bandId}.maxRing`, 'maxRing', band.maxRing, defaults.battle?.enemies?.bands?.[bandId]?.maxRing)}</span>`));
-    }
-    rows.push(poolRow(t('settings.units.seedPool'), 'battle.bosses', b.bosses ?? [], groupIds, ''));
-    rows.push(poolRow(t('settings.units.colonyPool'), 'battle.colonies', b.colonies ?? [], groupIds, ''));
-    return `<div class="settings-group settings-pools wide">
-      <div class="settings-group-title">${t('settings.units.pools')}</div>
-      <p class="muted rt-note">${escapeAttr(t('settings.units.pools.note'))}</p>
-      ${rows.join('')}
+  // ----- Settings > Encounters > Battles ------------------------------------
+  // Which groups each kind of fight may roll, as a grid: a ROW per kind (the ring
+  // bands, then the Colonies and the Seed) and a COLUMN per layer of the
+  // worldflake. A cell holds group buttons - press one to take it out - and a "+"
+  // that opens a searchable list of every group there is.
+  // (Until 2026-09-06 this was a wall of tick boxes on the Units tab with no layer
+  // dimension at all.)
+  function battlesBlock() {
+    const b = config.battle;
+    const spawns = b.spawns ?? {};
+    const rows = Object.keys(spawns);
+    const layers = [...new Set(rows.flatMap((r) => Object.keys(spawns[r] ?? {}).map(Number)))].sort((x, y) => x - y);
+    const title = (gid) => b.enemyGroups?.[gid]?.title ?? gid;
+    const head = `<tr><th></th>${layers.map((n) => `<th>${t('settings.battles.layer', { n })}</th>`).join('')}</tr>`;
+    const body = rows.map((row) => {
+      const cells = layers.map((n) => {
+        const chosen = spawns[row]?.[n] ?? [];
+        const chips = chosen.map((gid) => `<button class="spawn-chip" data-drop="${row}|${n}|${escapeAttr(gid)}"
+          title="${escapeAttr(t('settings.battles.remove', { name: title(gid) }))}">${escapeAttr(title(gid))}</button>`).join('');
+        return `<td><div class="spawn-cell">${chips}<button class="spawn-add" data-pick="${row}|${n}">+</button></div></td>`;
+      }).join('');
+      const label = t(`settings.battles.row.${row}`) === `settings.battles.row.${row}` ? row : t(`settings.battles.row.${row}`);
+      return `<tr><th>${escapeAttr(label)}</th>${cells}</tr>`;
+    }).join('');
+    return `<div class="settings-group settings-matrix settings-battles wide">
+      <div class="settings-group-title">${t('settings.battles')}</div>
+      <p class="muted rt-note">${escapeAttr(t('settings.battles.note'))}</p>
+      <div class="settings-matrix-scroll"><table><thead>${head}</thead><tbody>${body}</tbody></table></div>
     </div>`;
   }
-  function poolRow(label, path, chosen, groupIds, extra) {
-    const boxes = groupIds.map((gid) => `<label class="pool-chip ${chosen.includes(gid) ? 'on' : ''}">
-      <input type="checkbox" data-pool="${path}" data-item="${gid}" ${chosen.includes(gid) ? 'checked' : ''}>${gid}</label>`).join('');
-    return `<div class="pool-row"><div class="pool-head">${escapeAttr(label)}${extra}</div><div class="pool-chips">${boxes}</div></div>`;
+
+  // The picker: every group, filtered as you type. Opens under the "+" it belongs
+  // to, closes on pick, on Escape, or on a click anywhere else.
+  function openGroupPicker(anchor, row, layer) {
+    closeGroupPicker();
+    const b = config.battle;
+    const chosen = new Set(config.battle.spawns?.[row]?.[layer] ?? []);
+    const all = Object.entries(b.enemyGroups ?? {}).map(([gid, g]) => ({ gid, title: g.title ?? gid }));
+    const el = document.createElement('div');
+    el.className = 'spawn-picker';
+    el.innerHTML = `<input type="text" class="spawn-search" placeholder="${escapeAttr(t('settings.battles.search'))}">
+      <div class="spawn-list"></div>`;
+    document.body.appendChild(el);
+    const r = anchor.getBoundingClientRect();
+    el.style.left = `${Math.min(r.left, window.innerWidth - 240)}px`;
+    el.style.top = `${r.bottom + 4}px`;
+    const list = el.querySelector('.spawn-list');
+    const search = el.querySelector('.spawn-search');
+    const draw = () => {
+      const q = search.value.trim().toLowerCase();
+      const hits = all.filter((x) => !q || x.gid.toLowerCase().includes(q) || x.title.toLowerCase().includes(q));
+      list.innerHTML = hits.length
+        ? hits.map((x) => `<button class="spawn-opt ${chosen.has(x.gid) ? 'on' : ''}" data-gid="${escapeAttr(x.gid)}">
+            ${escapeAttr(x.title)}<i>${escapeAttr(x.gid)}</i></button>`).join('')
+        : `<p class="muted">${escapeAttr(t('settings.battles.none'))}</p>`;
+      list.querySelectorAll('.spawn-opt').forEach((btn) => btn.addEventListener('click', () => {
+        addToSlot(row, layer, btn.dataset.gid);
+        closeGroupPicker();
+      }));
+    };
+    search.addEventListener('input', draw);
+    draw();
+    search.focus();
+    pickerEl = el;
+    setTimeout(() => document.addEventListener('mousedown', outsidePicker), 0);
+    document.addEventListener('keydown', escPicker);
+  }
+  let pickerEl = null;
+  const outsidePicker = (e) => { if (pickerEl && !pickerEl.contains(e.target)) closeGroupPicker(); };
+  const escPicker = (e) => { if (e.key === 'Escape') closeGroupPicker(); };
+  function closeGroupPicker() {
+    if (!pickerEl) return;
+    pickerEl.remove();
+    pickerEl = null;
+    document.removeEventListener('mousedown', outsidePicker);
+    document.removeEventListener('keydown', escPicker);
+  }
+  // A slot is one cell of the table: battle.spawns.<row>.<layer>, a list of group
+  // ids. Repeats are allowed - listing a group twice doubles its odds.
+  function slotPath(row, layer) { return `battle.spawns.${row}.${layer}`; }
+  function addToSlot(row, layer, gid) {
+    const path = slotPath(row, layer);
+    setPath(config, path, [...(getPath(config, path) ?? []), gid]);
+    commitColl(path);
+    render();
+  }
+  function dropFromSlot(row, layer, gid) {
+    const path = slotPath(row, layer);
+    const list = getPath(config, path) ?? [];
+    const at = list.indexOf(gid);
+    setPath(config, path, at < 0 ? list : [...list.slice(0, at), ...list.slice(at + 1)]);
+    commitColl(path);
+    render();
+  }
+  function wireBattlesBlock() {
+    bodyEl.querySelectorAll('[data-pick]').forEach((btn) => btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const [row, layer] = btn.dataset.pick.split('|');
+      openGroupPicker(btn, row, Number(layer));
+    }));
+    bodyEl.querySelectorAll('[data-drop]').forEach((btn) => btn.addEventListener('click', () => {
+      const [row, layer, gid] = btn.dataset.drop.split('|');
+      dropFromSlot(row, Number(layer), gid);
+    }));
   }
 
   // ----- the Units tab's event wiring --------------------------------------
@@ -380,7 +482,7 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
   function readCellValue(el, kind) {
     if (kind === 'bool') return el.checked;
     if (kind === 'number') return Number(el.value);
-    if (kind === 'color') return parseInt(el.value.slice(1), 16);
+    if (kind === 'color') return readColor(el);
     if (kind === 'idlist') return el.value.split(',').map((s) => s.trim()).filter(Boolean);
     return el.value;
   }
@@ -450,19 +552,20 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
     const kind = kindOf(key, value ?? def, path);
     let control;
     if (kind === 'bool') control = `<input type="checkbox" data-path="${path}" data-kind="bool" ${value ? 'checked' : ''}>`;
-    else if (kind === 'color') control = `<input type="color" data-path="${path}" data-kind="color" value="#${Number(value ?? 0).toString(16).padStart(6, '0')}">`;
+    else if (kind === 'color') control = `<input type="color" data-path="${path}" data-kind="color"${colorShapeAttr(value)} value="${cssColor(value)}">`;
     else if (kind === 'number') control = `<input type="number" step="any" data-path="${path}" data-kind="number" value="${value ?? ''}">`;
     else control = `<input type="text" data-path="${path}" data-kind="text" value="${escapeAttr(String(value ?? ''))}">`;
     const changed = path in overrides;
-    const defText = def === undefined ? '' : kind === 'color' ? `#${Number(def).toString(16).padStart(6, '0')}` : String(def);
+    const defText = def === undefined ? '' : kind === 'color' ? cssColor(def) : String(def);
     return `<span class="settings-cell ${changed ? 'changed' : ''}" title="${path}">
       ${control}<button class="small cell-reset" data-reset="${path}" title="${escapeAttr(t('settings.reset.title', { value: defText }))}">&#8634;</button></span>`;
   }
 
   function kindOf(key, value, path) {
     if (typeof value === 'boolean') return 'bool';
+    if (typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value)) return 'color';
     if (typeof value === 'number') {
-      // "color", the per-layer biome palette ("color0".."color8"), anything
+      // "color", the per-layer biome palette ("color0".."color6"), anything
       // ending in "Color" (groundColor, cloudColor...), and the whole colors
       // section get a colour picker instead of a raw number.
       const isColor = key === 'color' || /^color\d+$/.test(key) || /Color$/.test(key) || (path.startsWith('colors.') && !/tint|height/i.test(key));
@@ -475,7 +578,7 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
     const changed = path in overrides;
     let control;
     if (kind === 'bool') control = `<input type="checkbox" data-path="${path}" data-kind="bool" ${value ? 'checked' : ''}>`;
-    else if (kind === 'color') control = `<input type="color" data-path="${path}" data-kind="color" value="#${Number(value).toString(16).padStart(6, '0')}">`;
+    else if (kind === 'color') control = `<input type="color" data-path="${path}" data-kind="color"${colorShapeAttr(value)} value="${cssColor(value)}">`;
     else if (kind === 'number') control = `<input type="number" step="any" data-path="${path}" data-kind="number" value="${value}">`;
     else if (kind === 'list') control = `<input type="text" data-path="${path}" data-kind="list" value="${escapeAttr(value.join(', '))}" title="${t('settings.list.title')}">`;
     else control = `<input type="text" data-path="${path}" data-kind="text" value="${escapeAttr(String(value))}">`;
@@ -491,7 +594,7 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
     const k = input.dataset.kind;
     if (k === 'bool') return input.checked;
     if (k === 'number') return Number(input.value);
-    if (k === 'color') return parseInt(input.value.slice(1), 16);
+    if (k === 'color') return readColor(input);
     if (k === 'list') return input.value.split(',').map((s) => s.trim()).filter(Boolean).map((s) => (s !== '' && !Number.isNaN(Number(s)) ? Number(s) : s));
     return input.value;
   }

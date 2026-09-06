@@ -15,16 +15,18 @@ export const WORLD = {
   },
 
   // ----- The worldflake's layers ---------------------------------------
-  // The world is a stack of 8 layers around a core (0). A run happens on ONE
+  // The world is a stack of 6 layers around a core (0). A run happens on ONE
   // layer: it is an argument to the world generator, and for now it only swaps
   // the biome palette (each biome's color<N> below) - distinct enemies,
   // encounters and rules per layer come later. The rare "gate" encounter
   // unlocks the layers one by one in `unlockOrder` (meta-progression, stored in
   // the browser like the tutorial); once two are unlocked, the start screen
   // grows a layer selector whose switch plays the camera-roll cinematic.
+  // (2026-09-06: old layers 1+2 and old 7+8 were merged into single layers -
+  // see DESIGN.md's changelog entry for that date and the worldflake lore memo.)
   layers: {
-    startLayer: 4,                              // where every new player begins
-    unlockOrder: [4, 5, 3, 6, 2, 7, 1, 8, 0],   // gate unlocks walk this list; 0 = the core
+    startLayer: 3,                        // where every new player begins
+    unlockOrder: [3, 4, 2, 5, 1, 6, 0],   // gate unlocks walk this list; 0 = the core
     rollMs: 5200,                                // the layer-switch camera roll (start screen); 2x the original 2600
   },
 
@@ -57,22 +59,26 @@ export const WORLD = {
   //  * tintAmount - overrides colors.biomeTintAmount for this biome (1 = full recolour)
   //  * tintAllTypes: true - recolours even types with biomeTint: false (e.g. water)
   //  * color<N> - the colour this biome wears on LAYER N of the worldflake
-  //    (0 = the core, 8 = the highest layer; the run starts on layers.startLayer).
+  //    (0 = the core, 6 = the highest layer; the run starts on layers.startLayer).
   //    A layer without its own entry falls back to `color`. `color` doubles as
   //    the start layer's palette and the legend swatch.
+  //    (2026-09-06: reduced from color0..color8 to color0..color6 when old
+  //    layers 1+2 and 7+8 merged. Each merged layer kept the FIRST old layer's
+  //    colour - old color1 -> new color1, old color7 -> new color6 - the other
+  //    half of each pair (old color2, old color8) was dropped.)
   biomes: {
-    grasslands: { color0: 0x4a2550, color1: 0x9d2c31, color2: 0xb84396, color3: 0xc08049, color4: 0x62c454, color5: 0x0c8b62, color6: 0x7e56c1, color7: 0x5bcaa0, color8: 0xa1b79e },
-    forest: { color0: 0x220b18, color1: 0x452809, color2: 0x50121c, color3: 0x555612, color4: 0x135b32, color5: 0x5f6be2, color6: 0x541459, color7: 0x125361, color8: 0x355041 },
-    mesa: { color0: 0x1b3a4a, color1: 0x4e1995, color2: 0x2c4bad, color3: 0xb02bba, color4: 0x23cf68, color5: 0x1cd5e3, color6: 0x31c0aa, color7: 0xc1d12c, color8: 0xa78d7f },
-    desert: { color0: 0x213965, color1: 0x9c19cc, color2: 0x5248d7, color3: 0xdd52bd, color4: 0xddda64, color5: 0xcdeef1, color6: 0x63cadc, color7: 0xb4e56a, color8: 0xcfc6b7 },
-    dunes: { color0: 0x263e82, color1: 0xcc35ec, color2: 0x9282e7, color3: 0xed90ce, color4: 0xdbe0b1, color5: 0xffaaaa, color6: 0xa3dbee, color7: 0xd3f4b1, color8: 0xf7f6f3 },
-    tundra: { color0: 0x894f38, color1: 0xb4df6c, color2: 0xe8d9b5, color3: 0xcbeec6, color4: 0xb8f5e8, color5: 0xc488cc, color6: 0xf3d8de, color7: 0xeae9f9, color8: 0xffffff },
+    grasslands: { color0: 0x4a2550, color1: 0x9d2c31, color2: 0xc08049, color3: 0x62c454, color4: 0x0c8b62, color5: 0x7e56c1, color6: 0x5bcaa0 },
+    forest: { color0: 0x220b18, color1: 0x452809, color2: 0x555612, color3: 0x135b32, color4: 0x5f6be2, color5: 0x541459, color6: 0x125361 },
+    mesa: { color0: 0x1b3a4a, color1: 0x4e1995, color2: 0xb02bba, color3: 0x23cf68, color4: 0x1cd5e3, color5: 0x31c0aa, color6: 0xc1d12c },
+    desert: { color0: 0x213965, color1: 0x9c19cc, color2: 0xdd52bd, color3: 0xddda64, color4: 0xcdeef1, color5: 0x63cadc, color6: 0xb4e56a },
+    dunes: { color0: 0x263e82, color1: 0xcc35ec, color2: 0xed90ce, color3: 0xdbe0b1, color4: 0xffaaaa, color5: 0xa3dbee, color6: 0xd3f4b1 },
+    tundra: { color0: 0x894f38, color1: 0xb4df6c, color2: 0xcbeec6, color3: 0xb8f5e8, color4: 0xc488cc, color5: 0xf3d8de, color6: 0xeae9f9 },
     // Wither is not born with the world: the Stasis paints it over tiles during the
     // run (see game.js witherNear). The tile keeps its TYPE - its shape and movement
     // rules - but turns Stasis-purple, hurts to step onto and is seen from 1 further.
     // Withered water dries into walkable ground; ether is never withered.
     // Deliberately the SAME on every layer, so the rot always reads as the rot: it is
-    // the ONLY biome that still carries a flat `color` instead of color0..color8,
+    // the ONLY biome that still carries a flat `color` instead of color0..color6,
     // and map.js biomeColorFor falls back to it when no layer colour exists.
     wither: { color: 0x3b2a6e, generated: false, hpCost: 1, terrainHeight: 1, tintAmount: 0.5, tintAllTypes: true },
   },

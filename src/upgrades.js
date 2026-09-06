@@ -11,7 +11,8 @@
 //  No game state lives here - pure functions over the config tables, so the
 //  same code serves the world map, the combat engine and the UI.
 // =====================================================================
-import { ABILITIES, combatStatsFor } from './config/abilities.js';
+import { ABILITIES } from './config/abilities.js';
+import { combatStatsFor } from './config/units.js';
 import { ABILITY_UPGRADES } from './config/upgrades.js';
 
 export const upgradeRef = (abilityId, nodeId) => `${abilityId}:${nodeId}`;

@@ -546,7 +546,7 @@ export class MapRenderer {
       if (biome && (type.biomeTint || biome.tintAllTypes)) {
         // The biome's colour depends on WHICH LAYER of the worldflake this map
         // is (color<N> per biome, map.js biomeColorFor).
-        const layerColor = biomeColorFor(biome, this.game?.map?.layer ?? this.config.layers?.startLayer ?? 4);
+        const layerColor = biomeColorFor(biome, this.game?.map?.layer ?? this.config.layers?.startLayer ?? 3);
         color.lerp(new THREE.Color(layerColor), biome.tintAmount ?? c.biomeTintAmount ?? 0.45);
       }
     }

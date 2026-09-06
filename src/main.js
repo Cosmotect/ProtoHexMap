@@ -266,10 +266,16 @@ function beginInteractiveBattle(ctx, placementOverride = null) {
     .filter((u) => u.alive && u.hp > 0);
   // shape and colour ride along from the bestiary entry (src/battle.js) so the
   // arena can build the right body for each enemy.
+  // EVERYTHING the bestiary row says about a creature has to ride along here. Until
+  // 2026-09-06 this list stopped at the body and the power, so abilityIds / init /
+  // speed / flying were dropped on the way into the arena and every enemy fell back
+  // to the `default` combat stats - which is why a creature given its own ability in
+  // the config still walked in swinging Strike.
   const enemyDefs = ctx.enemies.map((e) => ({
     name: e.name, hp: e.hp, maxHp: e.maxHp, power: e.power,
     shape: e.shape, color: e.color, typeId: e.typeId,
     intellect: e.intellect,   // its INTELLECT CLASS - how well it plays its turn
+    abilityIds: e.abilityIds, init: e.init, speed: e.speed, flying: e.flying,
   }));
   // The arena is holding the party back so the player can place them: park the
   // fight here and hand over to the deployment step. It runs when the camera
@@ -597,25 +603,25 @@ function firstUnfinishedTutorial() {
 // ----- layer progression -----------------------------------------------------
 // How much of the worldflake this browser has unlocked (meta-progression, like
 // the tutorial): the rare GATE encounter advances the chain one layer at a time
-// along config.layers.unlockOrder (4 first, the core last). Stored as a COUNT,
+// along config.layers.unlockOrder (3 first, the core last). Stored as a COUNT,
 // so retuning the order in config never invalidates an old save.
 const LAYERS_KEY = 'hexmap-layers-progress';
 function unlockedLayerCount() {
-  const max = (CONFIG.layers?.unlockOrder ?? [4]).length;
+  const max = (CONFIG.layers?.unlockOrder ?? [3]).length;
   try { return Math.min(max, Math.max(1, Number(localStorage.getItem(LAYERS_KEY)) || 1)); } catch { return 1; }
 }
-function unlockedLayers() { return (CONFIG.layers?.unlockOrder ?? [4]).slice(0, unlockedLayerCount()); }
+function unlockedLayers() { return (CONFIG.layers?.unlockOrder ?? [3]).slice(0, unlockedLayerCount()); }
 // Advances the chain; returns the newly unlocked layer id, or null when the
 // whole worldflake (core included) is already known.
 function unlockNextLayer() {
-  const order = CONFIG.layers?.unlockOrder ?? [4];
+  const order = CONFIG.layers?.unlockOrder ?? [3];
   const count = unlockedLayerCount();
   if (count >= order.length) return null;
   try { localStorage.setItem(LAYERS_KEY, String(count + 1)); } catch { /* private mode etc. */ }
   return order[count];
 }
 const layerLabel = (n) => (n === 0 ? t('layer.core') : t('layer.name', { n }));
-let currentLayer = CONFIG.layers?.startLayer ?? 4;   // the layer the NEXT run generates on
+let currentLayer = CONFIG.layers?.startLayer ?? 3;   // the layer the NEXT run generates on
 let layerRolling = false;                            // the switch cinematic is playing
 
 // The selector above Begin journey: only on the start screen, only once a

@@ -63,7 +63,6 @@ const A = (o) => Object.assign({
   damage: 0, heal: 0, buff: '', buffX: null,   // buffX null = "use the status's own value"
   castZone: [], castAny: false, dmgZone: [], tagZone: [], tagId: null,
   hZone: [], hMode: 'rel', pushZone: [], rotatable: false, moveToTarget: false,
-  spawnId: null, spawnZone: [],
 }, o);
 
 export const ABILITIES = {
@@ -161,16 +160,21 @@ export const ABILITIES = {
 //                 A status whose amount comes out negative (a slow) has its
 //                 value flipped automatically - the same field covers both ends.
 //
+//    amountSign   -1 for a status whose amount is written as a positive number but
+//                 stored negative (a `slow` of 2 is speed -2). Every status is
+//                 authored so its numbers read as plain magnitudes; a penalty and
+//                 a bonus are two ROWS, never one row with a sign, because a row
+//                 has one aiValue and cannot be a blessing and a curse at once.
+//
 //  DISPLAY: `name` / `icon` / `color` are the fallback; the badge over a unit's
 //  head and the card in the panel look for the locale keys status.<id>.name and
-//  status.<id>.desc first ({n} is filled with the amount). `negative` gives a
-//  signed status its own id, icon and texts for the negative end (haste -> slow).
+//  status.<id>.desc first ({n} is filled with the amount).
 const S = (o) => Object.assign({
   name: 'Status', icon: '⭐', color: '#9aa7bd',
   speed: 0, damageDealt: 1, damageTaken: 1, blocks: false, skipsTurn: false,
   tickDamage: 0, tickHeal: 0,
   turns: 0, charges: 0, spentOn: '',
-  amountIs: '', aiValue: 0, negative: null,
+  amountIs: '', amountSign: 1, aiValue: 0,
 }, o);
 
 export const STATUSES = {
@@ -194,12 +198,23 @@ export const STATUSES = {
     amountIs: '',          // buffX does nothing here
     aiValue: 12,           // bad to carry: worth about a point of damage more than one
   }),
+  // Haste and slow are TWO statuses, not one signed one. A single row cannot say
+  // what it is worth: the same aiValue would have to mean "good to carry" at one
+  // end and "bad to carry" at the other, and the AI read a speed PENALTY as a
+  // blessing worth handing to its allies. Each end now states its own worth, and
+  // each takes a positive amount (buffX 2 on `slow` means two points slower).
   haste: S({
     name: 'Hastened', icon: '💨', color: '#a8e05f',
     speed: 1, turns: 2,
-    amountIs: 'speed',     // buffX = the speed change; negative is a slow
-    aiValue: -6,
-    negative: { id: 'slow', icon: '🐌', color: '#c9a8ff' },
+    amountIs: 'speed',     // buffX = how many extra move points
+    aiValue: -6,           // good to carry
+  }),
+  slow: S({
+    name: 'Slowed', icon: '🐌', color: '#c9a8ff',
+    speed: -1, turns: 2,
+    amountIs: 'speed',     // buffX = how many move points are taken away
+    amountSign: -1,        // ...written as a positive number; stored negative
+    aiValue: 9,            // bad to carry - and worth more than haste is worth giving
   }),
   // Nothing below is applied by any ability yet - they are here as worked
   // examples of what the vocabulary buys, and as content to switch on when a
@@ -319,39 +334,12 @@ export const COMBAT_TAGS = {
   fire: T({ name: 'Fire', icon: '🔥', color: '#ff9950', desc: 'Burns anything standing here.', dmg: 1, life: 2 }),
 };
 
-// ----- Per-unit combat stats -------------------------------------------
-// Looked up by unit NAME (party and enemies share the table); numbered clones
-// ("Husk 2") fall back to their base name, anything unknown to `default`.
-// init = enemy turn order (higher acts first), speed = move points per turn
-// (uphill steps cost 2), flying ignores height and glides over anything.
-export const UNIT_COMBAT = {
-  default: { init: 5, speed: 4, flying: false, abilities: ['strike'] },
-  // party roster - exactly TWO abilities per character: each drives its own
-  // upgrade tree (config/upgrades.js), and the roster's detail window and the
-  // party panel are laid out for the pair.
-  Vanguard: { init: 5, speed: 4, flying: false, abilities: ['strike', 'shove'] },
-  Archer: { init: 7, speed: 4, flying: false, abilities: ['volley', 'lance'] },
-  Mystic: { init: 4, speed: 3, flying: false, abilities: ['burst', 'mend'] },
-  Warden: { init: 6, speed: 4, flying: false, abilities: ['strike', 'guard'] },
-  Stonestep: { init: 3, speed: 3, flying: false, abilities: ['strike', 'shove'] },
-  Emberwright: { init: 5, speed: 3, flying: false, abilities: ['burst', 'strike'] },
-  Lampbearer: { init: 6, speed: 4, flying: false, abilities: ['mend', 'bolt'] },
-  Skywatcher: { init: 8, speed: 5, flying: true, abilities: ['volley', 'lance'] },
-  Tinker: { init: 5, speed: 4, flying: false, abilities: ['shove', 'bolt'] },
-  Duskblade: { init: 9, speed: 5, flying: false, abilities: ['strike', 'lance'] },
-  // NOTE: enemies are NOT listed here any more. Since 2026-09-01 a bestiary row
-  // in config/units.js (battle.enemyTypes) carries a creature's init, speed,
-  // flying and abilities alongside its body and numbers, so an enemy is defined
-  // in exactly ONE place and the Settings window can invent a new one. This
-  // table is now the PARTY's, plus `default` as the last-resort fallback for a
-  // hand-authored def that names neither.
-};
+// (The per-unit combat stats used to live here, in a UNIT_COMBAT table. They were
+// a UNITS matter, not an abilities one, and they duplicated the roster: since
+// 2026-09-06 a character carries init / speed / flying / abilities on its own
+// roster row in config/units.js, next to its body, exactly as a bestiary row does
+// for a creature. `combatStatsFor` moved there with them.)
 
-// Combat stats for a unit by its display name ("Husk 2" -> "Husk").
-export function combatStatsFor(name) {
-  const base = String(name ?? '').replace(/ \d+$/, '');
-  return UNIT_COMBAT[base] ?? UNIT_COMBAT.default;
-}
 export const abilityById = (id) => ABILITIES[id] ?? null;
 export const tagDefById = (id) => COMBAT_TAGS[id] ?? null;
 export { DIRS };

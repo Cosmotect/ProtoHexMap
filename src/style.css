@@ -624,31 +624,50 @@ button.small { padding: 2px 8px; font-size: 12px; }
 .settings-records .rt-add { margin-top: 8px; }
 .settings-records .rt-reset { margin: 8px 0 0 6px; }
 
-/* One line per pool: what it is on the left, every group as a togglable chip. */
-.settings-pools .pool-row { padding: 5px 0; border-top: 1px solid var(--panel-border); }
-.settings-pools .pool-row:first-of-type { border-top: none; }
-.settings-pools .pool-head {
-  display: flex; align-items: center; gap: 8px;
-  font-size: 12px; font-weight: 600; margin-bottom: 4px;
+/* Settings > Encounters > Battles: which groups each kind of fight may roll, a row
+   per kind and a column per layer. A cell is a wrap of group buttons plus a "+". */
+.settings-battles { grid-column: 1 / -1; }
+.settings-battles table { table-layout: auto; }
+.settings-battles th { white-space: nowrap; }
+.settings-battles tbody th { text-align: left; font-size: 12px; font-weight: 600; padding-right: 10px; }
+.settings-battles td { vertical-align: top; padding: 3px 4px; }
+.spawn-cell { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 132px; }
+.spawn-chip {
+  font: inherit; font-size: 11px; line-height: 1.4;
+  padding: 2px 7px; border-radius: 6px; cursor: pointer;
+  color: var(--text); background: rgba(255, 209, 102, 0.14);
+  border: 1px solid var(--accent);
 }
-.settings-pools .pool-ring { font-family: var(--mono); font-size: 10.5px; color: var(--muted); font-weight: 400; }
-.settings-pools .pool-chips { display: flex; flex-wrap: wrap; gap: 5px; }
-.settings-pools .pool-chip {
-  display: inline-flex; align-items: center; gap: 4px;
-  font-size: 11px; padding: 2px 7px 2px 5px; border-radius: 6px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  color: var(--muted); cursor: pointer;
+.spawn-chip:hover { color: var(--danger); border-color: var(--danger); background: rgba(226, 71, 75, 0.16); }
+.spawn-chip:hover::after { content: ' ×'; }
+.spawn-add {
+  font: inherit; font-size: 12px; line-height: 1; padding: 3px 7px;
+  border-radius: 6px; cursor: pointer; color: var(--muted);
+  background: rgba(255, 255, 255, 0.05); border: 1px dashed rgba(255, 255, 255, 0.22);
 }
-.settings-pools .pool-chip.on { color: var(--text); border-color: var(--accent); background: rgba(255, 209, 102, 0.14); }
-/* The pool block is a full-width thing by nature: five rows of every group id.
-   Let it take the whole grid width rather than leaving dead space beside it. */
-.settings-body.has-matrix > .settings-pools { grid-column: 1 / -1; }
-.settings-pools .pool-ring input[type="number"] {
-  width: 52px; font: inherit; font-size: 12px; color: var(--text);
+.spawn-add:hover { color: var(--text); border-color: var(--accent); }
+/* The group picker floats over everything, anchored under the "+" that opened it. */
+.spawn-picker {
+  position: fixed; z-index: 60; width: 230px; max-height: 280px; display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--panel-border); border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); padding: 6px;
+}
+.spawn-search {
+  font: inherit; font-size: 12px; color: var(--text); margin-bottom: 6px;
   background: rgba(0, 0, 0, 0.35); border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 6px; padding: 2px 5px;
+  border-radius: 6px; padding: 4px 6px;
 }
+.spawn-list { overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.spawn-list p { margin: 4px 2px; font-size: 11.5px; }
+.spawn-opt {
+  font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+  display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+  padding: 4px 6px; border-radius: 6px; color: var(--text);
+  background: none; border: 1px solid transparent;
+}
+.spawn-opt:hover { background: rgba(255, 255, 255, 0.07); border-color: rgba(255, 255, 255, 0.14); }
+.spawn-opt.on { color: var(--accent); }
+.spawn-opt i { font-style: normal; font-family: var(--mono); font-size: 10px; color: var(--muted); }
 .settings-row select { font: inherit; font-size: 12.5px; color: var(--text); background: rgba(0, 0, 0, 0.35); border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 6px; padding: 3px 6px; }
 .modal-box p { margin: 0 0 10px; }
 .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }

@@ -240,6 +240,36 @@ fs.mkdirSync(OUT, { recursive: true });
   if (minds.missing.length) problems.push('bestiary rows with no intellect class: ' + minds.missing.join(', '));
   if (minds.unknown.length) problems.push('bestiary rows with an unknown intellect class: ' + minds.unknown.join(', '));
   if (!minds.onUnits.length || minds.onUnits.some((c) => !c)) problems.push('an enemy in the arena carries no intellect class: ' + JSON.stringify(minds.onUnits));
+  // ----- the bestiary reaches the arena whole -------------------------------
+  // A creature's abilities / init / speed / flying used to be dropped on the way
+  // into the fight, so every enemy fell back to the nameless default and swung
+  // Strike whatever its bestiary row said. Check a row and its arena unit agree.
+  const fromBestiary = await page.evaluate(() => {
+    const b = window.__battle.state.units.filter((u) => u.isEnemy);
+    const types = window.game.config.battle.enemyTypes;
+    const byName = (n) => Object.values(types).find((t) => t.name === String(n).replace(/ \d+$/, ''));
+    return b.map((u) => {
+      const row = byName(u.name);
+      return { name: u.name, known: !!row, abilities: (u.abilityIds || []).join('/'),
+        wanted: row ? (row.abilities || []).join('/') : '', init: u.init, wantInit: row ? row.init : null };
+    });
+  });
+  for (const u of fromBestiary) {
+    if (!u.known) continue;
+    if (u.abilities !== u.wanted) problems.push(`${u.name} fights with ${u.abilities} but its bestiary row says ${u.wanted}`);
+    if (u.init !== u.wantInit) problems.push(`${u.name} has init ${u.init}, its bestiary row says ${u.wantInit}`);
+  }
+  // ----- the spawn table ------------------------------------------------------
+  const spawns = await page.evaluate(() => {
+    const sp = window.game.config.battle.spawns || {};
+    return { rows: Object.keys(sp), layers: Object.keys(sp.inner || {}).length,
+      empty: Object.entries(sp).filter(([, row]) => !Object.values(row).some((l) => l && l.length)).map(([k]) => k) };
+  });
+  for (const row of ['inner', 'middle', 'outer', 'colonies', 'seed']) {
+    if (!spawns.rows.includes(row)) problems.push(`the spawn table has no "${row}" row: ${spawns.rows.join(', ')}`);
+  }
+  if (spawns.layers < 2) problems.push('the spawn table has no layer columns: ' + JSON.stringify(spawns));
+  if (spawns.empty.length) problems.push('spawn rows with nothing in them on any layer: ' + spawns.empty.join(', '));
   await page.screenshot({ path: path.join(OUT, '01e-battle-engine.png') });
   await page.evaluate(() => window.__battle.debugResolve(true));
   await page.waitForFunction(() => !document.getElementById('dialog').classList.contains('hidden'), null, { timeout: 25000 });
@@ -810,7 +840,7 @@ fs.mkdirSync(OUT, { recursive: true });
     };
   });
   if (gateSetup.generated > 1) problems.push(`gates must be unique per map, found ${gateSetup.generated}`);
-  if (gateSetup.layer !== 4 || gateSetup.mapLayer !== 4) problems.push('a fresh run should sit on the start layer (4): ' + JSON.stringify(gateSetup));
+  if (gateSetup.layer !== 3 || gateSetup.mapLayer !== 3) problems.push('a fresh run should sit on the start layer (3): ' + JSON.stringify(gateSetup));
   if (!gateSetup.pyramid || !gateSetup.green) problems.push('the gate marker is not a green pyramid: ' + JSON.stringify(gateSetup));
   if (!gateSetup.legend) problems.push('the layer gate is missing from the legend');
   await page.evaluate(() => window.game.enter(false));
@@ -823,7 +853,7 @@ fs.mkdirSync(OUT, { recursive: true });
     consumed: window.game.state.position.encounter === null,
   }));
   if (!gateDlg.open || !/Gate/i.test(gateDlg.title)) problems.push('entering the gate did not open its dialog: ' + JSON.stringify(gateDlg));
-  if (!/Layer 5/.test(gateDlg.body)) problems.push('the gate should unlock Layer 5 first (4 > 5 > 3 > ...): ' + gateDlg.body);
+  if (!/Layer 4/.test(gateDlg.body)) problems.push('the gate should unlock Layer 4 first (3 > 4 > 2 > ...): ' + gateDlg.body);
   if (gateDlg.stored !== '2') problems.push('the layer unlock was not stored: ' + JSON.stringify(gateDlg));
   if (!gateDlg.consumed) problems.push('the gate should be consumed on entry');
   await page.screenshot({ path: path.join(OUT, '34-gate-dialog.png') });
@@ -831,7 +861,7 @@ fs.mkdirSync(OUT, { recursive: true });
 
   // ----- The LAYER SELECTOR + the roll cinematic ------------------------------
   // Two layers are unlocked now: a fresh start screen grows the selector above
-  // Begin journey; picking Layer 5 barrel-rolls the camera under the ground,
+  // Begin journey; picking Layer 4 barrel-rolls the camera under the ground,
   // restarts the run on the new layer at the underside and surfaces over the
   // recoloured world.
   await page.goto(URL.replace(/\?.*$/, '') + '?seed=555', { waitUntil: 'load', timeout: 60000 });
@@ -840,15 +870,15 @@ fs.mkdirSync(OUT, { recursive: true });
     visible: !document.getElementById('layer-select').classList.contains('hidden'),
     label: document.getElementById('btn-layer').textContent,
   }));
-  if (!sel.visible || !/Layer 4/.test(sel.label)) problems.push('layer selector wrong with two layers unlocked: ' + JSON.stringify(sel));
+  if (!sel.visible || !/Layer 3/.test(sel.label)) problems.push('layer selector wrong with two layers unlocked: ' + JSON.stringify(sel));
   await page.click('#btn-layer');
   await page.waitForTimeout(100);
   const opts = await page.evaluate(() => ({
     open: !document.getElementById('layer-options').classList.contains('hidden'),
     order: [...document.querySelectorAll('#layer-options button')].map((b) => b.dataset.layer).join(','),
   }));
-  // The list reads like the worldflake: higher layers on top (5 above 4).
-  if (!opts.open || opts.order !== '5,4') problems.push('layer options wrong: ' + JSON.stringify(opts));
+  // The list reads like the worldflake: higher layers on top (4 above 3).
+  if (!opts.open || opts.order !== '4,3') problems.push('layer options wrong: ' + JSON.stringify(opts));
   await page.screenshot({ path: path.join(OUT, '35-layer-selector.png') });
   // Same seed = same topology, so one revealed tile can be compared across layers.
   const layerProbe = await page.evaluate(() => {
@@ -857,10 +887,10 @@ fs.mkdirSync(OUT, { recursive: true });
     return h ? { key: h.key, color: window.__renderer.targetColorFor(h).getHex() } : null;
   });
   if (!layerProbe) problems.push('no revealed biome-tinted tile to probe the layer palette with');
-  await page.evaluate(() => { [...document.querySelectorAll('#layer-options button')].find((b) => b.dataset.layer === '5').click(); });
+  await page.evaluate(() => { [...document.querySelectorAll('#layer-options button')].find((b) => b.dataset.layer === '4').click(); });
   await page.waitForTimeout(CONFIG_ROLL_MS * 0.35);
   await page.screenshot({ path: path.join(OUT, '36-layer-roll.png') });
-  await page.waitForFunction(() => window.game && window.game.layer === 5, null, { timeout: 20000 }).catch(() => problems.push('the roll never swapped the run to layer 5'));
+  await page.waitForFunction(() => window.game && window.game.layer === 4, null, { timeout: 20000 }).catch(() => problems.push('the roll never swapped the run to layer 4'));
   await page.waitForFunction(() => !window.__localView.layerRoll, null, { timeout: 20000 }).catch(() => problems.push('the layer roll never finished'));
   await page.waitForTimeout(300);
   const rolled = await page.evaluate(([key]) => {
@@ -874,17 +904,17 @@ fs.mkdirSync(OUT, { recursive: true });
       party: g.state.party.length,
     };
   }, [layerProbe?.key ?? '0,0']);
-  if (rolled.layer !== 5 || rolled.mapLayer !== 5) problems.push('layer switch did not land on 5: ' + JSON.stringify(rolled));
+  if (rolled.layer !== 4 || rolled.mapLayer !== 4) problems.push('layer switch did not land on 4: ' + JSON.stringify(rolled));
   if (layerProbe && rolled.color === layerProbe.color) problems.push('the biome palette did not change with the layer');
-  if (!rolled.start || rolled.mode !== 'local' || !/Layer 5/.test(rolled.label)) problems.push('start screen state wrong after the roll: ' + JSON.stringify(rolled));
-  await page.screenshot({ path: path.join(OUT, '37-layer5-campfire.png') });
-  // Begin journey: the run now walks layer 5.
+  if (!rolled.start || rolled.mode !== 'local' || !/Layer 4/.test(rolled.label)) problems.push('start screen state wrong after the roll: ' + JSON.stringify(rolled));
+  await page.screenshot({ path: path.join(OUT, '37-layer4-campfire.png') });
+  // Begin journey: the run now walks layer 4.
   await page.click('#btn-enter');
-  await page.waitForFunction(() => window.__cinematic.mode() === 'idle', null, { timeout: 25000 }).catch(() => problems.push('Begin journey did not leave the layer-5 start screen'));
+  await page.waitForFunction(() => window.__cinematic.mode() === 'idle', null, { timeout: 25000 }).catch(() => problems.push('Begin journey did not leave the layer-4 start screen'));
   await page.waitForTimeout(400);
-  const onLayer5 = await page.evaluate(() => ({ layer: window.game.layer, start: window.__startScreen() }));
-  if (onLayer5.layer !== 5 || onLayer5.start) problems.push('the layer-5 journey did not begin: ' + JSON.stringify(onLayer5));
-  await page.screenshot({ path: path.join(OUT, '38-layer5-world.png') });
+  const onLayer4 = await page.evaluate(() => ({ layer: window.game.layer, start: window.__startScreen() }));
+  if (onLayer4.layer !== 4 || onLayer4.start) problems.push('the layer-4 journey did not begin: ' + JSON.stringify(onLayer4));
+  await page.screenshot({ path: path.join(OUT, '38-layer4-world.png') });
 
   // ----- SCENARIO ENGINE: the hand-authored tutorial map, walked end to end ----
   // Everything on it is scripted, so the whole walkthrough is deterministic:

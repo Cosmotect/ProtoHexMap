@@ -120,7 +120,7 @@ const SPRITE_MAT = (tex) => ({ map: tex, transparent: true, depthTest: false, fo
 // tables (status.<id>.name / .desc); `amount` fills the {n} of the ones that
 // have a magnitude, and a real duration adds a line of its own.
 function statusTipHtml(hs) {
-  const n = hs.amount == null ? '' : (hs.amount > 0 ? `+${hs.amount}` : String(hs.amount));
+  const n = hs.amount == null ? '' : String(hs.amount);   // statuses are authored as magnitudes
   const name = t(`status.${hs.id}.name`, { n });
   const desc = t(`status.${hs.id}.desc`, { n });
   const turns = hs.turns > 0 && hasKey('status.turns') ? `<div class="st-turns">${t('status.turns', { n: hs.turns })}</div>` : '';

@@ -26,7 +26,7 @@ export class Game {
     this.config = config;
     this.seed = seed;
     this.scenario = scenario;
-    this.layer = layer ?? config.layers?.startLayer ?? 4;
+    this.layer = layer ?? config.layers?.startLayer ?? 3;
     this.scenarioState = { ambushesDone: new Set() };   // runtime; scenario data stays untouched
     this.rng = createRng(seed);
     this.map = scenario ? buildScenarioMap(config, scenario) : generateMap(config, this.rng, this.layer);
@@ -35,7 +35,7 @@ export class Game {
     // battle can be shown before the party enters it. (Scenario battles come authored.)
     for (const h of this.map.hexes.values()) {
       if ((h.encounter === 'battle' || h.encounter === 'stasisSeed') && !h.enemies) {
-        h.enemies = makeEnemies(this.rng, config.battle, h.ring, h.isSeed ? 'boss' : 'regular');
+        h.enemies = makeEnemies(this.rng, config.battle, h.ring, h.isSeed ? 'boss' : 'regular', this.map.layer);
       }
     }
 
@@ -421,7 +421,7 @@ export class Game {
       c.hex.enemies = cloneEnemies(c.script.enemies, this.config.battle);
       if (c.script.title) c.hex.enemies.title = c.script.title;
     } else {
-      c.hex.enemies = makeEnemies(this.rng, this.config.battle, c.hex.ring, 'colony');
+      c.hex.enemies = makeEnemies(this.rng, this.config.battle, c.hex.ring, 'colony', this.map.layer);
     }
     this.addLog('log.colonySpawn', {
       where: { hex: { type: c.hex.type, biome: c.hex.biome, q: c.hex.q, r: c.hex.r } },
@@ -745,7 +745,7 @@ export class Game {
   //   finishCombat()   lifts the debuffs, applies deaths, rewards, dialogs, end
   prepareCombat(hex, forced, opts = {}) {
     const s = this.state;
-    const enemies = hex.enemies ?? makeEnemies(this.rng, this.config.battle, hex.ring, hex.isSeed ? 'boss' : hex.isColony ? 'colony' : 'regular');
+    const enemies = hex.enemies ?? makeEnemies(this.rng, this.config.battle, hex.ring, hex.isSeed ? 'boss' : hex.isColony ? 'colony' : 'regular', this.map.layer);
     hex.enemies = null;
 
     // Stasis debuffs: temporarily weaken the party and/or reinforce the enemy for

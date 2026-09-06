@@ -12,7 +12,7 @@ import { biomeColorFor } from './map.js';
 // A status badge's hover text, in plain text (the overhead plaque builds the
 // same thing as HTML - see statusTipHtml in src/local/localview.js).
 function statusTipText(hs) {
-  const n = hs.amount == null ? '' : (hs.amount > 0 ? `+${hs.amount}` : String(hs.amount));
+  const n = hs.amount == null ? '' : String(hs.amount);   // statuses are authored as magnitudes
   const parts = [t(`status.${hs.id}.name`, { n }), t(`status.${hs.id}.desc`, { n })];
   if (hs.turns > 0) parts.push(t('status.turns', { n: hs.turns }));
   return parts.filter(Boolean).join(' - ');
@@ -204,7 +204,7 @@ export function createUI(config, handlers) {
   // Rebuilt whenever a setting changes, since the texts are generated from the config.
   // Which layer's biome palette the legend swatches show. Set from the running
   // game in update(); the config default covers the moments before a run exists.
-  let legendLayer = config.layers?.startLayer ?? 4;
+  let legendLayer = config.layers?.startLayer ?? 3;
 
   function buildLegend() {
   const legendItems = [];
@@ -809,7 +809,7 @@ export function createUI(config, handlers) {
 
   // ----- the layer selector (start screen) ---------------------------------
   // A dropdown that expands UPWARDS from just above the Begin journey button,
-  // listing the unlocked layers of the worldflake top (8) to bottom (the
+  // listing the unlocked layers of the worldflake top (6) to bottom (the
   // core), the way the layers physically stack. main.js shows it only once a
   // second layer is unlocked; picking a DIFFERENT layer plays the camera-roll
   // switch (the current one just closes the list).
@@ -837,7 +837,7 @@ export function createUI(config, handlers) {
     if (!layerOpts) return;
     layerBtn.textContent = `${layerLabel(layerOpts.current)} ▴`;
     layerBtn.title = t('layer.title');
-    const sorted = [...layerOpts.layers].sort((a, b) => b - a);   // 8 on top, the core last
+    const sorted = [...layerOpts.layers].sort((a, b) => b - a);   // 6 on top, the core last
     layerOptionsEl.innerHTML = sorted.map((n) =>
       `<button data-layer="${n}" class="${n === layerOpts.current ? 'current' : ''}">${escapeHtml(layerLabel(n))}</button>`).join('');
   }

@@ -27,7 +27,7 @@ import { createNoise } from './noise.js';
  */
 export function generateMap(config, rng, layer = null) {
   const { radius, orientation, hexSize } = config.map;
-  const mapLayer = layer ?? config.layers?.startLayer ?? 4;
+  const mapLayer = layer ?? config.layers?.startLayer ?? 3;
 
   let attempt = 0;
   let result = null;

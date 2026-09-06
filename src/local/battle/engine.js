@@ -28,7 +28,8 @@
 //  fight opens with an ambush enemy phase before round 1.
 // =====================================================================
 import { DIRS, K, PK, addK, hexDist, rotOff, aimRot, abRotFor, rotDir, boardTiles } from './bhex.js';
-import { abilityById, tagDefById, combatStatsFor } from '../../config/abilities.js';
+import { abilityById, tagDefById } from '../../config/abilities.js';
+import { combatStatsFor } from '../../config/units.js';
 
 export function createBattle({ config, radius, heights, party, enemies, partyKeys, enemyKeys, forced,
                                partyDamageMod = 0, deferOpening = false, voidEdgeKeys = [],
@@ -120,7 +121,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     // The definition wins where it has an opinion: a bestiary row carries its
     // own init / speed / flying / abilities (config/units.js), so a creature
     // invented in the Settings window fights as written instead of falling
-    // through to UNIT_COMBAT's nameless `default`. The party, and any older
+    // through to party.defaultCombat, the nameless fallback. The party, and any older
     // hand-authored def, still reads the table by name.
     const cs = combatStatsFor(def.name);
     return {
@@ -210,14 +211,10 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     for (const id in (carried(u) || {})) { if (statusField(u, id, field)) return id; }
     return null;
   }
-  // Icon and colour to show: a signed status flips to its `negative` face when the
-  // amount went below zero (haste -> slow), so one row covers both ends.
+  // Icon and colour to show. Every status is its own row, so there is nothing to
+  // work out here - a slow is not a haste wearing a different face.
   function statusView(u, id) {
     const def = statusDef(id) || {};
-    const amt = carried(u) && u.status[id] ? u.status[id].amount : undefined;
-    if (def.negative && typeof amt === 'number' && amt < 0) {
-      return { icon: def.negative.icon || def.icon, color: def.negative.color || def.color };
-    }
     return { icon: def.icon, color: def.color };
   }
   // Puts a status on a unit (re-applying refreshes it rather than stacking).
@@ -231,7 +228,9 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       // multiplier status applied by an ability that never thought about buffX
       // would land as a meaningless x1.
       const given = buffX === undefined || buffX === null || buffX === '' ? NaN : Number(buffX);
-      amount = Number.isFinite(given) ? given : def[def.amountIs];
+      // An ability hands over a MAGNITUDE; amountSign turns it into the number the
+      // status actually stores (a `slow` of 2 is speed -2).
+      amount = Number.isFinite(given) ? Math.abs(given) * (def.amountSign || 1) : def[def.amountIs];
     }
     if (!u.status) u.status = {};
     u.status[id] = { turns: def.turns || 0, charges: def.charges || 0, amount };
@@ -312,12 +311,11 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     return 0.5 + hpFrac;
   }
 
-  // What the AI thinks a status is worth on a unit: the table's aiValue, flipped
-  // when the amount went negative (a slow is as bad as a haste is good).
-  function statusValue(id, amount) {
+  // What the AI thinks a status is worth on a unit. Straight from the table: each
+  // status states its own worth, so nothing has to be guessed from a sign.
+  function statusValue(id) {
     const def = statusDef(id);
-    if (!def) return 0;
-    return (def.aiValue || 0) * (typeof amount === 'number' && amount < 0 ? -1 : 1);
+    return def ? (def.aiValue || 0) : 0;
   }
   // Bonus ability damage from the unit's world-map power (enemies only in
   // practice: party defs carry no power). partyDamageMod hits party casts.
@@ -1023,7 +1021,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
             // so one number covers curses, blessings, friend and foe.
             let sv = 0;
             for (const [id, amt] of Object.entries(st.rec.applied[u.uid] || {})) {
-              const v = statusValue(id, amt);          // <0 = a good thing to carry
+              const v = statusValue(id);          // <0 = a good thing to carry
               if (!mind.statuses) { sv += (v < 0 ? -1 : 1) * flat; continue; }
               const already = was && was.status && was.status[id] ? 0.15 : 1;
               sv += v * already * statusNeed(u, was, v);
@@ -1033,7 +1031,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
             // dimmer than S would refuse to attack a shielded unit at all - the very
             // deadlock this AI was fixed for.
             for (const [id, amt] of Object.entries(st.rec.stripped[u.uid] || {})) {
-              const v = statusValue(id, amt);
+              const v = statusValue(id);
               sv += mind.statuses ? -v : (v < 0 ? 1 : -1) * flat;
             }
             // ----- injuries: finishing the wounded rather than spreading damage --

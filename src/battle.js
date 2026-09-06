@@ -114,11 +114,28 @@ export function renameDuplicates(units) {
 // what walks onto the arena.
 
 // The band a ring falls into (cfg.enemies.bands, in listed order). Rings past the
-// last band's maxRing keep using the last band.
+// last band's maxRing keep using the last band. `ringBandId` gives its name, which
+// is also the row it uses in the spawn table.
+export function ringBandId(cfg, ring) {
+  const ids = Object.keys(cfg.enemies.bands);
+  for (const id of ids) if (ring <= cfg.enemies.bands[id].maxRing) return id;
+  return ids[ids.length - 1];
+}
 export function ringBand(cfg, ring) {
-  const bands = Object.values(cfg.enemies.bands);
-  for (const b of bands) if (ring <= b.maxRing) return b;
-  return bands[bands.length - 1];
+  return cfg.enemies.bands[ringBandId(cfg, ring)];
+}
+
+// The groups one kind of fight may roll on one layer (cfg.spawns, a row per kind
+// of fight and a column per layer). An empty cell falls through to the nearest
+// FILLED layer of the same row, so a half-finished table still plays.
+export function spawnPool(cfg, kind, layer) {
+  const row = cfg.spawns?.[kind] ?? {};
+  const filled = (n) => (Array.isArray(row[n]) && row[n].length ? row[n] : null);
+  const exact = filled(layer);
+  if (exact) return exact;
+  const near = Object.keys(row).map(Number).filter((n) => filled(n))
+    .sort((a, b) => Math.abs(a - layer) - Math.abs(b - layer) || a - b)[0];
+  return near === undefined ? [] : row[near];
 }
 
 // One live enemy from a bestiary id. `shape` and `color` ride along so the arena
@@ -126,7 +143,7 @@ export function ringBand(cfg, ring) {
 // stats (init / speed / flying / abilities) where the row has them - that is
 // what makes a creature invented in the Settings window a complete creature and
 // not a nameless `default`. A row without them leaves the fields undefined, and
-// the engine falls back to UNIT_COMBAT by name exactly as before.
+// the engine falls back to party.defaultCombat by name exactly as before.
 export function makeEnemyOfType(cfg, typeId) {
   const t = cfg.enemyTypes?.[typeId];
   if (!t) return null;
@@ -165,10 +182,9 @@ export function makeGroup(cfg, groupId) {
 // The power of ONE average enemy on this ring: the mean unit power across every
 // group the band can roll. Used where enemies appear outside a group (the Stasis
 // "extra enemies" debuff).
-export function regularUnitPower(cfg, ring) {
-  const b = ringBand(cfg, ring);
+export function regularUnitPower(cfg, ring, layer = 0) {
   let total = 0, count = 0;
-  for (const gid of b.groups ?? []) {
+  for (const gid of spawnPool(cfg, ringBandId(cfg, ring), layer)) {
     for (const id of cfg.enemyGroups?.[gid]?.units ?? []) {
       total += cfg.enemyTypes?.[id]?.power ?? 0;
       count += 1;
@@ -192,15 +208,20 @@ export function makeRegulars(rng, cfg, ring, count) {
   return out;
 }
 
-// Builds an enemy group for a tile. "ring" = distance from the map centre.
-// "pool" picks which table the group comes from:
-//   'regular' (default) - one of the ring band's groups
-//   'boss'              - the Stasis Seed: one of cfg.bosses
-//   'colony'            - a Stasis Colony: one of cfg.colonies
+// Builds an enemy group for a tile. "ring" = distance from the map centre,
+// "layer" = which layer of the worldflake this run walks. "pool" picks the ROW of
+// the spawn table the group comes from:
+//   'regular' (default) - the ring band the tile falls into (inner / middle / outer)
+//   'boss'              - the Stasis Seed
+//   'colony'            - a Stasis Colony
 // (true is still accepted for 'boss', so older call sites keep working.)
-export function makeEnemies(rng, cfg, ring, pool = 'regular') {
-  if (pool === true || pool === 'boss') return makeGroup(cfg, rng.pick(cfg.bosses));
-  if (pool === 'colony') return makeGroup(cfg, rng.pick(cfg.colonies ?? cfg.bosses));
-  const band = ringBand(cfg, ring);
-  return makeGroup(cfg, rng.pick(band.groups));
+export function makeEnemies(rng, cfg, ring, pool = 'regular', layer = 0) {
+  const kind = pool === true || pool === 'boss' ? 'seed'
+    : pool === 'colony' ? 'colonies'
+    : ringBandId(cfg, ring);
+  const groups = spawnPool(cfg, kind, layer);
+  // A row with nothing in it anywhere would leave a fight with no enemies at all;
+  // fall back to the whole group table rather than walk into an empty arena.
+  const pick = groups.length ? groups : Object.keys(cfg.enemyGroups ?? {});
+  return makeGroup(cfg, rng.pick(pick));
 }

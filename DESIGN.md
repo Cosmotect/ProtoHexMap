@@ -566,6 +566,56 @@ stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }
   a multiplier status applied by an ability that never set it landed as a
   meaningless x1. `buffX` now defaults to null, meaning "use the value in the status
   table", which is what a designer expects.
+* 2026-09-06 (c) **Worldflake layers merged from 8 to 6** on the owner's instruction:
+  old layers 1+2 are now a single layer, and old 7+8 are now a single layer; old
+  layers 3, 4, 5, 6 kept their relative order but were renumbered 2, 3, 4, 5. New
+  numbering end to end: new 1 = old 1+2, new 2 = old 3, new 3 = old 4, new 4 = old 5,
+  new 5 = old 6, new 6 = old 7+8. `config.layers.startLayer` moved from 4 to 3 (the
+  SAME physical layer under the new numbering, so no in-run behaviour changed) and
+  `unlockOrder` was renumbered the same way: `[4,5,3,6,2,7,1,8,0]` -> `[3,4,2,5,1,6,0]`.
+  Every biome's palette shrank from `color0..color8` to `color0..color6`; per the
+  owner's call, each merged layer kept the FIRST old layer's colour (old color1 ->
+  new color1, old color7 -> new color6) and dropped the other half of the pair (old
+  color2, old color8). `tools/smoke-test.cjs`'s layer-gate/layer-selector assertions
+  were updated to the new numbers (start layer 3, first gate unlock 4, selector order
+  "4,3"). The worldflake LORE (land/air % table per layer, and the "layer 8 is the
+  core's asymmetric counterpart" rule) lives in project memory, not here - see
+  `worldflake.md`, updated the same day. **Not done, flagged for the owner:** no
+  in-game text or asset actually changes look/feel per layer yet beyond the biome
+  tint, so this was a pure renumbering + palette-slot removal, not a content pass.
+* 2026-09-06 (c) A cleanup pass over the configs, and the spawn table gains a layer.
+  * **Fixed: every enemy fought with Strike.** main.js built the arena's enemy defs
+    from the bestiary row but copied only the body and the power, so `abilityIds`,
+    `init`, `speed` and `flying` were dropped and each creature fell back to the
+    nameless default. Giving a creature its own ability in the config had no effect
+    in play. The smoke test now compares a bestiary row against the unit the arena
+    actually built.
+  * **Bestiary colours are '#rrggbb' strings**, the spelling the abilities already
+    used. The Settings colour widget remembers which spelling a value had, so
+    editing one never rewrites a file's style (the tile types, biomes and the
+    colours block still hold 0xrrggbb numbers).
+  * **The party's combat stats left config/abilities.js.** A character was written
+    twice: name / icon / hp on the roster in config/units.js, and init / speed /
+    flying / abilities in a UNIT_COMBAT table over in the abilities config. The
+    roster row now carries all of it, exactly as a bestiary row does for a creature,
+    with `party.defaultCombat` as the nameless fallback; `combatStatsFor` moved to
+    config/units.js with the data. The dead `spawnId` / `spawnZone` fields went from
+    the ability factory (nothing has ever read them; summoning will need its own
+    field when it arrives).
+  * **Haste and slow are two statuses, not one signed one.** A single row has one
+    `aiValue`, so it could not be a blessing at one end and a curse at the other -
+    the AI read a speed PENALTY as a gift and handed it to its allies. Each end
+    states its own worth now (haste -6, slow +9), each is authored as a positive
+    magnitude, and `amountSign` is what turns a slow of 2 into speed -2.
+  * **Which groups spawn where is a GRID now**: a row per kind of fight (the three
+    ring bands, the Colonies, the Seed) and a column per layer, in
+    `battle.spawns`. `enemies.bands` keeps only its `maxRing`; `battle.bosses` and
+    `battle.colonies` are gone. Every layer starts with what the old flat lists
+    held, so nothing changed in play until a cell is edited, and an empty cell
+    plays the nearest filled layer of the same row. Edited in **Settings >
+    Encounters > Battles**, which replaces the wall of tick boxes that used to sit
+    on the Units tab: press + for a searchable list of groups, press a group to
+    take it out, list one twice to double its odds.
 
 ## Open questions
 
