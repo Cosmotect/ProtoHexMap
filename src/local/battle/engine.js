@@ -133,7 +133,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       abilityDefs: def.abilityDefs ?? null,
       pos, isEnemy, idx: i, partyIndex: def.partyIndex ?? null,
       startPos: pos, moveLocked: false, done: false, tagTicked: false,
-      stunned: false, shield: false, critBuff: false, haste: 0, summoned: false,
+      status: {}, summoned: false,
     };
   }
   let i = 0;
@@ -172,7 +172,118 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   const unitAt = (k) => sb.units.find((u) => u.hp > 0 && u.pos === k);
   const curP = () => sb.units.find((u) => u.uid === sb.activeUid && !u.isEnemy && u.hp > 0);
   const speedFloor = (u) => Math.min(u.speed, CFG.minSpeed);
-  const effSpeed = (u) => Math.max(speedFloor(u), u.speed + (u.haste || 0), 0);
+  const effSpeed = (u) => Math.max(speedFloor(u), u.speed + statusSum(u, 'speed'), 0);
+
+  // ----- statuses --------------------------------------------------------
+  // Everything about a status lives in the table (config.statuses, written out in
+  // src/config/abilities.js); the code below only knows the SHAPE of a row, never
+  // a particular status. A unit carries a bag:
+  //     u.status = { poison: { turns: 3, charges: 0, amount: 2 }, ... }
+  // `amount` is what the ability handed over through buffX (the table's `amountIs`
+  // names which field it overwrites); undefined means "use the table's own value".
+  const statusDef = (id) => (config.statuses ?? {})[id] ?? null;
+  const carried = (u) => (u && u.status) || null;
+  // One field of one status this unit is carrying, with its own amount folded in.
+  function statusField(u, id, field) {
+    const def = statusDef(id);
+    if (!def || !carried(u) || !u.status[id]) return undefined;
+    const amt = u.status[id].amount;
+    return (def.amountIs === field && typeof amt === 'number') ? amt : def[field];
+  }
+  // Additive fields (speed), multiplicative ones (damageDealt / damageTaken) and
+  // plain switches (blocks, skipsTurn), summed / multiplied over the whole bag.
+  function statusSum(u, field) {
+    let n = 0;
+    for (const id in (carried(u) || {})) { const v = statusField(u, id, field); if (typeof v === 'number') n += v; }
+    return n;
+  }
+  function statusMul(u, field) {
+    let n = 1;
+    for (const id in (carried(u) || {})) { const v = statusField(u, id, field); if (typeof v === 'number') n *= v; }
+    return n;
+  }
+  // The id of the first carried status with this switch on (null = none).
+  function statusWith(u, field) {
+    for (const id in (carried(u) || {})) { if (statusField(u, id, field)) return id; }
+    return null;
+  }
+  // Icon and colour to show: a signed status flips to its `negative` face when the
+  // amount went below zero (haste -> slow), so one row covers both ends.
+  function statusView(u, id) {
+    const def = statusDef(id) || {};
+    const amt = carried(u) && u.status[id] ? u.status[id].amount : undefined;
+    if (def.negative && typeof amt === 'number' && amt < 0) {
+      return { icon: def.negative.icon || def.icon, color: def.negative.color || def.color };
+    }
+    return { icon: def.icon, color: def.color };
+  }
+  // Puts a status on a unit (re-applying refreshes it rather than stacking).
+  // buffX is the ability's number; what it MEANS is the table's business.
+  function applyStatus(st, u, id, buffX) {
+    const def = statusDef(id);
+    if (!def || !u || u.uid === undefined || u.hp <= 0) return;
+    let amount;
+    if (def.amountIs) {
+      const n = Number(buffX);
+      amount = Number.isFinite(n) ? n : def[def.amountIs];
+    }
+    if (!u.status) u.status = {};
+    u.status[id] = { turns: def.turns || 0, charges: def.charges || 0, amount };
+    if (st.sim) (st.rec.applied[u.uid] ??= {})[id] = amount ?? 1;
+    else { const v = statusView(u, id); floater(u.pos, v.icon, v.color); }
+  }
+  function dropStatus(st, u, id, stripped) {
+    if (!carried(u) || !u.status[id]) return;
+    const amount = u.status[id].amount;
+    delete u.status[id];
+    // A status TAKEN OFF a unit matters to the AI as much as one put on: popping a
+    // shield is the whole reason an enemy swings at a shielded target.
+    if (st && st.sim && stripped) (st.rec.stripped[u.uid] ??= {})[id] = amount ?? 1;
+  }
+  // Spends one charge of the statuses this event uses up. `only` limits it to the
+  // one status that actually did the work (the shield that blocked THIS hit).
+  function spendStatus(st, u, event, only) {
+    for (const id of Object.keys(carried(u) || {})) {
+      if (only && id !== only) continue;
+      const def = statusDef(id);
+      if (!def || def.spentOn !== event) continue;
+      const slot = u.status[id];
+      slot.charges = (slot.charges || 1) - 1;
+      if (slot.charges <= 0) dropStatus(st, u, id, true);
+    }
+  }
+  // The start of a unit's own activation: statuses bite, then their clock runs
+  // down. Damage first, so "3 turns of poison" really deals its damage 3 times.
+  // This happens even on a turn the unit is about to lose to a stun.
+  function tickStatuses(u) {
+    if (!carried(u) || u.hp <= 0) return;
+    const st = liveSt();
+    for (const id of Object.keys(u.status)) {
+      const dmg = statusField(u, id, 'tickDamage') || 0;
+      const heal = statusField(u, id, 'tickHeal') || 0;
+      if (dmg > 0) { st.atk = null; sHit(st, u, dmg, statusDef(id).name); }
+      if (heal > 0 && u.hp > 0) sHeal(st, u, heal);
+    }
+    flushDeaths(st);
+    if (u.hp <= 0) return;
+    for (const id of Object.keys(u.status)) {
+      const slot = u.status[id];
+      if (!(slot.turns > 0)) continue;
+      slot.turns -= 1;
+      if (slot.turns <= 0) {
+        const v = statusView(u, id);
+        dropStatus(st, u, id, false);
+        floater(u.pos, v.icon + ' ends', '#7c8aa5');
+      }
+    }
+  }
+  // What the AI thinks a status is worth on a unit: the table's aiValue, flipped
+  // when the amount went negative (a slow is as bad as a haste is good).
+  function statusValue(id, amount) {
+    const def = statusDef(id);
+    if (!def) return 0;
+    return (def.aiValue || 0) * (typeof amount === 'number' && amount < 0 ? -1 : 1);
+  }
   // Bonus ability damage from the unit's world-map power (enemies only in
   // practice: party defs carry no power). partyDamageMod hits party casts.
   const powBonus = (c) => (c && c.power ? Math.round(c.power / (CFG.powerPerDamage || 3)) : 0);
@@ -182,10 +293,13 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   function liveSt() { return { sim: false, units: sb.units, tags: sb.tags, heights: sb.heights, deathQueue: sb.deathQueue, rec: null }; }
   function simSt() {
     return { sim: true,
-      units: sb.units.map((u) => ({ uid: u.uid, isEnemy: u.isEnemy, flying: u.flying, hp: u.hp, maxHp: u.maxHp, pos: u.pos, shield: u.shield, critBuff: u.critBuff, haste: u.haste, stunned: u.stunned, power: u.power })),
+      units: sb.units.map((u) => ({ uid: u.uid, isEnemy: u.isEnemy, flying: u.flying, hp: u.hp, maxHp: u.maxHp, pos: u.pos, power: u.power,
+        // the whole status bag, copied one level deep - forgetting this is what used
+        // to make the AI simulate a board it could not actually see
+        status: Object.fromEntries(Object.entries(u.status || {}).map(([id, v]) => [id, { ...v }])) })),
       tags: Object.fromEntries(Object.entries(sb.tags).map(([k, t]) => [k, { ...t }])),
       heights: { ...sb.heights }, deathQueue: [],
-      rec: { dmg: {}, moved: {}, killed: {}, stun: {}, blocked: {}, tmoved: {}, tkilled: {} } };
+      rec: { dmg: {}, moved: {}, killed: {}, applied: {}, stripped: {}, tmoved: {}, tkilled: {} } };
   }
   const stH = (st, k) => st.heights[k] ?? 0;
   const sUnitAt = (st, k) => st.units.find((u) => u.hp > 0 && u.pos === k);
@@ -197,20 +311,24 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     const atk = st.atk ? st.atk + ' -> ' : '';
     if (v.uid !== undefined) {
       if (v.hp <= 0) return;
-      if (v.shield || (st.shieldUsed && st.shieldUsed.has(v.uid))) {
-        // A blocked hit deals no damage, but it is not a wasted swing: it SPENDS the
-        // shield. The sim records that separately (st.rec.blocked) so the AI can value
-        // it - see aiTurn. Recording it as damage would be a lie; recording nothing at
-        // all is what used to make enemies ignore a shielded unit for the rest of the
-        // fight, and a shield that nobody attacks never expires.
-        if (v.shield) {
-          v.shield = false;
+      // A status that BLOCKS eats the whole hit. That is not a wasted swing: it
+      // spends the status, and the sim records the strip (st.rec.stripped) so the AI
+      // values it - recording nothing at all is what used to make enemies ignore a
+      // shielded unit for the rest of the fight, and a shield nobody attacks never
+      // expires. One charge covers a whole cast (st.shieldUsed), so a wide ability
+      // cannot chew through it with its second tile.
+      const blockId = statusWith(v, 'blocks');
+      if (blockId || (st.shieldUsed && st.shieldUsed.has(v.uid))) {
+        if (blockId) {
           if (st.shieldUsed) st.shieldUsed.add(v.uid);
-          if (st.sim) st.rec.blocked[v.uid] = 1;
-        }
-        if (!st.sim) { floater(v.pos, pre + 'SHIELD', '#5fc7e0'); blog(atk + v.name + ': blocked by shield'); }
+          const view = statusView(v, blockId);
+          spendStatus(st, v, 'hit', blockId);
+          if (!st.sim) { floater(v.pos, pre + view.icon, view.color); blog(atk + v.name + ': blocked'); }
+        } else if (!st.sim) { floater(v.pos, pre + 'BLOCKED', '#5fc7e0'); blog(atk + v.name + ': blocked'); }
         return;
       }
+      // Statuses that change how much damage this unit TAKES (vulnerable, fortified).
+      amt = Math.max(1, Math.round(amt * statusMul(v, 'damageTaken')));
       v.hp = Math.max(0, v.hp - amt);
       if (st.sim) { st.rec.dmg[v.uid] = (st.rec.dmg[v.uid] || 0) + amt; if (v.hp <= 0) st.rec.killed[v.uid] = 1; }
       else {
@@ -237,14 +355,17 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     if (st.sim) st.rec.dmg[v.uid] = (st.rec.dmg[v.uid] || 0) - g;
     else if (g > 0) { floater(v.pos, '+' + g, '#a8e05f'); blog((st.atk ? st.atk + ' -> ' : '') + v.name + ': +' + g); }
   }
+  // Crashes and falls stun; so does any ability with buff: 'stun'. All of them come
+  // through here, and what "stunned" DOES is the table's business, not this line's.
   function sStun(st, v) {
     if (!v || v.uid === undefined || v.hp <= 0) return;
-    v.stunned = true;
-    if (st.sim) { st.rec.stun[v.uid] = 1; return; }
-    floater(v.pos, 'STUN', '#c9a8ff'); blog(v.name + ' is stunned');
+    applyStatus(st, v, 'stun');
+    if (st.sim) return;
+    blog(v.name + ' is stunned');
     // A player unit that still has its turn this round loses THAT turn on the spot.
     if (sb.phase === 'player' && sb.activeUid && !v.isEnemy && !v.done && v.uid !== sb.activeUid) {
-      v.done = true; v.stunned = false;
+      v.done = true;
+      dropStatus(st, v, 'stun', false);
       blog(v.name + ' loses this turn');
     }
   }
@@ -283,9 +404,11 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     if (isU && ent.hp > 0) {
       const c = st.csr;
       const hostile = !c || c.isEnemy === undefined || c.isEnemy !== ent.isEnemy;
-      if (hostile && (ent.shield || (st.shieldUsed && st.shieldUsed.has(ent.uid)))) {
-        if (ent.shield) { ent.shield = false; if (st.shieldUsed) st.shieldUsed.add(ent.uid); }
-        if (!st.sim) { floater(ent.pos, 'SHIELD', '#5fc7e0'); blog((st.atk ? st.atk + ' -> ' : '') + ent.name + ': push blocked by shield'); }
+      const pushBlockId = hostile ? statusWith(ent, 'blocks') : null;
+      if (hostile && (pushBlockId || (st.shieldUsed && st.shieldUsed.has(ent.uid)))) {
+        const view = pushBlockId ? statusView(ent, pushBlockId) : { icon: 'BLOCKED', color: '#5fc7e0' };
+        if (pushBlockId) { if (st.shieldUsed) st.shieldUsed.add(ent.uid); spendStatus(st, ent, 'hit', pushBlockId); }
+        if (!st.sim) { floater(ent.pos, view.icon, view.color); blog((st.atk ? st.atk + ' -> ' : '') + ent.name + ': push blocked'); }
         return;
       }
     }
@@ -354,8 +477,12 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     const preAlive = new Set();
     for (const u of st.units) if (u.hp > 0) preAlive.add(u.uid);
     // 1 - damage / heal / statuses
-    const critAll = caster.critBuff && ab.damage > 0;
-    if (critAll) caster.critBuff = false;
+    // How hard this caster hits right now: every status it carries with a
+    // damageDealt multiplier, folded together. Read BEFORE the cast spends any of
+    // them, so a one-shot buff applies to the whole cast and not just its first tile.
+    const dealtMul = ab.damage > 0 ? statusMul(caster, 'damageDealt') : 1;
+    const dealtLabel = dealtMul > 1 ? 'CRIT' : dealtMul < 1 ? 'WEAK' : '';
+    if (ab.damage > 0) spendStatus(st, caster, 'attack');
     for (const off of ab.dmgZone) {
       const dt = addK(targetK, rotOff(off, rk)); if (!tilePass(dt)) continue;
       const u = sUnitAt(st, dt), bt = sBarrier(st, dt);
@@ -367,20 +494,17 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
           const hd = stH(st, caster.pos) - stH(st, dt);
           if (hd >= 2 && CFG.highBonus > 0) { dmg += CFG.highBonus; lbl = 'HIGH'; }
           else if (hd <= -2 && CFG.lowPenalty > 0) { dmg = Math.max(0, dmg - CFG.lowPenalty); lbl = 'LOW'; }
-          if (critAll) { dmg *= 2; lbl = (lbl ? lbl + ' ' : '') + 'CRIT'; }
+          if (dealtMul !== 1) { dmg = Math.max(0, Math.round(dmg * dealtMul)); lbl = (lbl ? lbl + ' ' : '') + dealtLabel; }
         }
         if (dmg > 0) sHit(st, tgt, dmg, lbl, '✸ ');
         else if (!st.sim) floater(dt, '✸ 0 ' + lbl, '#9aa7bd');
       } else if (!st.sim) floater(dt, '✸', ab.color);
       if (u && u.hp > 0) {
         if (ab.heal > 0) sHeal(st, u, ab.heal);
-        if (ab.buff === 'shield') { u.shield = true; if (!st.sim) floater(dt, '🛡', '#5fc7e0'); }
-        if (ab.buff === 'crit') { u.critBuff = true; if (!st.sim) floater(dt, '⚡', '#ffd75f'); }
+        // ONE line for every status there is or ever will be: the ability names one
+        // (buff) and hands over a number (buffX), and the table decides the rest.
         if (ab.buff === 'stun') sStun(st, u);
-        if (ab.buff === 'haste') {
-          const dx = Math.max(-99, Math.min(99, Math.round(+ab.buffX || 0)));
-          if (dx) { u.haste = dx; if (!st.sim) floater(dt, (dx > 0 ? '💨 +' : '🐌 ') + dx, dx > 0 ? '#a8e05f' : '#c9a8ff'); }
-        }
+        else if (ab.buff && statusDef(ab.buff)) applyStatus(st, u, ab.buff, ab.buffX);
       }
     }
     flushDeaths(st, depth);
@@ -519,14 +643,11 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     if (!t || !t.collectible || !t.passPickup || t.hp > 0) return false;
     const st = liveSt(); sArrive(st, u); flushDeaths(st);
     emit();
-    return u.hp <= 0 || u.stunned || u.pos !== k;
+    return u.hp <= 0 || !!statusWith(u, 'skipsTurn') || u.pos !== k;
   }
   // Hands the walk to the view: it animates and reports each tile entered.
   function animateMove(u, path, done) {
     if (!path || path.length < 2) { if (path && path.length) u.pos = path[path.length - 1]; done && done(); return; }
-    // Haste burns on a real move - but only for enemies: the player repositions
-    // freely, so their haste holds until the phase ends.
-    if (u.isEnemy && u.haste) u.haste = 0;
     sb.busy = true;
     const anim = {
       u, path: u.flying ? [path[0], path[path.length - 1]] : path, fly: u.flying,
@@ -587,10 +708,17 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     for (const u of sb.units) if (!u.isEnemy && u.hp > 0) {
       u.done = false; u.moveLocked = false; u.startPos = u.pos; u.tagTicked = false;
     }
-    for (const u of sb.units) if (!u.isEnemy && u.hp > 0) { u.tagTicked = true; tagTick(u); }
+    for (const u of sb.units) if (!u.isEnemy && u.hp > 0) { u.tagTicked = true; tickStatuses(u); tagTick(u); }
     if (checkEnd()) return;
-    for (const u of sb.units) if (!u.isEnemy && u.hp > 0 && u.stunned) {
-      u.stunned = false; u.done = true; floater(u.pos, 'STUNNED', '#c9a8ff');
+    // Anything that makes a unit skip its turn spends itself doing exactly that.
+    for (const u of sb.units) {
+      if (u.isEnemy || u.hp <= 0) continue;
+      const id = statusWith(u, 'skipsTurn');
+      if (!id) continue;
+      const view = statusView(u, id);
+      spendStatus(liveSt(), u, 'activation', id);
+      u.done = true;
+      floater(u.pos, view.icon, view.color);
     }
     const first = sb.units.find((u) => !u.isEnemy && u.hp > 0 && !u.done);
     if (first) select(first); else { emit(); startEnemyPhase(); }
@@ -652,7 +780,8 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   }
   // A unit that can no longer act (killed or stunned by a trap mid-walk).
   function retireUnit(u) {
-    if (u.stunned) u.stunned = false;
+    const skipId = statusWith(u, 'skipsTurn');
+    if (skipId) dropStatus(liveSt(), u, skipId, false);
     u.done = true;
     if (sb.over) return;
     const next = sb.units.find((x) => !x.isEnemy && x.hp > 0 && !x.done);
@@ -673,8 +802,16 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     const e = sb.enemyQ[sb.eqi];
     if (e.hp <= 0) { stepEnemy(); return; }
     sb.activeUid = e.uid; emit();
-    if (e.stunned) {
-      e.stunned = false; floater(e.pos, 'STUNNED', '#c9a8ff');
+    // Statuses bite and count down at the start of the activation, whether or not
+    // the unit gets to act; then anything that skips the turn spends itself.
+    tickStatuses(e);
+    if (checkEnd()) return;
+    if (e.hp <= 0) { emit(); wait(stepEnemy, 500); return; }
+    const skipId = statusWith(e, 'skipsTurn');
+    if (skipId) {
+      const view = statusView(e, skipId);
+      spendStatus(liveSt(), e, 'activation', skipId);
+      floater(e.pos, view.icon, view.color);
       sb.busy = true; wait(() => { sb.busy = false; stepEnemy(); }, 650); return;
     }
     tagTick(e);
@@ -806,7 +943,11 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     let best = null;
     for (const abId of e.abilityIds) {
       const ab = abFor(e, abId); if (!ab) continue;
-      if (!(ab.damage > 0 || ab.heal > 0 || ab.pushZone.length || ab.tagId || ab.hZone.length)) continue;
+      // What counts as an ability worth thinking about. `ab.buff` is on this list
+      // since 2026-09-05: without it a pure status ability (Guard, or anything a
+      // designer invents in the status table) was thrown away before it was ever
+      // scored, so enemies carrying Guard never once used it.
+      if (!(ab.damage > 0 || ab.heal > 0 || ab.buff || ab.pushZone.length || ab.tagId || ab.hZone.length)) continue;
       for (const startK of Object.keys(res.d)) {
         if (startK !== e.pos && !canStop(res, startK)) continue;
         if (ab.castAny && startK !== e.pos) continue;
@@ -819,14 +960,17 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
           se.pos = startK;
           resolveCast(st, se, ab, t);
           let score = 0;
-          const strip = CFG.shieldStripScore ?? 14;
           for (const u of st.units) {
             const d = st.rec.dmg[u.uid] || 0;
-            const blocked = st.rec.blocked[u.uid] ? 1 : 0;
-            // Stripping a party shield is worth something (it opens the unit up next
-            // turn); stripping an ALLY's shield is worth the same as a loss.
-            if (!u.isEnemy) score += d * 10 + (st.rec.killed[u.uid] ? 45 : 0) + (st.rec.stun[u.uid] ? 12 : 0) + blocked * strip;
-            else score -= d * 9 + (st.rec.killed[u.uid] ? 40 : 0) + (st.rec.stun[u.uid] ? 10 : 0) + blocked * strip;
+            // Statuses are scored straight from the table (aiValue = how BAD it is to
+            // carry), so a status invented in config is understood here on its own:
+            // landing a bad one on the party is good, landing it on an ally is bad,
+            // and stripping one off is worth exactly its opposite.
+            let sv = 0;
+            for (const [id, amt] of Object.entries(st.rec.applied[u.uid] || {})) sv += statusValue(id, amt);
+            for (const [id, amt] of Object.entries(st.rec.stripped[u.uid] || {})) sv -= statusValue(id, amt);
+            if (!u.isEnemy) score += d * 10 + (st.rec.killed[u.uid] ? 45 : 0) + sv;
+            else score -= d * 9 + (st.rec.killed[u.uid] ? 40 : 0) + sv;
           }
           if (score > 0 && (!best || score > best.score || (score === best.score && res.d[startK] < best.cost)))
             best = { ab, startK, t, score, cost: res.d[startK] };
@@ -840,8 +984,10 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
         emit();
         wait(() => {
           if (sb.over) { sb.busy = false; return; }
-          if (e.hp <= 0 || e.stunned || e.pos !== best.startK) {
-            if (e.hp > 0 && e.stunned) floater(e.pos, 'STUNNED', '#c9a8ff');
+          // A trap on the way may have killed it, stopped it short or stunned it.
+          const hitId = statusWith(e, 'skipsTurn');
+          if (e.hp <= 0 || hitId || e.pos !== best.startK) {
+            if (e.hp > 0 && hitId) { const v = statusView(e, hitId); floater(e.pos, v.icon, v.color); }
             emit();
             wait(() => { sb.busy = false; if (!checkEnd()) stepEnemy(); }, 450);
             return;
@@ -920,7 +1066,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
           sb.busy = false;
           sArrive(liveSt(), c); flushDeaths(liveSt());
           if (checkEnd()) return;
-          if (c.hp <= 0 || c.stunned) { retireUnit(c); return; }
+          if (c.hp <= 0 || statusWith(c, 'skipsTurn')) { retireUnit(c); return; }
           refreshReach();
           emit();
         });

@@ -1,42 +1,48 @@
-// The statuses ("buffs") a unit can carry, in the order they are shown.
+// The statuses ("buffs") a unit can carry, as the interface sees them.
 //
-// This lives on its own because TWO places draw the same badges from it: the
-// plaque over a unit's head (src/local/localview.js, on a canvas) and the enemy
-// card in the Local Map Info panel (src/ui.js, in HTML). One table, so a status
-// can never mean one thing in the arena and another in the panel.
+// This file no longer decides anything: the statuses themselves live in the
+// combat config (`STATUSES` in src/config/abilities.js), which is also what the
+// battle engine reads. TWO places draw the same badges from here - the plaque
+// over a unit's head (src/local/localview.js, on a canvas) and the unit card in
+// the panel (src/ui.js, in HTML) - so a status can never mean one thing in the
+// arena and another in the panel.
 //
-// `turnsOf` reads a remaining-turns count IF the engine has one for that status
-// - none of today's do (a shield is spent by the next hit, a stun by the next
-// activation), so no number is drawn. The moment durations exist, put them on
-// the unit as `statusTurns[<id>]` and the badge starts counting on its own.
-// `amount` is the status's magnitude where it has one (haste is +N / -N speed).
-export const STATUSES = [
-  { id: 'shield', icon: '🛡', on: (u) => !!u.shield },
-  { id: 'crit', icon: '⚡', on: (u) => !!u.critBuff },
-  { id: 'stun', icon: '💫', on: (u) => !!u.stunned },
-  { id: 'haste', icon: '💨', on: (u) => (u.haste ?? 0) > 0, amount: (u) => u.haste },
-  { id: 'slow', icon: '🐌', on: (u) => (u.haste ?? 0) < 0, amount: (u) => u.haste },
-];
+// A unit carries `unit.status = { <id>: { turns, charges, amount } }`. `amount`
+// is what the ability that applied it handed over (the table's `amountIs` names
+// which of the status's own fields it replaces); the badge shows it where the
+// locale text asks for {n}.
+import { STATUSES } from './config/abilities.js';
 
-// What one unit is carrying right now: [{ id, icon, turns, amount }].
+// What one unit is carrying right now: [{ id, icon, color, turns, amount }], in
+// the order the table lists them so the badges never jump around.
 export function statusesFor(unit) {
-  if (!unit) return [];
+  if (!unit || !unit.status) return [];
   const out = [];
-  for (const st of STATUSES) {
-    if (!st.on(unit)) continue;
+  for (const [id, def] of Object.entries(STATUSES)) {
+    const slot = unit.status[id];
+    if (!slot) continue;
+    const amount = slot.amount !== undefined ? slot.amount : (def.amountIs ? def[def.amountIs] : null);
+    // A signed status wears its other face when the amount went negative: the
+    // same row is both "hastened" and "slowed", with its own icon and texts.
+    const neg = !!(def.negative && typeof amount === 'number' && amount < 0);
     out.push({
-      id: st.id,
-      icon: st.icon,
-      turns: Number(unit.statusTurns?.[st.id]) || 0,
-      amount: st.amount ? st.amount(unit) : null,
+      id: neg ? (def.negative.id || id) : id,
+      icon: neg ? (def.negative.icon || def.icon) : def.icon,
+      color: neg ? (def.negative.color || def.color) : def.color,
+      turns: Number(slot.turns) || 0,
+      charges: Number(slot.charges) || 0,
+      amount: def.amountIs ? amount : null,
     });
   }
   return out;
 }
 
-// The number that goes in a badge's corner, as text ('' = draw no number).
-// A status without a real duration gets nothing: inventing one would be a lie
-// about the rules.
+// The number in a badge's corner, as text ('' = draw no number). A status with a
+// clock shows the turns it has left; one that is spent by use shows how many uses
+// are left, but only when there is more than one (a plain shield stays a plain
+// shield). Nothing is invented: a status with neither shows nothing.
 export function badgeNumber(hs) {
-  return hs.turns > 0 ? String(hs.turns) : '';
+  if (hs.turns > 0) return String(hs.turns);
+  if (hs.charges > 1) return String(hs.charges);
+  return '';
 }

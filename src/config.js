@@ -8,6 +8,7 @@
 //    config/world.js       map shape, tile types, biomes, generation noise
 //    config/encounters.js  encounter placement, the Stasis, rest / shop / treasure / events, fatigue
 //    config/units.js       the party and the battle simulation
+//    config/abilities.js   the arena: combat rules, abilities, statuses, tile tags
 //    config.js (this one)  run rules, camera, animation, colours, and the glue
 //  The rest of the code always reads CONFIG.<section>, so moving a section between
 //  files never changes any other code.
@@ -15,11 +16,16 @@
 import { WORLD } from './config/world.js';
 import { ENCOUNTERS } from './config/encounters.js';
 import { UNITS } from './config/units.js';
+import { COMBAT_CONFIG } from './config/abilities.js';
 
 export const CONFIG = {
   ...WORLD,
   ...ENCOUNTERS,
   ...UNITS,
+  // The arena's own rules and its status table (src/config/abilities.js). Folded in
+  // here so they sit in the Settings window with everything else - the objects are
+  // shared, not copied, so an edit reaches the combat engine straight away.
+  ...COMBAT_CONFIG,
 
   // ----- Run rules ---------------------------------------------------
   run: {

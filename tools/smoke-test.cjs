@@ -180,6 +180,43 @@ fs.mkdirSync(OUT, { recursive: true });
   if (engineState.units !== 4) problems.push(`expected 3 party + 1 enemy in the engine, got ${engineState.units}`);
   if (!engineState.wave) problems.push('battle arena has no elevation wave (all tiles flat)');
   if (!engineState.abilities) problems.push('some combat units have no abilities');
+  // ----- the status table (config.statuses) ---------------------------------
+  // Statuses are data now: the engine, the badges and the Settings window all read
+  // the same table. Check it arrived, that it still describes the four originals,
+  // and that a status put on a unit reaches the panel as a badge.
+  const statusWiring = await page.evaluate(() => {
+    const table = window.game.config.statuses || {};
+    const b = window.__battle;
+    const u = b.state.units.find((x) => !x.isEnemy && x.hp > 0);
+    u.status.shield = { turns: 0, charges: 1, amount: 1 };
+    u.status.poison = { turns: 3, charges: 0, amount: 2 };
+    return {
+      ids: Object.keys(table),
+      shieldBlocks: table.shield && table.shield.blocks === true,
+      stunSkips: table.stun && table.stun.skipsTurn === true,
+      poisonTicks: table.poison && table.poison.tickDamage > 0,
+    };
+  });
+  for (const id of ['shield', 'crit', 'stun', 'haste']) {
+    if (!statusWiring.ids.includes(id)) problems.push(`the status table lost "${id}": ${statusWiring.ids.join(', ')}`);
+  }
+  if (!statusWiring.shieldBlocks || !statusWiring.stunSkips || !statusWiring.poisonTicks) {
+    problems.push('the status table does not describe its own statuses: ' + JSON.stringify(statusWiring));
+  }
+  // Force the panel to redraw (inspect/cancel both emit) and count the chips.
+  await page.evaluate(() => { const b = window.__battle; b.inspect(b.state.units.find((x) => x.isEnemy).uid); b.cancel(); });
+  await page.waitForTimeout(250);
+  const badges = await page.evaluate(() => {
+    const u = window.__battle.state.units.find((x) => !x.isEnemy && x.hp > 0);
+    const cards = [...document.querySelectorAll('#party-units .unit')];
+    const card = cards[u.partyIndex] || cards[0];
+    return card ? card.querySelectorAll(".u-st:not(.empty)").length : -1;
+  });
+  if (badges !== 2) problems.push(`a unit carrying two statuses shows ${badges} badges in the party panel`);
+  await page.evaluate(() => {
+    const u = window.__battle.state.units.find((x) => !x.isEnemy && x.hp > 0);
+    delete u.status.shield; delete u.status.poison;
+  });
   await page.screenshot({ path: path.join(OUT, '01e-battle-engine.png') });
   await page.evaluate(() => window.__battle.debugResolve(true));
   await page.waitForFunction(() => !document.getElementById('dialog').classList.contains('hidden'), null, { timeout: 25000 });
@@ -362,7 +399,10 @@ fs.mkdirSync(OUT, { recursive: true });
     g.startCombat(hex, false);
   });
   await page.waitForFunction(() => window.__cinematic.mode() === 'local', null, { timeout: 30000 });
-  await page.waitForTimeout(300);
+  // Wait for the placement step to actually OPEN rather than sleeping a fixed
+  // moment: on a loaded machine it opens late, and everything below then reads a
+  // deployment that is not there yet (it used to crash on v.deploy.index).
+  await page.waitForFunction(() => !!(window.__localView && window.__localView.deploy) || !!window.__battle, null, { timeout: 30000 }).catch(() => {});
   const deployOpen = await page.evaluate(() => {
     const v = window.__localView;
     v.hoverKey = '0,0';                 // the icon decal follows the cursor

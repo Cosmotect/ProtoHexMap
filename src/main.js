@@ -292,7 +292,9 @@ function beginInteractiveBattle(ctx, placementOverride = null) {
   }
   lastDeathSpots = [];
   battle = createBattle({
-    config: COMBAT_CONFIG,
+    // CONFIG, not COMBAT_CONFIG: the same combat block and status table, but reached
+    // through the object the Settings window edits, so a tweak applies to the next fight.
+    config: CONFIG,
     // The arena's ACTUAL radius: a handcrafted map may be smaller or larger
     // than the default (the recipe's radius wins in generateLocalMap).
     radius: view.map?.radius ?? CONFIG.local.radius,

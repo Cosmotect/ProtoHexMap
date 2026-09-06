@@ -55,13 +55,13 @@ const BATTLE_OWNED = new Set(['enemyTypes', 'enemyGroups', 'enemies', 'bosses', 
 const TABS = [
   { id: 'world', sections: ['map', 'worldBackground', 'localBackground', 'noise', 'tileTypes', 'biomes'] },
   { id: 'encounters', sections: ['encounters', 'stasis', 'rest', 'acolyte', 'shop', 'treasure', 'events', 'fatigue'] },
-  { id: 'units', sections: ['party', 'battle'] },
+  { id: 'units', sections: ['party', 'battle', 'combat', 'statuses'] },
   { id: 'general', sections: ['run', 'camera', 'local', 'anim', 'fatigueBar', 'colors'] },
   { id: 'audio', sections: ['audio'] },
 ];
 
 // Keys that are not meant to be edited by hand (visual placeholders, long texts).
-const SKIP_KEYS = new Set(['shape', 'info', 'flavour', 'names', 'icon']);
+const SKIP_KEYS = new Set(['shape', 'info', 'flavour', 'names', 'icon', 'negative']);
 
 // Sections shown as one table (rows = entries, columns = attributes) instead of
 // one group per entry, so an attribute name is written once rather than repeated
@@ -69,7 +69,7 @@ const SKIP_KEYS = new Set(['shape', 'info', 'flavour', 'names', 'icon']);
 // containing one lays its sections out on a GRID (where a section can be told to
 // span several columns) instead of the CSS multi-column flow the other tabs use -
 // see `has-matrix` in render() and style.css.
-const MATRIX_SECTIONS = new Set(['tileTypes', 'biomes']);
+const MATRIX_SECTIONS = new Set(['tileTypes', 'biomes', 'statuses']);
 
 export function createSettings({ config, defaults, onChange, getUiScale, onSetUiScale, getShowLog, onSetShowLog, onClose }) {
   const $ = (id) => document.getElementById(id);

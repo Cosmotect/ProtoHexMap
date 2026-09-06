@@ -24,11 +24,9 @@ export const COMBAT_CONFIG = {
     lowPenalty: 1,      // damage removed when attacking from 2+ levels below
     voidEdges: false,   // true = shoves over the map edge kill instead of crashing
     powerPerDamage: 3,  // +1 ability damage per this much of the unit's world-map power
-    // What the enemy AI thinks POPPING A SHIELD is worth, in its own scoring units
-    // (a point of damage is worth 10, a kill 45, a stun 12). Without this the AI
-    // scored a blocked hit as zero, refused to swing at a shielded unit at all, and
-    // the shield - which only ever expires by blocking something - stayed up forever.
-    shieldStripScore: 14,
+    // (What popping a shield is worth to the enemy AI used to live here as
+    // `shieldStripScore`. It moved into the shield's own row in the status table
+    // below, as `aiValue`, so every status carries its own worth in one place.)
     // ----- the retreat rule (stops a decided fight from being dragged out) -----
     // A beaten enemy side starts to break. From the round AFTER `afterRound`, on
     // every enemy's turn, while the enemy side's remaining HP is under `hpFraction`
@@ -74,6 +72,158 @@ export const ABILITIES = {
   mend: A({ name: 'Mend', icon: '💫', color: '#a8e05f', heal: 4, castZone: ringOffsets(0, 1), dmgZone: [[0, 0]] }),
   guard: A({ name: 'Guard', icon: '🛡️', color: '#5fc7e0', buff: 'shield', castZone: ringOffsets(0, 1), dmgZone: [[0, 0]] }),
 };
+
+// ----- Statuses ("buffs") ----------------------------------------------
+//  THE POINT OF THIS TABLE: a status used to be four hand-written fields on a
+//  unit plus a branch of engine code each, which meant every new one - even a
+//  plain "2 damage a turn for 3 turns" - was surgery in six places, two of them
+//  silent (the AI's scoring and the AI's simulation copy). Everything below is
+//  built out of verbs the engine ALREADY performs, so a status made of these is
+//  a row here and nothing else: no engine change, and the enemy AI understands
+//  it on its own. A status that needs a verb this list does not have still needs
+//  engine work - but then the VERB is added once and every later status can use
+//  it, instead of each status carrying its own code.
+//
+//  ----- what each building block does, exactly -----
+//  EFFECTS (all optional; a status may combine several):
+//    speed        added to the carrier's move points, signed. Negative = a slow.
+//                 The floor at combat.minSpeed still applies, so a slow can never
+//                 pin a unit in place. Read in effSpeed().
+//    damageDealt  MULTIPLIER on damage the carrier deals (1 = no change, 2 =
+//                 double, 0.5 = half). Applied where an ability's damage is
+//                 computed, after the height bonus and the power bonus.
+//    damageTaken  MULTIPLIER on damage the carrier receives. Applied in sHit(),
+//                 so it covers ability damage, tile tags and crash damage alike.
+//    blocks       true = the carrier ignores an incoming hit ENTIRELY (and a
+//                 hostile push). One charge is spent per event blocked; within a
+//                 single cast one charge covers the whole cast, so a wide
+//                 ability cannot chew through a shield with its second tile.
+//    skipsTurn    true = the carrier does not act on its activation. One charge
+//                 is spent doing that.
+//    tickDamage   damage dealt to the carrier at the start of its activation.
+//    tickHeal     healing given to the carrier at the start of its activation.
+//                 Both tick at exactly the same moment as a tile tag does.
+//
+//  LIFETIME (how the status ends - a status with neither simply never expires):
+//    turns        how many of the carrier's own activations it survives. Counted
+//                 down at the start of each of them, AFTER the tick damage /
+//                 heal, so "3 turns of poison" deals its damage three times.
+//                 0 = no clock.
+//    charges      how many times it may be spent before it ends (see spentOn).
+//    spentOn      what spends a charge: 'hit' (something was blocked / taken),
+//                 'attack' (the carrier cast a damaging ability), 'activation'
+//                 (the carrier's turn came up). '' = nothing spends it, only the
+//                 turn clock can end it.
+//
+//  WHAT buffX MEANS (this was impossible to tell from the ability table before):
+//    amountIs     names the ONE field of this status that an ability's `buffX`
+//                 overwrites when it applies the status. '' = buffX is ignored
+//                 for this status, whatever the ability says.
+//                 So with the table below: on `guard` (buff: 'shield') buffX is
+//                 the number of hits absorbed; on a 'crit' ability buffX is the
+//                 damage multiplier; on a 'haste' ability buffX is the speed
+//                 change (negative slows); on a 'stun' ability buffX does
+//                 nothing at all. The number an ability actually applied is
+//                 remembered per unit, so two sources of the same status do not
+//                 have to agree.
+//
+//  THE ENEMY AI:
+//    aiValue      how BAD carrying this status is, in the AI's own scoring units
+//                 (a point of damage is 10, a kill 45). Positive = bad for
+//                 whoever carries it, so the AI will try to inflict it on the
+//                 party and avoid inflicting it on its own side; negative = a
+//                 good thing to carry, so the AI hands it to allies and values
+//                 stripping it off a party unit. Nothing else has to be taught:
+//                 the AI already plays every candidate cast out on a copy of the
+//                 board, so a status added here is scored from the next fight on.
+//                 A status whose amount comes out negative (a slow) has its
+//                 value flipped automatically - the same field covers both ends.
+//
+//  DISPLAY: `name` / `icon` / `color` are the fallback; the badge over a unit's
+//  head and the card in the panel look for the locale keys status.<id>.name and
+//  status.<id>.desc first ({n} is filled with the amount). `negative` gives a
+//  signed status its own id, icon and texts for the negative end (haste -> slow).
+const S = (o) => Object.assign({
+  name: 'Status', icon: '⭐', color: '#9aa7bd',
+  speed: 0, damageDealt: 1, damageTaken: 1, blocks: false, skipsTurn: false,
+  tickDamage: 0, tickHeal: 0,
+  turns: 0, charges: 0, spentOn: '',
+  amountIs: '', aiValue: 0, negative: null,
+}, o);
+
+export const STATUSES = {
+  // The four that already existed, written out in the vocabulary above. Their
+  // behaviour is unchanged - this is the same shield, crit, stun and haste.
+  shield: S({
+    name: 'Shield', icon: '🛡', color: '#5fc7e0',
+    blocks: true, charges: 1, spentOn: 'hit',
+    amountIs: 'charges',   // buffX = how many hits it absorbs
+    aiValue: -14,          // good to carry: the AI guards its allies and pops the party's
+  }),
+  crit: S({
+    name: 'Charged', icon: '⚡', color: '#ffd75f',
+    damageDealt: 2, charges: 1, spentOn: 'attack',
+    amountIs: 'damageDealt',   // buffX = the multiplier (3 = triple)
+    aiValue: -10,
+  }),
+  stun: S({
+    name: 'Stunned', icon: '💫', color: '#c9a8ff',
+    skipsTurn: true, charges: 1, spentOn: 'activation',
+    amountIs: '',          // buffX does nothing here
+    aiValue: 12,           // bad to carry: worth about a point of damage more than one
+  }),
+  haste: S({
+    name: 'Hastened', icon: '💨', color: '#a8e05f',
+    speed: 1, turns: 2,
+    amountIs: 'speed',     // buffX = the speed change; negative is a slow
+    aiValue: -6,
+    negative: { id: 'slow', icon: '🐌', color: '#c9a8ff' },
+  }),
+  // Nothing below is applied by any ability yet - they are here as worked
+  // examples of what the vocabulary buys, and as content to switch on when a
+  // fight needs more to think about. Give an ability `buff: 'poison'` and it
+  // works; no engine change is involved.
+  poison: S({
+    name: 'Poisoned', icon: '🧪', color: '#8fd14f',
+    tickDamage: 2, turns: 3,
+    amountIs: 'tickDamage',   // buffX = damage per turn
+    aiValue: 20,              // three ticks of 2, valued a little under the 60 they cost
+  }),
+  regen: S({
+    name: 'Mending', icon: '🌿', color: '#a8e05f',
+    tickHeal: 2, turns: 3,
+    amountIs: 'tickHeal',
+    aiValue: -18,
+  }),
+  weaken: S({
+    name: 'Weakened', icon: '🥀', color: '#b58fd1',
+    damageDealt: 0.5, turns: 2,
+    amountIs: 'damageDealt',
+    aiValue: 16,
+  }),
+  expose: S({
+    name: 'Exposed', icon: '🎯', color: '#e2474b',
+    damageTaken: 1.5, turns: 2,
+    amountIs: 'damageTaken',
+    aiValue: 18,
+  }),
+};
+
+// The table is part of the combat config as well, so the Settings window can edit
+// it at runtime. Same object, not a copy: the engine reads config.statuses and the
+// UI imports STATUSES, and both see an edit the moment it is made.
+COMBAT_CONFIG.statuses = STATUSES;
+
+export const statusById = (id) => STATUSES[id] ?? null;
+// The amount an ability hands a status: its buffX where the status takes one,
+// otherwise the status's own default for that field.
+export function statusAmount(id, buffX) {
+  const def = STATUSES[id];
+  if (!def) return 0;
+  if (!def.amountIs) return 0;
+  const n = Number(buffX);
+  return Number.isFinite(n) && buffX !== undefined && buffX !== null ? n : def[def.amountIs];
+}
 
 // ----- Tile tags -------------------------------------------------------
 const T = (o) => Object.assign({

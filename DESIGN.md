@@ -229,6 +229,28 @@ balance must be re-measured against interactive play.
     blocked hit deals no damage: without it the AI scored such a swing as worthless,
     refused to attack a shielded unit at all, and since a shield only ever expires by
     blocking something, it stayed up for the rest of the fight (fixed 2026-09-02).
+  * **Statuses are a TABLE, not code** (`config.statuses`, written out in
+    src/config/abilities.js; since 2026-09-05). A unit carries a bag,
+    `u.status = { <id>: { turns, charges, amount } }`, and the engine only knows the
+    shape of a table row, never a particular status. A row is built out of verbs the
+    engine already performs - `speed` (added to move points, signed), `damageDealt` /
+    `damageTaken` (multipliers), `blocks` (eats a whole hit or hostile push),
+    `skipsTurn`, `tickDamage` / `tickHeal` (at the start of the carrier's activation)
+    - and ends by a clock (`turns`, counted down after the tick) or by use
+    (`charges` + `spentOn`: 'hit' / 'attack' / 'activation'). `amountIs` names the
+    one field an ability's `buffX` overwrites, which is what makes buffX readable at
+    last: on Guard it is the number of hits absorbed, on a crit the multiplier, on a
+    haste the speed change (negative = a slow), on a stun nothing. `aiValue` is how
+    BAD the status is to carry, in the AI's own units (a point of damage is 10, a
+    kill 45): the AI already plays every cast out on a copy of the board, so a status
+    added to the table is understood, inflicted and avoided from the next fight on,
+    with no AI change - the exact hole that made enemies ignore shielded units.
+    The four originals (shield, crit, stun, haste/slow) are written in this
+    vocabulary and behave exactly as before; poison, regen, weaken and expose ship
+    as worked examples, applied by nothing yet. A status needing a verb the list
+    lacks still needs engine work, but then the VERB is added once and every later
+    status can use it. The badges (src/status.js), the arena plaque, the party panel
+    and the Settings window all read this one table.
   * **Shared rules**: an uphill step costs 2 movement, flyers glide over anything;
     attacking from 2+ levels above adds `highBonus` (1) damage, from 2+ below loses
     `lowPenalty` (1); a shield blocks one hit or push; stun skips the unit's next
@@ -489,6 +511,19 @@ stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }
   purpose - it is the same rot on every layer. Owner's config calls: the layer gate
   weight up to 1 (from 0.03), both void floors to -5, world fogNear 20, water
   #23479c, camera follow off, and a repaint of the layer 4 / 5 biome palettes.
+* 2026-09-05 **Statuses turned into config** (see the table bullet above). The four
+  hardcoded fields on a unit (shield / critBuff / stunned / haste) became one bag
+  driven by `config.statuses`; durations exist for the first time (nothing had a
+  clock before - a shield was spent by a hit, a stun by an activation, and that was
+  the whole system); `shieldStripScore` retired into the shield row's `aiValue`, so
+  every status carries its own worth in one place. Two things fell out of it:
+  `COMBAT_CONFIG` is now folded into `CONFIG`, so the arena's combat rules and the
+  status table are editable in Settings > Units like everything else and the engine
+  is handed the live object; and the enemy AI's candidate filter gained `ab.buff`,
+  which fixed a quiet old bug - an ability that only applies a status (Guard) was
+  thrown away before it was ever scored, so **enemies carrying Guard had never once
+  used it**. Verified by A/B in the engine (each of the four originals measured
+  against a control run) and by a new browser check on the table and the badges.
 
 ## Open questions
 
