@@ -152,14 +152,6 @@ export const ABILITIES = {
 //    The numbers an ability actually applied are remembered per unit, so two
 //    sources of the same status do not have to agree.
 //
-//    (Until 2026-09-07 a status named ONE field for buffX to overwrite, and
-//    carried a sign field to store a magnitude negatively. Both are gone: which
-//    field is being modulated is already implied by the status's own verbs, a
-//    second field could not be reached at all, and a sign field is a negative
-//    number written the long way round. `enraged` had been authored pointing at
-//    the speed of a status that changes no speed - the kind of mistake the old
-//    shape invited and this one cannot express.)
-//
 //  THE ENEMY AI:
 //    aiValue      how BAD carrying this status is, in the AI's own scoring units
 //                 (a point of damage is 10, a kill 45). Positive = bad for
@@ -231,12 +223,6 @@ export const STATUSES = {
     skipsTurn: true, charges: 1, spentOn: 'activation',
     aiValue: 12,           // bad to carry: worth about a point of damage more than one
   }),
-  // Haste and slow are TWO statuses, not one signed one. A single row cannot say
-  // what it is worth: the same aiValue would have to mean "good to carry" at one
-  // end and "bad to carry" at the other, and the AI read a speed PENALTY as a
-  // blessing worth handing to its allies. Each end now states its own worth, and
-  // each writes its own number as it is meant (slow is speed -1, and an ability
-  // that wants a harder slow says buffX: [-2]).
   haste: S({
     name: 'Hastened', icon: '💨', color: '#a8e05f',
     speed: 1, turns: 2,
@@ -247,10 +233,6 @@ export const STATUSES = {
     speed: -1, turns: 2,
     aiValue: 9,            // bad to carry - and worth more than haste is worth giving
   }),
-  // Nothing below is applied by any ability yet - they are here as worked
-  // examples of what the vocabulary buys, and as content to switch on when a
-  // fight needs more to think about. Give an ability `buff: 'poison'` and it
-  // works; no engine change is involved.
   poison: S({
     name: 'Poisoned', icon: '🧪', color: '#8fd14f',
     tickDamage: 2, turns: 3,
