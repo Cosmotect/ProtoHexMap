@@ -188,8 +188,10 @@ fs.mkdirSync(OUT, { recursive: true });
     const table = window.game.config.statuses || {};
     const b = window.__battle;
     const u = b.state.units.find((x) => !x.isEnemy && x.hp > 0);
-    u.status.shield = { turns: 0, charges: 1, amount: 1 };
-    u.status.poison = { turns: 3, charges: 0, amount: 2 };
+    // A slot is { turns, charges, over } - `over` holds only what the ability
+    // changed through buffX; everything else is read from the table.
+    u.status.shield = { turns: 0, charges: 1, over: {} };
+    u.status.poison = { turns: 3, charges: 0, over: {} };
     return {
       ids: Object.keys(table),
       shieldBlocks: table.shield && table.shield.blocks === true,
@@ -217,6 +219,41 @@ fs.mkdirSync(OUT, { recursive: true });
     const u = window.__battle.state.units.find((x) => !x.isEnemy && x.hp > 0);
     delete u.status.shield; delete u.status.poison;
   });
+  // ----- buffX reaches the engine's own arithmetic ---------------------------
+  // An ability's buffX is a LIST lined up with the status's knobs, and what it
+  // sets is stored in the slot's `over`. The proof that `over` is really read (and
+  // not just displayed) is that a bigger slow shrinks how far the unit can walk:
+  // the reachable set is computed from effSpeed, which sums the speed field of
+  // every carried status through the same lookup an ability's number lands in.
+  const slowReach = await page.evaluate(async () => {
+    const b = window.__battle;
+    const u = b.state.units.find((x) => !x.isEnemy && x.hp > 0 && !x.done);
+    const count = () => { b.cancel(); b.activate(u.uid); const r = b.reachFor(); return r && r.d ? Object.keys(r.d).length : -1; };
+    delete u.status.slow;
+    const free = count();
+    u.status.slow = { turns: 2, charges: 0, over: {} };          // the table's -1
+    const table = count();
+    u.status.slow = { turns: 2, charges: 0, over: { speed: -3 } }; // buffX: [-3]
+    const harder = count();
+    delete u.status.slow;
+    b.cancel();
+    return { free, table, harder, speed: u.speed };
+  });
+  if (!(slowReach.free > slowReach.table && slowReach.table > slowReach.harder)) {
+    problems.push('a status amount set through buffX did not reach the engine: ' + JSON.stringify(slowReach));
+  }
+  // And the table itself must no longer carry the two fields this replaced.
+  const knobShape = await page.evaluate(() => {
+    const t = window.game.config.statuses || {};
+    return {
+      legacy: Object.entries(t).filter(([, d]) => d.amountIs !== undefined || d.amountSign !== undefined).map(([k]) => k),
+      slowSpeed: t.slow ? t.slow.speed : null,
+      hasteSpeed: t.haste ? t.haste.speed : null,
+    };
+  });
+  if (knobShape.legacy.length) problems.push('statuses still carry amountIs / amountSign: ' + knobShape.legacy.join(', '));
+  if (!(knobShape.slowSpeed < 0 && knobShape.hasteSpeed > 0)) problems.push('slow / haste no longer write their own sign: ' + JSON.stringify(knobShape));
+
   // ----- intellect classes (config.intellect) -------------------------------
   // Every creature carries a class saying which facts it can weigh on its turn.
   // Check the table arrived, that no bestiary row was left without one, and that
@@ -259,6 +296,23 @@ fs.mkdirSync(OUT, { recursive: true });
     if (u.abilities !== u.wanted) problems.push(`${u.name} fights with ${u.abilities} but its bestiary row says ${u.wanted}`);
     if (u.init !== u.wantInit) problems.push(`${u.name} has init ${u.init}, its bestiary row says ${u.wantInit}`);
   }
+  // ----- init is an ENEMY number ---------------------------------------------
+  // Turn order inside a fight is decided by the enemy queue alone, so a party
+  // row never had a meaningful init. It came off the roster on 2026-09-06; this
+  // keeps it off, both in the config and in the Settings table.
+  const initScope = await page.evaluate(() => {
+    const p = window.game.config.party;
+    return {
+      rosterWithInit: p.roster.filter((r) => r.init !== undefined).map((r) => r.name),
+      defaultHasInit: p.defaultCombat.init !== undefined,
+      enemiesWithInit: Object.values(window.game.config.battle.enemyTypes).filter((t) => t.init !== undefined).length,
+      enemyRows: Object.keys(window.game.config.battle.enemyTypes).length,
+    };
+  });
+  if (initScope.rosterWithInit.length) problems.push('party roster rows still carry init: ' + initScope.rosterWithInit.join(', '));
+  if (initScope.defaultHasInit) problems.push('party.defaultCombat still carries init');
+  if (initScope.enemiesWithInit !== initScope.enemyRows) problems.push('a bestiary row lost its init: ' + JSON.stringify(initScope));
+
   // ----- the spawn table ------------------------------------------------------
   const spawns = await page.evaluate(() => {
     const sp = window.game.config.battle.spawns || {};
@@ -723,6 +777,26 @@ fs.mkdirSync(OUT, { recursive: true });
   await page.waitForTimeout(100);
   const resetOk = await page.evaluate(() => window.game.config.rest.cost === 20);
   if (!resetOk) problems.push('reset did not restore the config value');
+  // The statuses table on the Units tab: it renders, it no longer has the two
+  // columns that were removed, and hovering a row prints that status's buffX order.
+  await page.evaluate(() => document.querySelector('[data-tab="units"]').click());
+  await page.waitForTimeout(150);
+  const statusTable = await page.evaluate(() => {
+    const box = [...document.querySelectorAll('.settings-matrix')].find((d) => /statuses/i.test(d.querySelector('.settings-group-title')?.textContent || ''));
+    if (!box) return { found: false };
+    const heads = [...box.querySelectorAll('thead th')].map((th) => th.textContent.trim());
+    const slow = [...box.querySelectorAll('tbody th')].find((th) => th.textContent.trim() === 'slow');
+    return { found: true, heads, rows: box.querySelectorAll('tbody tr').length, slowTip: slow ? slow.getAttribute('title') : null };
+  });
+  if (!statusTable.found || statusTable.rows < 4) problems.push('the statuses table did not render: ' + JSON.stringify(statusTable));
+  else {
+    for (const gone of ['amountIs', 'amountSign']) {
+      if (statusTable.heads.includes(gone)) problems.push(`the statuses table still shows a "${gone}" column`);
+    }
+    if (!/buffX:.*speed/.test(statusTable.slowTip || '')) problems.push('hovering a status does not name its buffX order: ' + statusTable.slowTip);
+  }
+  await page.evaluate(() => document.querySelector('[data-tab="general"]').click());
+  await page.waitForTimeout(100);
   // Language scaffolding: the selector exists and currently offers English only.
   await page.evaluate(() => document.querySelector('[data-tab="general"]').click());
   await page.waitForTimeout(100);

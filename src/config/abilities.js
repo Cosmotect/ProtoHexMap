@@ -12,7 +12,8 @@
 //    rotatable true = the zones rotate towards the aim point (6 sectors)
 //    castAny   true = aim anywhere on the board
 //    moveToTarget  the caster dashes to the aim point after the effects
-//    buff      '' | 'shield' | 'crit' | 'stun' | 'haste' (buffX = amount, <0 = slow)
+//    buff      the id of a status from STATUSES below; buffX is the list of
+//              numbers for that status's knobs (see WHAT buffX MEANS)
 // =====================================================================
 import { ringOffsets, DIRS } from '../local/battle/bhex.js';
 
@@ -60,7 +61,7 @@ export const COMBAT_CONFIG = {
 // A small starter kit; balance numbers are first guesses.
 const A = (o) => Object.assign({
   name: 'Ability', icon: '💥', color: '#5fc7e0',
-  damage: 0, heal: 0, buff: '', buffX: null,   // buffX null = "use the status's own value"
+  damage: 0, heal: 0, buff: '', buffX: null,   // buffX null = "use the status's own values"
   castZone: [], castAny: false, dmgZone: [], tagZone: [], tagId: null,
   hZone: [], hMode: 'rel', pushZone: [], rotatable: false, moveToTarget: false,
 }, o);
@@ -132,21 +133,32 @@ export const ABILITIES = {
 //                 (the carrier's turn came up). '' = nothing spends it, only the
 //                 turn clock can end it.
 //
-//  WHAT buffX MEANS (this was impossible to tell from the ability table before):
-//    amountIs     names the ONE field of this status that an ability's `buffX`
-//                 overwrites when it applies the status. '' = buffX is ignored
-//                 for this status, whatever the ability says.
-//                 So with the table below: on `guard` (buff: 'shield') buffX is
-//                 the number of hits absorbed; on a 'crit' ability buffX is the
-//                 damage multiplier; on a 'haste' ability buffX is the speed
-//                 change (negative slows); on a 'stun' ability buffX does
-//                 nothing at all. The number an ability actually applied is
-//                 remembered per unit, so two sources of the same status do not
-//                 have to agree.
-//                 An ability that leaves buffX alone (null) hands over the value
-//                 written HERE - which is what you almost always want, and what
-//                 keeps a multiplier status like `vulnerable` from being applied
-//                 as a meaningless x1.
+//  WHAT buffX MEANS - an ability's buffX is a LIST, one entry per knob:
+//    A status's KNOBS are its numeric fields, always in this fixed order:
+//        speed, damageDealt, damageTaken, tickDamage, tickHeal, turns, charges
+//    ...narrowed to the ones THIS status actually uses - a knob counts as in use
+//    when the row moved it off its neutral value (0 for the additive ones and the
+//    counters, 1 for the two multipliers). statusKnobs(def) returns exactly that
+//    list, and the Settings window prints it beside the row so it is never a guess.
+//    An ability's `buffX` lines up with that list, in order:
+//        buff: 'poison', buffX: [4]        4 damage a turn, for the table's 3 turns
+//        buff: 'poison', buffX: [4, 5]     4 damage a turn, for 5 turns
+//        buff: 'poison', buffX: [null, 5]  the table's 2 damage, for 5 turns
+//        buff: 'poison'                    exactly what the table says
+//    A bare number is shorthand for a one-entry list (buffX: 4 is buffX: [4]), and
+//    null / an empty slot means "leave that knob as the table wrote it". Values
+//    are used AS WRITTEN, sign and all: `slow` is speed -1 in the table, and an
+//    ability that wants a harder slow says buffX: [-2].
+//    The numbers an ability actually applied are remembered per unit, so two
+//    sources of the same status do not have to agree.
+//
+//    (Until 2026-09-07 a status named ONE field for buffX to overwrite, and
+//    carried a sign field to store a magnitude negatively. Both are gone: which
+//    field is being modulated is already implied by the status's own verbs, a
+//    second field could not be reached at all, and a sign field is a negative
+//    number written the long way round. `enraged` had been authored pointing at
+//    the speed of a status that changes no speed - the kind of mistake the old
+//    shape invited and this one cannot express.)
 //
 //  THE ENEMY AI:
 //    aiValue      how BAD carrying this status is, in the AI's own scoring units
@@ -157,14 +169,9 @@ export const ABILITIES = {
 //                 stripping it off a party unit. Nothing else has to be taught:
 //                 the AI already plays every candidate cast out on a copy of the
 //                 board, so a status added here is scored from the next fight on.
-//                 A status whose amount comes out negative (a slow) has its
-//                 value flipped automatically - the same field covers both ends.
-//
-//    amountSign   -1 for a status whose amount is written as a positive number but
-//                 stored negative (a `slow` of 2 is speed -2). Every status is
-//                 authored so its numbers read as plain magnitudes; a penalty and
-//                 a bonus are two ROWS, never one row with a sign, because a row
-//                 has one aiValue and cannot be a blessing and a curse at once.
+//                 A penalty and a bonus are two ROWS, never one row with a sign,
+//                 because a row has one aiValue and cannot be a blessing and a
+//                 curse at once. That is why `haste` and `slow` are separate.
 //
 //  DISPLAY: `name` / `icon` / `color` are the fallback; the badge over a unit's
 //  head and the card in the panel look for the locale keys status.<id>.name and
@@ -174,8 +181,37 @@ const S = (o) => Object.assign({
   speed: 0, damageDealt: 1, damageTaken: 1, blocks: false, skipsTurn: false,
   tickDamage: 0, tickHeal: 0,
   turns: 0, charges: 0, spentOn: '',
-  amountIs: '', amountSign: 1, aiValue: 0,
+  aiValue: 0,
 }, o);
+
+// A status's KNOBS: its numeric fields, in this fixed order. An ability's buffX
+// lines up with the ones a given status uses (see WHAT buffX MEANS above).
+export const STATUS_KNOBS = ['speed', 'damageDealt', 'damageTaken', 'tickDamage', 'tickHeal', 'turns', 'charges'];
+// The value each knob has when a status leaves it alone. The two multipliers rest
+// at 1 (x1 changes nothing); everything else rests at 0.
+const KNOB_NEUTRAL = { speed: 0, damageDealt: 1, damageTaken: 1, tickDamage: 0, tickHeal: 0, turns: 0, charges: 0 };
+// Which knobs THIS status uses, in that order - the list an ability's buffX lines
+// up with. Editing a status in the Settings window can change this list: give a
+// status a tickDamage and it grows a knob, on the spot.
+export function statusKnobs(def) {
+  return def ? STATUS_KNOBS.filter((k) => Number(def[k] ?? KNOB_NEUTRAL[k]) !== KNOB_NEUTRAL[k]) : [];
+}
+// What an ability's buffX changes about a status: { field: value } for the knobs
+// it actually named. A bare number counts as a one-entry list; null / '' / a
+// non-number in a slot leaves that knob as the table wrote it; anything past the
+// end of the knob list is ignored rather than guessed at.
+export function statusOverridesFor(def, buffX) {
+  const list = buffX === undefined || buffX === null || buffX === '' ? []
+    : Array.isArray(buffX) ? buffX : [buffX];
+  const knobs = statusKnobs(def);
+  const out = {};
+  for (let i = 0; i < list.length && i < knobs.length; i++) {
+    const n = Number(list[i]);
+    if (list[i] === null || list[i] === '' || !Number.isFinite(n)) continue;
+    out[knobs[i]] = n;
+  }
+  return out;
+}
 
 export const STATUSES = {
   // The four that already existed, written out in the vocabulary above. Their
@@ -183,37 +219,32 @@ export const STATUSES = {
   shield: S({
     name: 'Shield', icon: '🛡', color: '#5fc7e0',
     blocks: true, charges: 1, spentOn: 'hit',
-    amountIs: 'charges',   // buffX = how many hits it absorbs
     aiValue: -14,          // good to carry: the AI guards its allies and pops the party's
   }),
   crit: S({
     name: 'Charged', icon: '⚡', color: '#ffd75f',
     damageDealt: 2, charges: 1, spentOn: 'attack',
-    amountIs: 'damageDealt',   // buffX = the multiplier (3 = triple)
     aiValue: -10,
   }),
   stun: S({
     name: 'Stunned', icon: '💫', color: '#c9a8ff',
     skipsTurn: true, charges: 1, spentOn: 'activation',
-    amountIs: '',          // buffX does nothing here
     aiValue: 12,           // bad to carry: worth about a point of damage more than one
   }),
   // Haste and slow are TWO statuses, not one signed one. A single row cannot say
   // what it is worth: the same aiValue would have to mean "good to carry" at one
   // end and "bad to carry" at the other, and the AI read a speed PENALTY as a
   // blessing worth handing to its allies. Each end now states its own worth, and
-  // each takes a positive amount (buffX 2 on `slow` means two points slower).
+  // each writes its own number as it is meant (slow is speed -1, and an ability
+  // that wants a harder slow says buffX: [-2]).
   haste: S({
     name: 'Hastened', icon: '💨', color: '#a8e05f',
     speed: 1, turns: 2,
-    amountIs: 'speed',     // buffX = how many extra move points
     aiValue: -6,           // good to carry
   }),
   slow: S({
     name: 'Slowed', icon: '🐌', color: '#c9a8ff',
     speed: -1, turns: 2,
-    amountIs: 'speed',     // buffX = how many move points are taken away
-    amountSign: -1,        // ...written as a positive number; stored negative
     aiValue: 9,            // bad to carry - and worth more than haste is worth giving
   }),
   // Nothing below is applied by any ability yet - they are here as worked
@@ -223,31 +254,26 @@ export const STATUSES = {
   poison: S({
     name: 'Poisoned', icon: '🧪', color: '#8fd14f',
     tickDamage: 2, turns: 3,
-    amountIs: 'tickDamage',   // buffX = damage per turn
     aiValue: 20,              // three ticks of 2, valued a little under the 60 they cost
   }),
   regen: S({
     name: 'Mending', icon: '🌿', color: '#a8e05f',
     tickHeal: 2, turns: 3,
-    amountIs: 'tickHeal',
     aiValue: -18,
   }),
   weaken: S({
     name: 'Weakened', icon: '🩼', color: '#b58fd1',
     damageDealt: 0.5, turns: 2,
-    amountIs: 'damageDealt',
     aiValue: 16,
   }),
   vulnerable: S({
     name: 'Vulnerable', icon: '🎯', color: '#e2474b',
     damageTaken: 1.5, turns: 2,
-    amountIs: 'damageTaken',
     aiValue: 18,
   }),
   enraged: S({
     name: 'Enraged', icon: '🤬', color: '#e2474b',
     damageTaken: 1.5, turns: 2,
-    amountIs: 'speed',
     aiValue: 18,
   }),
 };
@@ -258,15 +284,6 @@ export const STATUSES = {
 COMBAT_CONFIG.statuses = STATUSES;
 
 export const statusById = (id) => STATUSES[id] ?? null;
-// The amount an ability hands a status: its buffX where the status takes one,
-// otherwise the status's own default for that field.
-export function statusAmount(id, buffX) {
-  const def = STATUSES[id];
-  if (!def) return 0;
-  if (!def.amountIs) return 0;
-  const n = Number(buffX);
-  return Number.isFinite(n) && buffX !== undefined && buffX !== null ? n : def[def.amountIs];
-}
 
 // ----- Intellect classes ------------------------------------------------
 //  Not every creature thinks as well as every other one. A unit's INTELLECT CLASS

@@ -278,16 +278,22 @@ balance must be re-measured against interactive play.
     come back for everything below S.
   * **Statuses are a TABLE, not code** (`config.statuses`, written out in
     src/config/abilities.js; since 2026-09-05). A unit carries a bag,
-    `u.status = { <id>: { turns, charges, amount } }`, and the engine only knows the
+    `u.status = { <id>: { turns, charges, over } }`, and the engine only knows the
     shape of a table row, never a particular status. A row is built out of verbs the
     engine already performs - `speed` (added to move points, signed), `damageDealt` /
     `damageTaken` (multipliers), `blocks` (eats a whole hit or hostile push),
     `skipsTurn`, `tickDamage` / `tickHeal` (at the start of the carrier's activation)
     - and ends by a clock (`turns`, counted down after the tick) or by use
-    (`charges` + `spentOn`: 'hit' / 'attack' / 'activation'). `amountIs` names the
-    one field an ability's `buffX` overwrites, which is what makes buffX readable at
-    last: on Guard it is the number of hits absorbed, on a crit the multiplier, on a
-    haste the speed change (negative = a slow), on a stun nothing. `aiValue` is how
+    (`charges` + `spentOn`: 'hit' / 'attack' / 'activation').
+    A status's **knobs** are its numeric fields, in one fixed order - speed,
+    damageDealt, damageTaken, tickDamage, tickHeal, turns, charges - narrowed to the
+    ones that row actually moved off their neutral value (0, or 1 for the two
+    multipliers). An ability's `buffX` is a LIST lined up with that: `buff: 'poison',
+    buffX: [4, 5]` is 4 damage a turn for 5 turns, `[null, 5]` keeps the table's
+    damage and only lengthens it, a bare number is a one-entry list, and anything not
+    named keeps what the table wrote. What the ability set is stored in the slot's
+    `over`; `statusKnobs(def)` derives the order, and hovering a row in **Settings >
+    Units > statuses** prints it. `aiValue` is how
     BAD the status is to carry, in the AI's own units (a point of damage is 10, a
     kill 45): the AI already plays every cast out on a copy of the board, so a status
     added to the table is understood, inflicted and avoided from the next fight on,
@@ -332,10 +338,11 @@ balance must be re-measured against interactive play.
   * **Abilities** (`ABILITIES`): zone-based - castZone (where it can be aimed),
     dmgZone / tagZone / hZone / pushZone offsets from the aim point, rotatable
     abilities snap their zones to one of six 60-degree sectors towards the aim;
-    `moveToTarget` dashes the caster. 8 starter abilities; `UNIT_COMBAT` gives every
-    unit name its init / speed / flying / ability ids (party characters: exactly
-    TWO), with a `default` fallback (numbered clones like "Husk 2" fall back to the
-    base name).
+    `moveToTarget` dashes the caster. 8 starter abilities. How a unit fights is
+    written on its own row in config/units.js - a roster row carries speed / flying
+    / ability ids (party characters: exactly TWO), a bestiary row those plus `init`
+    - resolved by `combatStatsFor(name)`, with `party.defaultCombat` as the fallback
+    (numbered clones like "Husk 2" fall back to the base name).
   * **World-map ties**: an ENEMY's power adds `round(power / powerPerDamage)` (3)
     ability damage; a party unit instead fights with its RESOLVED abilities - base
     def + unlocked upgrade nodes (`def.abilityDefs`, from src/upgrades.js; the
@@ -435,7 +442,7 @@ one node of an ability's UPGRADE TREE, and the ability itself gets stronger.
 * **Trees** (`config/upgrades.js`): one directed graph per ability id, keyed
   `ABILITY_UPGRADES[abilityId][nodeId]`. A node lists `requires` (ALL parents must
   be unlocked; multi-parent capstones merge branches; none = a root) and its
-  effects: `add` {damage, heal, buffX}, `castZoneAdd` / `dmgZoneAdd` / `tagZoneAdd`
+  effects: `add` {damage, heal, buffX - a list adds slot by slot}, `castZoneAdd` / `dmgZoneAdd` / `tagZoneAdd`
   offset lists, `pushDistAdd`, and `flags` - booleans for upgrade-specific ability
   logic the engine can branch on (reserved for the unique upgrades to come). Every
   current ability has a 5-node tree (2 roots, 2 mids, 1 two-parent capstone) mixing
@@ -629,8 +636,8 @@ stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }
   * **Haste and slow are two statuses, not one signed one.** A single row has one
     `aiValue`, so it could not be a blessing at one end and a curse at the other -
     the AI read a speed PENALTY as a gift and handed it to its allies. Each end
-    states its own worth now (haste -6, slow +9), each is authored as a positive
-    magnitude, and `amountSign` is what turns a slow of 2 into speed -2.
+    states its own worth now (haste -6, slow +9), and each writes its own sign
+    (haste is speed +1, slow is speed -1).
   * **Which groups spawn where is a GRID now**: a row per kind of fight (the three
     ring bands, the Colonies, the Seed) and a column per layer, in
     `battle.spawns`. `enemies.bands` keeps only its `maxRing`; `battle.bosses` and
@@ -658,6 +665,47 @@ stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }
     they actually chose survive.
   The smoke test now boots a second page with exactly that stale save and checks it
   comes up, keeps what it should and heals the rest.
+
+* 2026-09-06 (e) **`init` came off the party roster.** Turn order inside a fight is
+  decided by the enemy queue alone (`engine.js`: `sb.enemyQ = ... sort((a, b) => b.init
+  - a.init || a.idx - b.idx)`, filtered to `isEnemy`; `ui.js` sorts the enemy strip the
+  same way). The party acts in the order the player clicks, so a character's `init` was
+  a number nobody read - it only invited balancing effort that could not land. Removed
+  from all ten roster rows, from `party.defaultCombat`, from `NEW_ROSTER` and from the
+  roster table in the Settings window. It stays on every BESTIARY row, where it is real.
+  `makeInstance` now ends `init: def.init ?? cs.init ?? 0` so a party unit gets a
+  harmless 0 rather than `undefined`. The smoke test guards the split: no roster row or
+  `defaultCombat` may carry `init`, and every bestiary row must.
+
+
+* 2026-09-07 **`amountIs` and `amountSign` are gone; `buffX` is a list.** The owner
+  called both redundant and was right on each count. `amountSign` was a negative
+  number written the long way round - a status now writes its own sign (`slow` is
+  speed -1) and an ability hands over the number it means (`buffX: [-2]`).
+  `amountIs` named the ONE field buffX could reach, which the status's own verbs
+  already imply and which made a second field unreachable: no ability could say how
+  long its poison lasts. Its only real job was choosing between fields when a status
+  has several, and a list does that better.
+  * A status's KNOBS are its numeric fields in one fixed order (speed, damageDealt,
+    damageTaken, tickDamage, tickHeal, turns, charges), narrowed to the ones the row
+    moved off their neutral value. `statusKnobs(def)` derives it; nothing is written
+    down, so editing a status in the Settings window changes its knobs on the spot,
+    and hovering the row prints the order.
+  * `buffX` lines up with that list. A bare number still works as a one-entry list,
+    so every ability written before this change means exactly what it meant.
+  * The slot on a unit changed from `{ turns, charges, amount }` to
+    `{ turns, charges, over }`, where `over` holds only the knobs the ability named.
+    `turns` and `charges` are knobs like any other, which is how an ability can now
+    set a duration; they simply also happen to be what counts down.
+  * `resolveAbility` learned to add a list slot by slot, so an upgrade node's
+    `add: { buffX: [...] }` bumps the knobs it names - and it copies the list, so an
+    upgraded ability can no longer write into the shared config table.
+  * This also fixed a live mistake the old shape invited: `enraged` had been authored
+    pointing at the speed of a status that changes no speed, so its badge read 0.
+  * The badge shows the SIZE of the first knob, not the stored number: the table
+    writes `slow` as -1 while every locale string reads "moves {n} tiles less", so
+    the sign lives in the status's name.
+
 
 ## Open questions
 

@@ -9,7 +9,7 @@
 
 import { t, LANGUAGES, getLanguage, setLanguage } from './i18n.js';
 import { SHAPE_NAMES } from './local/localview.js';
-import { ABILITIES, INTELLECT } from './config/abilities.js';
+import { ABILITIES, INTELLECT, statusKnobs } from './config/abilities.js';
 
 const STORAGE_KEY = 'hexmap-settings-v1';
 
@@ -53,12 +53,14 @@ const cssColor = (v) => (typeof v === 'string' ? v : `#${Number(v ?? 0).toString
 // back, anything else goes back as the 0xrrggbb number that config file had.
 const colorShapeAttr = (v) => (typeof v === 'string' ? ' data-cshape="css"' : '');
 const readColor = (el) => (el.dataset.cshape === 'css' ? el.value : parseInt(el.value.slice(1), 16));
-const NEW_ROSTER = () => ({ name: 'New character', icon: '🙂', hp: 24, init: 5, speed: 4, flying: false, abilities: ['strike'] });
+const NEW_ROSTER = () => ({ name: 'New character', icon: '🙂', hp: 24, speed: 4, flying: false, abilities: ['strike'] });
+// No `init` column: turn order inside a fight is an ENEMY-only number (the
+// engine's enemy queue sorts by it), so a character never had one that meant
+// anything. Removed 2026-09-06.
 const ROSTER_COLS = [
   { key: 'name', kind: 'text', w: 118 },
   { key: 'icon', kind: 'text', w: 44 },
   { key: 'hp', kind: 'number', w: 48 },
-  { key: 'init', kind: 'number', w: 44 },
   { key: 'speed', kind: 'number', w: 44 },
   { key: 'flying', kind: 'bool' },
   { key: 'abilities', kind: 'idlist', w: 130, valid: () => Object.keys(ABILITIES) },
@@ -619,6 +621,12 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
       for (const k of Object.keys(obj[rn])) if (!SKIP_KEYS.has(k) && !cols.includes(k)) cols.push(k);
     }
     const head = `<tr><th></th>${cols.map((c) => `<th>${c}</th>`).join('')}</tr>`;
+    // Hovering a status names its KNOBS in order - the list an ability's buffX
+    // lines up with (config/abilities.js). Editing the row can change that list,
+    // so it is worked out here rather than written down anywhere.
+    const rowTip = (rn) => (path === 'statuses'
+      ? `${path}.${rn}  |  buffX: [${statusKnobs(obj[rn]).join(', ') || 'nothing to set'}]`
+      : `${path}.${rn}`);
     const body = rowNames.map((rn) => {
       const cells = cols.map((c) => {
         const value = obj[rn][c];
@@ -628,7 +636,7 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
         if (value === undefined && d === undefined) return '<td class="settings-empty">-</td>';
         return `<td>${renderCell(`${path}.${rn}.${c}`, c, value, d)}</td>`;
       }).join('');
-      return `<tr><th title="${path}.${rn}">${rn}</th>${cells}</tr>`;
+      return `<tr><th title="${escapeAttr(rowTip(rn))}">${rn}</th>${cells}</tr>`;
     }).join('');
     // A table with many attributes needs one more grid track than a narrow one,
     // so it does not end up scrolling sideways inside its own box (style.css).

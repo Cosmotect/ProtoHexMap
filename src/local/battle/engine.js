@@ -28,7 +28,7 @@
 //  fight opens with an ambush enemy phase before round 1.
 // =====================================================================
 import { DIRS, K, PK, addK, hexDist, rotOff, aimRot, abRotFor, rotDir, boardTiles } from './bhex.js';
-import { abilityById, tagDefById } from '../../config/abilities.js';
+import { abilityById, tagDefById, statusOverridesFor } from '../../config/abilities.js';
 import { combatStatsFor } from '../../config/units.js';
 
 export function createBattle({ config, radius, heights, party, enemies, partyKeys, enemyKeys, forced,
@@ -126,7 +126,9 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     const cs = combatStatsFor(def.name);
     return {
       uid: 's' + i, name: def.name, icon: def.icon ?? null, power: def.power ?? 0,
-      init: def.init ?? cs.init,
+      // Enemies only: the enemy queue sorts by it. Party rows carry no init
+      // (removed 2026-09-06), so a character lands on 0 and nothing reads it.
+      init: def.init ?? cs.init ?? 0,
       speed: def.speed ?? cs.speed,
       flying: !!(def.flying ?? cs.flying),
       maxHp: def.maxHp ?? def.hp, hp: def.hp,
@@ -182,17 +184,18 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // Everything about a status lives in the table (config.statuses, written out in
   // src/config/abilities.js); the code below only knows the SHAPE of a row, never
   // a particular status. A unit carries a bag:
-  //     u.status = { poison: { turns: 3, charges: 0, amount: 2 }, ... }
-  // `amount` is what the ability handed over through buffX (the table's `amountIs`
-  // names which field it overwrites); undefined means "use the table's own value".
+  //     u.status = { poison: { turns: 3, charges: 0, over: { tickDamage: 4 } } }
+  // `over` is what the ability changed about this status through buffX - only the
+  // knobs it actually named. Every other field is read from the table.
   const statusDef = (id) => (config.statuses ?? {})[id] ?? null;
   const carried = (u) => (u && u.status) || null;
-  // One field of one status this unit is carrying, with its own amount folded in.
+  // One field of one status this unit is carrying, with the ability's own
+  // overrides folded in.
   function statusField(u, id, field) {
     const def = statusDef(id);
     if (!def || !carried(u) || !u.status[id]) return undefined;
-    const amt = u.status[id].amount;
-    return (def.amountIs === field && typeof amt === 'number') ? amt : def[field];
+    const over = u.status[id].over;
+    return over && over[field] !== undefined ? over[field] : def[field];
   }
   // Additive fields (speed), multiplicative ones (damageDealt / damageTaken) and
   // plain switches (blocks, skipsTurn), summed / multiplied over the whole bag.
@@ -222,28 +225,28 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   function applyStatus(st, u, id, buffX) {
     const def = statusDef(id);
     if (!def || !u || u.uid === undefined || u.hp <= 0) return;
-    let amount;
-    if (def.amountIs) {
-      // No number from the ability = the status's own value. Anything else and a
-      // multiplier status applied by an ability that never thought about buffX
-      // would land as a meaningless x1.
-      const given = buffX === undefined || buffX === null || buffX === '' ? NaN : Number(buffX);
-      // An ability hands over a MAGNITUDE; amountSign turns it into the number the
-      // status actually stores (a `slow` of 2 is speed -2).
-      amount = Number.isFinite(given) ? Math.abs(given) * (def.amountSign || 1) : def[def.amountIs];
-    }
+    // buffX lines up, in order, with the knobs this status uses (config/abilities.js).
+    // Whatever it does not name keeps the number the table wrote - which is what
+    // you almost always want, and what keeps a multiplier status applied by an
+    // ability that never thought about buffX from landing as a meaningless x1.
+    const over = statusOverridesFor(def, buffX);
+    // The two counters are knobs like any other, so an ability can say how long
+    // its poison lasts; they just also happen to be what ticks down from here.
     if (!u.status) u.status = {};
-    u.status[id] = { turns: def.turns || 0, charges: def.charges || 0, amount };
-    if (st.sim) (st.rec.applied[u.uid] ??= {})[id] = amount ?? 1;
+    u.status[id] = {
+      turns: over.turns !== undefined ? over.turns : (def.turns || 0),
+      charges: over.charges !== undefined ? over.charges : (def.charges || 0),
+      over,
+    };
+    if (st.sim) (st.rec.applied[u.uid] ??= {})[id] = 1;
     else { const v = statusView(u, id); floater(u.pos, v.icon, v.color); }
   }
   function dropStatus(st, u, id, stripped) {
     if (!carried(u) || !u.status[id]) return;
-    const amount = u.status[id].amount;
     delete u.status[id];
     // A status TAKEN OFF a unit matters to the AI as much as one put on: popping a
     // shield is the whole reason an enemy swings at a shielded target.
-    if (st && st.sim && stripped) (st.rec.stripped[u.uid] ??= {})[id] = amount ?? 1;
+    if (st && st.sim && stripped) (st.rec.stripped[u.uid] ??= {})[id] = 1;
   }
   // Spends one charge of the statuses this event uses up. `only` limits it to the
   // one status that actually did the work (the shield that blocked THIS hit).

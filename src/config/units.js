@@ -27,27 +27,26 @@ export const UNITS = {
     // numbers and combat stats together, exactly like a bestiary row. (Until
     // 2026-09-06 the combat half lived in a UNIT_COMBAT table over in
     // config/abilities.js, so every character was written twice.)
-    //   init      turn order inside a fight, higher acts first
     //   speed     move points per turn (an uphill step costs 2)
     //   flying    ignores height and glides over anything
     //   abilities ids from config/abilities.js - exactly TWO per character: each
     //             drives its own upgrade tree (config/upgrades.js), and the roster
     //             window and the party panel are laid out for the pair.
     roster: [
-      { name: 'Vanguard', icon: '🛡️', hp: 40, init: 5, speed: 4, flying: false, abilities: ['strike', 'shove'] },
-      { name: 'Archer', icon: '🏹', hp: 28, init: 7, speed: 4, flying: false, abilities: ['volley', 'lance'] },
-      { name: 'Mystic', icon: '🔮', hp: 22, init: 4, speed: 3, flying: false, abilities: ['burst', 'mend'] },
-      { name: 'Warden', icon: '⚔️', hp: 36, init: 6, speed: 4, flying: false, abilities: ['strike', 'guard'] },
-      { name: 'Stonestep', icon: '🗿', hp: 52, init: 3, speed: 3, flying: false, abilities: ['strike', 'shove'] },
-      { name: 'Emberwright', icon: '🔥', hp: 24, init: 5, speed: 3, flying: false, abilities: ['burst', 'strike'] },
-      { name: 'Lampbearer', icon: '🏮', hp: 30, init: 6, speed: 4, flying: false, abilities: ['mend', 'bolt'] },
-      { name: 'Skywatcher', icon: '🪶', hp: 20, init: 8, speed: 5, flying: true, abilities: ['volley', 'lance'] },
-      { name: 'Tinker', icon: '🔧', hp: 28, init: 5, speed: 4, flying: false, abilities: ['shove', 'bolt'] },
-      { name: 'Duskblade', icon: '🗡️', hp: 16, init: 9, speed: 5, flying: false, abilities: ['strike', 'lance'] },
+      { name: 'Vanguard', icon: '🛡️', hp: 40, speed: 4, flying: false, abilities: ['strike', 'shove'] },
+      { name: 'Archer', icon: '🏹', hp: 28, speed: 4, flying: false, abilities: ['volley', 'lance'] },
+      { name: 'Mystic', icon: '🔮', hp: 22, speed: 3, flying: false, abilities: ['burst', 'mend'] },
+      { name: 'Warden', icon: '⚔️', hp: 36, speed: 4, flying: false, abilities: ['strike', 'guard'] },
+      { name: 'Stonestep', icon: '🗿', hp: 52, speed: 3, flying: false, abilities: ['strike', 'shove'] },
+      { name: 'Emberwright', icon: '🔥', hp: 24, speed: 3, flying: false, abilities: ['burst', 'strike'] },
+      { name: 'Lampbearer', icon: '🏮', hp: 30, speed: 4, flying: false, abilities: ['mend', 'bolt'] },
+      { name: 'Skywatcher', icon: '🪶', hp: 20, speed: 5, flying: true, abilities: ['volley', 'lance'] },
+      { name: 'Tinker', icon: '🔧', hp: 28, speed: 4, flying: false, abilities: ['shove', 'bolt'] },
+      { name: 'Duskblade', icon: '🗡️', hp: 16, speed: 5, flying: false, abilities: ['strike', 'lance'] },
     ],
     // The last resort for a unit that is in neither the roster nor the bestiary
     // (a hand-authored scenario def that names something unknown).
-    defaultCombat: { init: 5, speed: 4, flying: false, abilities: ['strike'] },
+    defaultCombat: { speed: 4, flying: false, abilities: ['strike'] },
   },
 
   // ----- Battle simulation --------------------------------------------

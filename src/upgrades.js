@@ -44,6 +44,23 @@ export function resolveAbility(abilityId, unlocked = []) {
   const def = { ...base,
     castZone: [...base.castZone], dmgZone: [...base.dmgZone], tagZone: [...base.tagZone],
     pushZone: base.pushZone.map((p) => [...p]), flags: { ...(base.flags ?? {}) },
+    // buffX is a LIST (one entry per knob of the status this ability applies), so
+    // it needs a copy of its own - otherwise an upgraded ability would write into
+    // the config table every unit reads.
+    buffX: Array.isArray(base.buffX) ? [...base.buffX] : base.buffX,
+  };
+  // A numeric bump. Plain numbers add; a LIST (buffX, one entry per status knob)
+  // adds slot by slot, and a slot the bump does not name is left as it was.
+  const addUp = (cur, v) => {
+    if (!Array.isArray(cur) && !Array.isArray(v)) return (cur ?? 0) + v;
+    const base = Array.isArray(cur) ? cur : [cur];
+    const bump = Array.isArray(v) ? v : [v];
+    const out = [];
+    for (let i = 0; i < Math.max(base.length, bump.length); i++) {
+      const b = Number(bump[i]);
+      out.push(Number.isFinite(b) ? Number(base[i] ?? 0) + b : (base[i] ?? null));
+    }
+    return out;
   };
   const addZone = (zone, offs) => {
     const seen = new Set(zone.map((o) => `${o[0]},${o[1]}`));
@@ -51,7 +68,7 @@ export function resolveAbility(abilityId, unlocked = []) {
   };
   for (const [nodeId, node] of Object.entries(tree)) {
     if (!have.has(nodeId)) continue;
-    for (const [k, v] of Object.entries(node.add ?? {})) def[k] = (def[k] ?? 0) + v;
+    for (const [k, v] of Object.entries(node.add ?? {})) def[k] = addUp(def[k], v);
     if (node.castZoneAdd?.length) addZone(def.castZone, node.castZoneAdd);
     if (node.dmgZoneAdd?.length) addZone(def.dmgZone, node.dmgZoneAdd);
     if (node.tagZoneAdd?.length) addZone(def.tagZone, node.tagZoneAdd);
