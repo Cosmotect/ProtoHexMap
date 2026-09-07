@@ -273,8 +273,9 @@ export const STATUSES = {
   }),
   enraged: S({
     name: 'Enraged', icon: '🤬', color: '#e2474b',
-    damageTaken: 1.5, turns: 2,
-    aiValue: 18,
+    damageDealt: 1.5, turns: 1,
+    speed: 2, turns: 1
+    aiValue: -22,
   }),
 };
 
