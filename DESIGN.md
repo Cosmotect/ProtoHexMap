@@ -152,6 +152,26 @@ balance must be re-measured against interactive play.
   (World, Encounters, Units, General, Audio). The form is generated from the config's
   shape, changes apply immediately, and persist in localStorage over the file
   defaults. Map, terrain and party values apply on the next run.
+  * **What counts as "changed"** is a DEEP, order-insensitive comparison of the
+    live value against the config file (`deepEqual`), not the mere presence of an
+    override for that path. `JSON.stringify` compares key ORDER too, so a saved
+    collection written in another order read as different from an identical one.
+    An override that matches the file is deleted rather than kept, on write and
+    on load, so nothing dead is left counting as a change.
+  * **"Copy changes" prints one line per LEAF that differs**, not one per
+    override (`diffLeaves`). The editable collections are stored whole - adding
+    or deleting a creature is a change to the collection, not to one value - so
+    printing overrides meant the entire bestiary as JSON because one creature's
+    hp moved. Now it reads `battle.enemyTypes.husk.hp = 12  (default: 10)`, and
+    an added or deleted record prints as `ADDED` / `REMOVED` with its name.
+  * **A record missing from a save has two possible meanings**, and until
+    2026-09-08 they were confused: the merge started from the SAVE, so anything
+    the save lacked was treated as deleted. One visit to the bestiary therefore
+    froze it, every creature added to the config file afterwards vanished
+    silently, and Copy changes reported thirty deletions nobody made. The merge
+    now starts from today's defaults, and real deletions are recorded explicitly
+    as tombstones (`removed: { '<collection path>': [id, ...] }`, saved beside
+    the overrides in the v2 store; an older flat save loads with none).
   * **A row's reset button appears only when there is something to undo** - when the
     live value really differs from the config file, not merely when an override
     exists for that path (typing a value back to its default writes an override

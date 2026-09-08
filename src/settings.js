@@ -99,7 +99,12 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
   const tabsEl = $('settings-tabs');
   const bodyEl = $('settings-body');
   let activeTab = TABS[0].id;
-  let overrides = loadOverrides();
+  const store = loadStore();
+  let overrides = store.overrides;
+  // { '<collection path>': [id, ...] } - records the player deleted from an
+  // editable collection. See healOverride: without this the two reasons a record
+  // can be missing from a save are indistinguishable.
+  const removed = store.removed;
 
   // ----- apply saved overrides on startup ------------------------------
   // A saved override is a snapshot of the config AS IT WAS WHEN IT WAS SAVED, so
@@ -109,10 +114,20 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
   // (Written 2026-09-06 after settings saved before the roster carried its own
   // abilities restored a party with no abilities at all and threw on the first
   // draw of the party panel, taking the page with it.)
+  //
+  // The healed value is written back into `overrides` as well, not only into the
+  // config. It used to be healed on the way into the config and left stale in
+  // the override, so a save made before the bestiary grew a column disagreed
+  // with today's defaults FOREVER - which is what made "Copy changes" dump whole
+  // collections that had not actually been touched. And an override that turns
+  // out to match the default is dropped outright: there is nothing to override.
   for (const [path, value] of Object.entries(overrides)) {
     const def = getPath(defaults, path);
     if (def === undefined) { delete overrides[path]; continue; }
-    setPath(config, path, healOverride(def, value));
+    const healed = healOverride(def, value, removed[path]);
+    if (deepEqual(healed, def)) { delete overrides[path]; continue; }
+    overrides[path] = healed;
+    setPath(config, path, deepClone(healed));
   }
   saveOverrides();
 
@@ -122,12 +137,19 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
   // into a chat or a note when a tuning session found keeper values.
   $('btn-settings-copy').addEventListener('click', async () => {
     const btn = $('btn-settings-copy');
+    // One line per LEAF that differs, not one per override. An override can be a
+    // whole collection (the bestiary is stored as one, because adding or deleting
+    // a creature is a change to the collection rather than to one value), and
+    // printing the collection meant thirty creatures of JSON because one had its
+    // hp nudged. Walking it against the default gives
+    // "battle.enemyTypes.husk.hp = 12  (default: 10)" instead.
     const lines = [];
     for (const path of Object.keys(overrides).sort()) {
-      const value = overrides[path];
-      const def = getPath(defaults, path);
-      if (JSON.stringify(value) === JSON.stringify(def)) continue; // typed back to the default
-      lines.push(`${path} = ${fmtValue(path, value)}  (default: ${fmtValue(path, def)})`);
+      for (const [p, value, def] of diffLeaves(path, getPath(config, path), getPath(defaults, path))) {
+        if (value === undefined) lines.push(`${p} REMOVED  (was ${fmtValue(p, def)})`);
+        else if (def === undefined) lines.push(`${p} ADDED = ${fmtValue(p, value)}`);
+        else lines.push(`${p} = ${fmtValue(p, value)}  (default: ${fmtValue(p, def)})`);
+      }
     }
     let feedback = 'settings.copy.none';
     if (lines.length) {
@@ -140,9 +162,13 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
   function fmtValue(path, value) {
     if (value === undefined) return '(none)';
     if (Array.isArray(value)) return value.join(', ');
-    // The Units tab stores whole collections (the bestiary, the groups), so a
-    // value can be an object; print it as JSON rather than "[object Object]".
-    if (value && typeof value === 'object') return JSON.stringify(value);
+    // A whole record only ever shows up as one side of an added or deleted row.
+    // Its name says which one; the thirty fields inside it say nothing useful in
+    // a line meant to be pasted into a note.
+    if (value && typeof value === 'object') {
+      const name = value.name ?? value.title;
+      return name ? `"${name}"` : JSON.stringify(value);
+    }
     const key = path.split('.').pop();
     if (kindOf(key, value, path) === 'color') return cssColor(value);
     return String(value);
@@ -225,8 +251,7 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
         const path = input.dataset.path;
         const value = readInput(input);
         setPath(config, path, value);
-        overrides[path] = value;
-        saveOverrides();
+        setOverride(path, value);
         markRow(input);
         onChange(path);
       });
@@ -510,7 +535,14 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
         const coll = btn.dataset.del;
         const c = getPath(config, coll);
         if (btn.dataset.list === '1') c.splice(Number(btn.dataset.row), 1);
-        else delete c[btn.dataset.row];
+        else {
+          delete c[btn.dataset.row];
+          // Remember that this one was deleted ON PURPOSE, so reloading does not
+          // bring it back with the rest of today's defaults.
+          if (getPath(defaults, `${coll}.${btn.dataset.row}`) !== undefined) {
+            removed[coll] = [...new Set([...(removed[coll] ?? []), btn.dataset.row])];
+          }
+        }
         commitColl(coll);
         render();
       });
@@ -556,9 +588,22 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
   // Whole-collection override: an add or a delete is a change to the collection,
   // not to one value, so the collection is what gets stored.
   function commitColl(path) {
-    overrides[path] = deepClone(getPath(config, path));
-    saveOverrides();
+    setOverride(path, deepClone(getPath(config, path)));
     onChange(path);
+  }
+
+  // Records an override - or REMOVES it when the value has come back to what the
+  // config file says. Without this an edit-and-undo left a dead entry behind
+  // that still counted as a change everywhere it was looked at.
+  function setOverride(path, value) {
+    // A tombstone for an id that is present again is stale.
+    if (removed[path]?.length && value && typeof value === 'object') {
+      removed[path] = removed[path].filter((id) => !(id in value));
+      if (!removed[path].length) delete removed[path];
+    }
+    if (deepEqual(value, getPath(defaults, path)) && !removed[path]?.length) delete overrides[path];
+    else overrides[path] = value;
+    saveOverrides();
   }
 
   function renderGroup(title, obj, def, path) {
@@ -667,7 +712,9 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
   // it did nothing, because the button was drawn unconditionally.)
   function isChanged(path) {
     if (!(path in overrides)) return false;
-    return JSON.stringify(getPath(config, path)) !== JSON.stringify(getPath(defaults, path));
+    // Deep and order-insensitive: JSON.stringify called two identical objects
+    // different whenever a saved collection listed its keys in another order.
+    return !deepEqual(getPath(config, path), getPath(defaults, path));
   }
 
   function kindOf(key, value, path) {
@@ -708,22 +755,33 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
     return input.value;
   }
 
+  // Reflect, do not assume: typing a value back to the config file's own leaves
+  // nothing to reset, so the row must lose the mark rather than keep it.
   function markRow(input) {
-    input.closest('.settings-row')?.classList.add('changed');
-    input.closest('.settings-cell')?.classList.add('changed');
+    const on = isChanged(input.dataset.path);
+    input.closest('.settings-row')?.classList.toggle('changed', on);
+    input.closest('.settings-cell')?.classList.toggle('changed', on);
   }
 
   // ----- overrides ---------------------------------------------------------
   function resetPath(path) {
+    delete removed[path];
     delete overrides[path];
     setPath(config, path, deepClone(getPath(defaults, path)));
     saveOverrides();
   }
-  function loadOverrides() {
-    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch { return {}; }
+  // The store holds two things: the overridden VALUES, and, per editable
+  // collection, the ids the player explicitly DELETED. Older saves are a flat
+  // map of values, which loads as v2 with no deletions.
+  function loadStore() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+      if (raw && raw.v === 2) return { overrides: raw.overrides ?? {}, removed: raw.removed ?? {} };
+      return { overrides: raw ?? {}, removed: {} };
+    } catch { return { overrides: {}, removed: {} }; }
   }
   function saveOverrides() {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(overrides)); } catch { /* private mode etc. */ }
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ v: 2, overrides, removed })); } catch { /* private mode etc. */ }
   }
 
   return { open, close, isOpen, refresh, hasOverrides: () => Object.keys(overrides).length > 0 };
@@ -734,7 +792,7 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
 // roster), then by position; tables of records match by key (the bestiary, the
 // groups). Anything the save does not contain keeps the default's value; anything
 // it does contain wins, and a record the save dropped stays dropped.
-function healOverride(def, saved) {
+function healOverride(def, saved, removedIds) {
   const isRecord = (v) => v && typeof v === 'object' && !Array.isArray(v);
   if (Array.isArray(saved)) {
     if (!Array.isArray(def)) return saved;
@@ -745,13 +803,58 @@ function healOverride(def, saved) {
     });
   }
   if (isRecord(saved) && isRecord(def)) {
+    // Start from TODAY's defaults, so a creature the config file gained since
+    // the save appears instead of silently staying deleted. Until 2026-09-08
+    // the merge started from the save, which meant "absent from the save" was
+    // read as "deleted" - so one visit to the bestiary froze it forever, and
+    // every creature added afterwards was reported by Copy changes as a
+    // deletion the player never made.
+    const gone = new Set(removedIds ?? []);
     const out = {};
+    for (const [k, v] of Object.entries(def)) if (!gone.has(k)) out[k] = v;
     for (const [k, v] of Object.entries(saved)) {
       out[k] = isRecord(v) && isRecord(def[k]) ? { ...def[k], ...v } : v;
     }
     return out;
   }
   return saved;
+}
+
+// ----- comparing a saved value with the config file --------------------------
+// Order-insensitive on purpose. A stored collection lists its keys in whatever
+// order it was written in, and JSON.stringify compares key ORDER as well as
+// content, so two identical bestiaries could read as different.
+function deepEqual(a, b) {
+  if (a === b) return true;
+  if (typeof a !== typeof b) return false;
+  if (a === null || b === null || typeof a !== 'object') return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) return a.length === b.length && a.every((v, i) => deepEqual(v, b[i]));
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  return ka.every((k) => Object.prototype.hasOwnProperty.call(b, k) && deepEqual(a[k], b[k]));
+}
+
+// Every LEAF under `path` whose live value differs from the config file, as
+// [path, value, def]. Objects are walked; an array is walked element by element
+// only when both sides are the same length - once an entry has been added or
+// removed the indices no longer line up, and reporting the list as one value is
+// the honest answer.
+function diffLeaves(path, value, def, out = []) {
+  const bothPlain = value && def && typeof value === 'object' && typeof def === 'object'
+    && !Array.isArray(value) && !Array.isArray(def);
+  const bothSameLenArray = Array.isArray(value) && Array.isArray(def) && value.length === def.length;
+  if (bothPlain) {
+    for (const k of new Set([...Object.keys(def), ...Object.keys(value)])) {
+      diffLeaves(`${path}.${k}`, value[k], def[k], out);
+    }
+  } else if (bothSameLenArray) {
+    value.forEach((v, i) => diffLeaves(`${path}.${i}`, v, def[i], out));
+  } else if (!deepEqual(value, def)) {
+    out.push([path, value, def]);
+  }
+  return out;
 }
 
 // ----- path helpers ---------------------------------------------------------
