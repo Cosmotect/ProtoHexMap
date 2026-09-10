@@ -6,7 +6,6 @@
 //    # comments start with a hash, blank lines are ignored
 //    id: the-causeway          required - the map's name
 //    radius: 4                 optional - rings of local hexes (default: config.local.radius)
-//    danger: 1                 optional - chevrons the world tile advertises (battle maps)
 //    q,r: <type> [elevation] [tags...] [!Enemy Name]
 //
 //  Tile lines list ONLY the tiles that differ from plain ground at the
@@ -26,7 +25,7 @@
 //  parseMapCode() turns the text into plain data (+ a list of readable
 //  errors); buildRecipe() validates it against the config and produces the
 //  recipe object src/local/localmap.js applyRecipe / LocalMapView.build eat:
-//    { id, danger, radius, tiles: { 'q,r': { type, elevation, tags } },
+//    { id, radius, tiles: { 'q,r': { type, elevation, tags } },
 //      spawns: { enemies: [keys] }, enemyTypeIds: [ids], startTags: [{ k, id }] }
 // =====================================================================
 import { COMBAT_CONFIG, COMBAT_TAGS } from '../config/abilities.js';
@@ -37,7 +36,7 @@ const TYPE_ALIASES = { g: 'ground', ground: 'ground', w: 'wall', wall: 'wall', e
 // Text -> plain data. Never throws: everything wrong lands in `errors`, one
 // human sentence per problem, with the 1-based line number.
 export function parseMapCode(text) {
-  const out = { id: null, radius: null, danger: null, tiles: [], errors: [] };
+  const out = { id: null, radius: null, tiles: [], errors: [] };
   const lines = String(text ?? '').split('\n');
   const seen = new Set();
   const err = (n, msg) => out.errors.push(`line ${n}: ${msg}`);
@@ -47,7 +46,7 @@ export function parseMapCode(text) {
     const line = raw.replace(/#.*$/, '').trim();
     if (!line) return;
 
-    const header = line.match(/^(id|radius|danger)\s*:\s*(.+)$/i);
+    const header = line.match(/^(id|radius)\s*:\s*(.+)$/i);
     if (header) {
       const key = header[1].toLowerCase();
       const value = header[2].trim();
@@ -61,7 +60,7 @@ export function parseMapCode(text) {
     }
 
     const tile = line.match(/^(-?\d+)\s*,\s*(-?\d+)\s*:\s*(.+)$/);
-    if (!tile) { err(n, `cannot read "${line}" - expected "id:", "radius:", "danger:" or "q,r: type ..."`); return; }
+    if (!tile) { err(n, `cannot read "${line}" - expected "id:", "radius:" or "q,r: type ..."`); return; }
     const q = Number(tile[1]);
     const r = Number(tile[2]);
     const key = `${q},${r}`;
@@ -131,7 +130,6 @@ export function buildRecipe(parsed, config) {
 
   return {
     id: parsed.id ?? 'unnamed',
-    danger: parsed.danger ?? null,
     radius,
     tiles,
     spawns: enemies.length ? { enemies: enemies.map((e) => e.key) } : null,

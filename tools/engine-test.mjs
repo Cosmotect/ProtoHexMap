@@ -18,7 +18,7 @@ const { CONFIG } = await import(base + 'config.js');
 const { COMBAT_TAGS, ABILITIES, STATUSES, statusKnobs, statusOverridesFor } = await import(base + 'config/abilities.js');
 const { INTELLECT } = await import(base + 'config/units.js');
 const { createBattle } = await import(base + 'local/battle/engine.js');
-const { K } = await import(base + 'local/battle/bhex.js');
+const { K, hexDist, lineOffsets, hexLine } = await import(base + 'local/battle/bhex.js');
 
 const problems = [];
 const check = (ok, msg) => { if (!ok) problems.push(msg); };
@@ -127,6 +127,130 @@ function round(b) {
   check(Object.keys(CONFIG.intellect).join(',') === 'S,A,B,C', 'the intellect classes changed: ' + Object.keys(CONFIG.intellect));
   check(CONFIG.tags === COMBAT_TAGS, 'config.tags is not the table in config/abilities.js');
   check(!!CONFIG.tags.fire, 'the fire tag is missing from the config');
+}
+
+// ----- 6. the hex helpers ---------------------------------------------------
+{
+  const spokes = lineOffsets(1, 3);
+  check(spokes.length === 18, `lineOffsets(1,3) should be 6 directions x 3 steps, got ${spokes.length}`);
+  check(lineOffsets(3, 3).length === 6, 'lineOffsets(3,3) should be the six tiles exactly three out');
+  // Every offset must sit straight out from the origin, or it is not a spoke.
+  for (const [q, r] of spokes) {
+    const d = Math.max(Math.abs(q), Math.abs(r), Math.abs(q + r));
+    check(hexDist('0,0', K(q, r)) === d && [q, r, q + r].filter((n) => n === 0).length >= 1,
+      `lineOffsets produced an off-axis tile: ${q},${r}`);
+  }
+  const line = hexLine('0,0', '2,-3');
+  check(line[0] === '0,0' && line[line.length - 1] === '2,-3', 'hexLine must start at a and end at b: ' + line.join(' '));
+  check(line.every((k, i) => i === 0 || hexDist(line[i - 1], k) === 1), 'hexLine left a gap: ' + line.join(' '));
+}
+
+// ----- 7. the charging shove -------------------------------------------------
+// `moveToTarget` may be aimed AT an occupied tile (2026-09-11). Where the caster
+// stops is decided when the cast resolves, after its own shoves: it takes the
+// furthest tile on the line it can stand on. So a ram that clears the tile lands
+// on it, and one whose shove was blocked pulls up short. The aim preview plays
+// the same cast out on a copy of the board, so what it draws is what happens.
+{
+  ABILITIES.__testRam = { ...ABILITIES.strike, name: 'Charging Shove', damage: 3,
+    castZone: lineOffsets(1, 3), dmgZone: [[0, 0]], tagZone: [], tagId: null, hZone: [],
+    pushZone: [[0, 0, 0, 1]], rotatable: true, moveToTarget: true, buff: '', buffX: null };
+
+  const ram = ({ foes, aimAt, wall = [] }) => {
+    const b = createBattle({
+      config: CONFIG, radius: 4, heights: {},
+      party: [{ name: 'Vanguard', hp: 40, maxHp: 40, abilityIds: ['__testRam'], partyIndex: 0 }],
+      enemies: foes.map((k, i) => ({ name: 'Husk' + i, hp: 40, maxHp: 40, power: 0, abilityIds: ['__none'], init: 1, speed: 0, intellect: 'C' })),
+      partyKeys: [K(0, 0)], enemyKeys: foes, wallKeys: wall,
+      instant: true, rng: () => 0.5,
+      onChange() {}, onFloater() {}, onLog() {}, onEnd() {},
+    });
+    b.start && b.start();
+    const sb = b.state, me = sb.units.find((u) => !u.isEnemy);
+    b.activate(me.uid); b.selectAbility('__testRam');
+    const canAim = Object.keys(sb.aimMap || {}).includes(aimAt);
+    const pv = canAim ? b.aimPreview(aimAt) : null;
+    if (canAim) b.clickTile(aimAt);
+    return { canAim, pv, caster: me.pos, foes: sb.units.filter((u) => u.isEnemy).map((u) => u.pos) };
+  };
+
+  // Room behind the target: it is rammed clear and the caster takes its tile.
+  const clear = ram({ foes: [K(3, 0)], aimAt: K(3, 0) });
+  check(clear.canAim, 'a dash could not be aimed at an occupied tile');
+  check(clear.caster === K(3, 0), `the ram should have taken the target's tile, caster is on ${clear.caster}`);
+  check(clear.foes[0] === K(4, 0), `the target should have been shoved back, it is on ${clear.foes[0]}`);
+
+  // Another enemy right behind it: the shove is a collision, so the tile stays
+  // taken and the charge stops in front of it.
+  const jam = ram({ foes: [K(2, 0), K(3, 0)], aimAt: K(2, 0) });
+  check(jam.caster === K(1, 0), `a blocked ram should stop in front of the target, caster is on ${jam.caster}`);
+  check(jam.foes[0] === K(2, 0), 'the target moved even though the shove was blocked');
+
+  // A wall behind it: same story, by a different obstacle.
+  const wall = ram({ foes: [K(2, 0)], aimAt: K(2, 0), wall: [K(3, 0)] });
+  check(wall.caster === K(1, 0), `a ram into a wall should stop short, caster is on ${wall.caster}`);
+
+  // And the preview told the truth every time.
+  for (const [name, r] of [['clear', clear], ['jammed', jam], ['walled', wall]]) {
+    check(r.pv && r.pv.dash === r.caster, `the ${name} ram previewed a dash to ${r.pv && r.pv.dash} but landed on ${r.caster}`);
+  }
+  check(clear.pv.dashShort === false && jam.pv.dashShort === true, 'dashShort did not flag the ram that stopped short');
+  check(clear.pv.push.length === 1 && clear.pv.push[0].to === K(4, 0), 'the preview did not report where the shove lands: ' + JSON.stringify(clear.pv.push));
+  check(jam.pv.push.length === 0, 'the preview promised a shove that could not happen: ' + JSON.stringify(jam.pv.push));
+}
+
+// ----- 8. a charge needs a clear run ----------------------------------------
+// Reported 2026-09-11: standing in front of enemy A with enemy B behind it, a
+// charge could be aimed at B. It then half-happened - B took the hit and the
+// shove, while the caster, blocked by A, never moved. A charge is a run across
+// the floor: everything strictly between it and the aim point must be empty
+// ground, and only the aim point itself may be occupied.
+{
+  const line = ({ foes, aimAt }) => {
+    const b = createBattle({
+      config: CONFIG, radius: 4, heights: {},
+      party: [{ name: 'Vanguard', hp: 40, maxHp: 40, abilityIds: ['__testRam'], partyIndex: 0 }],
+      enemies: foes.map((k, i) => ({ name: 'H' + i, hp: 40, maxHp: 40, power: 0, abilityIds: ['__none'], init: 1, speed: 0, intellect: 'C' })),
+      partyKeys: [K(0, 0)], enemyKeys: foes,
+      instant: true, rng: () => 0.5,
+      onChange() {}, onFloater() {}, onLog() {}, onEnd() {},
+    });
+    b.start && b.start();
+    const sb = b.state, me = sb.units.find((u) => !u.isEnemy);
+    b.activate(me.uid); b.selectAbility('__testRam');
+    const offered = Object.keys(sb.aimMap || {}).includes(aimAt);
+    b.clickTile(aimAt);   // must be a no-op when it is not offered
+    return { offered, caster: me.pos, hp: sb.units.filter((u) => u.isEnemy).map((u) => u.hp) };
+  };
+  // A body in the way: the tile behind it is not a target at all.
+  const through = line({ foes: [K(1, 0), K(2, 0)], aimAt: K(2, 0) });
+  check(!through.offered, 'a charge was offered a tile behind another unit');
+  check(through.caster === K(0, 0) && through.hp.every((h) => h === 40),
+    'a charge that was not offered still went off: ' + JSON.stringify(through));
+  // Nobody in the way: the same tile IS a target.
+  const clearRun = line({ foes: [K(2, 0)], aimAt: K(2, 0) });
+  check(clearRun.offered, 'a charge down an empty line was not offered');
+  check(clearRun.caster === K(2, 0), `the clear charge should have landed on the target's tile, it is on ${clearRun.caster}`);
+  // The aim point itself being occupied is the whole point, and stays legal.
+  check(line({ foes: [K(1, 0)], aimAt: K(1, 0) }).offered, 'a charge could not be aimed at an adjacent unit');
+  // A dash never shows dmgZone aliases: for a charge the aim point is also the
+  // destination, so a tile you cannot go to must not light up.
+  const aliasFree = (() => {
+    const b = createBattle({
+      config: CONFIG, radius: 4, heights: {},
+      party: [{ name: 'Vanguard', hp: 40, maxHp: 40, abilityIds: ['__testRam'], partyIndex: 0 }],
+      enemies: [{ name: 'H', hp: 40, maxHp: 40, power: 0, abilityIds: ['__none'], init: 1, speed: 0, intellect: 'C' }],
+      partyKeys: [K(0, 0)], enemyKeys: [K(0, 3)],
+      instant: true, rng: () => 0.5,
+      onChange() {}, onFloater() {}, onLog() {}, onEnd() {},
+    });
+    b.start && b.start();
+    const sb = b.state, me = sb.units.find((u) => !u.isEnemy);
+    b.activate(me.uid); b.selectAbility('__testRam');
+    return Object.entries(sb.aimMap || {});
+  })();
+  check(aliasFree.every(([k, anchor]) => k === anchor),
+    'a dash offered alias tiles that are not where it goes: ' + JSON.stringify(aliasFree.filter(([k, a]) => k !== a)));
 }
 
 console.log(problems.length ? 'PROBLEMS:\n- ' + problems.join('\n- ') : 'OK: engine tests passed.');

@@ -298,8 +298,13 @@ export class LocalMapView {
     this.hlRingBackGeo.rotateX(-Math.PI / 2);
     // The AIM PREVIEW fills the tile instead of outlining it, so the two readings
     // never blur into each other: a ring says "you may aim here", a fill says
-    // "this is what it hits". Same six-sided footprint, drawn just inside the ring.
-    this.aimFillGeo = new THREE.CircleGeometry(tileRadius * 0.86, 6, ringStart);
+    // "this is what it hits".
+    // The fill is deliberately NARROWER than the ring's dark backing (which starts
+    // at 0.72), so the two never share a pixel. They used to overlap and flicker
+    // against each other as the camera moved - two coplanar surfaces fighting over
+    // the same depth. Separating them in the PLANE fixes it for good, where nudging
+    // one a hair higher only moves the problem around.
+    this.aimFillGeo = new THREE.CircleGeometry(tileRadius * 0.68, 6, ringStart);
     this.aimFillGeo.rotateX(-Math.PI / 2);
 
     // Which arena edges are a hole rather than a wall (see computeVoidEdges).
@@ -1355,8 +1360,9 @@ export class LocalMapView {
     if (!p) return;
     const c = this.config.colors;
     const baseOpacity = this.config.local?.aimFxOpacity ?? 0.34;
-    // Later marks are drawn a hair higher so an overlap reads as layers rather
-    // than as z-fighting (a tile can be hit AND shoved AND have a tag dropped).
+    // A tile can be hit AND shoved AND have a tag dropped, so the marks stack.
+    // Each is drawn a hair higher than the last; they sit ABOVE the highlight
+    // rings, which they no longer overlap in the plane (see aimFillGeo).
     let layer = 0;
     const fill = (k, color, opacity = baseOpacity) => {
       const tile = this.map.hexes.get(k);
@@ -1368,7 +1374,7 @@ export class LocalMapView {
         color, transparent: true, opacity, depthWrite: false, side: THREE.DoubleSide,
         blending: THREE.AdditiveBlending,
       }));
-      m.position.set(tile.x, tile.top + 0.012 + (layer++) * 0.004, -tile.y);
+      m.position.set(tile.x, tile.top + 0.03 + (layer++) * 0.006, -tile.y);
       // The hovered tile rises; its fill has to rise with it or it hangs in the air.
       m.userData.tile = tile;
       m.userData.baseY = m.position.y;
@@ -1380,13 +1386,17 @@ export class LocalMapView {
     for (const k of p.hit) fill(k, hitColor);
     for (const h of p.height) fill(h.k, c.aimRaiseFill);
     for (const k of p.tag) fill(k, c.aimTagFill);
-    // A shove: the tile the victim is standing on, solid, then the way it is
-    // pushed, fading. The trail is the DIRECTION of the shove, not a promise of
-    // where the victim stops - a collision can cut it short (engine.aimPreview).
+    // A shove, as it will actually land: the tile the victim leaves, solid, and
+    // the tile it ends up on, lighter. The engine plays the cast out on a copy of
+    // the board to work this out, so a collision that cuts a shove short is
+    // already accounted for - these are the real tiles, not the intent.
     for (const sh of p.push) {
-      fill(sh.k, c.aimPushFill, Math.min(1, baseOpacity * 1.5));
-      sh.path.forEach((k, i) => fill(k, c.aimPushFill, baseOpacity * (0.55 - i * 0.15)));
+      fill(sh.from, c.aimPushFill, Math.min(1, baseOpacity * 1.5));
+      if (sh.to !== sh.from) fill(sh.to, c.aimPushFill, baseOpacity * 0.55);
     }
+    // Where the caster ends up. A charge that was aimed at an occupied tile stops
+    // in front of it unless the ram cleared it - and this is the tile it reaches,
+    // not the tile it was aimed at (p.dashShort says which happened).
     if (p.dash) fill(p.dash, c.aimDashFill, Math.min(1, baseOpacity * 1.4));
   }
 

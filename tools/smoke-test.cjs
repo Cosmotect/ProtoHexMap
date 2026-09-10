@@ -282,8 +282,14 @@ fs.mkdirSync(OUT, { recursive: true });
       // of its zone off the board, which the preview correctly leaves out.
       const ring = (k) => { const [q, r] = k.split(',').map(Number); return Math.max(Math.abs(q), Math.abs(r), Math.abs(q + r)); };
       const keys = Object.keys(sb.aimMap || {}).sort((a, b) => ring(a) - ring(b));
-      const p = keys.length ? bt.aimPreview(keys[0]) : null;
-      out[abId] = p ? { kind: p.kind, hit: p.hit.length, push: p.push.length, tag: p.tag.length, at: keys[0], ring: keys.length ? ring(keys[0]) : null } : null;
+      // A shove only shows a push when something is actually standing there: the
+      // preview reports what MOVES, worked out by playing the cast out on a copy
+      // of the board, not which tiles the pushZone covers.
+      const occupied = keys.find((kk) => sb.units.some((u) => u.hp > 0 && u.pos === kk));
+      const at = (abId === 'shove' && occupied) || keys[0];
+      const p = at ? bt.aimPreview(at) : null;
+      out[abId] = p ? { kind: p.kind, hit: p.hit.length, push: p.push.length, tag: p.tag.length,
+                        at, onUnit: !!(at && sb.units.some((u) => u.hp > 0 && u.pos === at)) } : null;
       bt.cancel();
     }
     // A tile nothing may be aimed at has no preview at all.
@@ -297,15 +303,23 @@ fs.mkdirSync(OUT, { recursive: true });
     if (aim.bogus !== null) problems.push('aimPreview answered for a tile that cannot be aimed at');
     // Exact counts where the zone is one tile; shape where it is a blast, since
     // how much of a blast lands depends on how close to the rim it was aimed.
-    const want = { strike: { hit: 1, push: 0, tag: 0 }, shove: { hit: 1, push: 1, tag: 0 } };
-    for (const [id, w] of Object.entries(want)) {
+    for (const id of ['strike', 'shove']) {
       const got = aim.out[id];
       if (!got) { problems.push(`aimPreview returned nothing for ${id}`); continue; }
       if (got.kind !== 'damage') problems.push(`${id} should preview as damage, got ${got.kind}`);
-      for (const f of ['hit', 'push', 'tag']) {
-        if (got[f] !== w[f]) problems.push(`${id} preview ${f}: expected ${w[f]}, got ${got[f]} (${JSON.stringify(got)})`);
-      }
+      if (got.hit !== 1) problems.push(`${id} should hit exactly its aim tile, got ${got.hit} (${JSON.stringify(got)})`);
+      if (got.tag !== 0) problems.push(`${id} should leave no tag, got ${got.tag}`);
     }
+    // The preview reports what MOVES, not which tiles a pushZone covers, so a
+    // shove aimed at bare ground reports nothing - and one aimed at a unit backed
+    // against the arena wall reports nothing either, because that unit crashes
+    // instead of moving. Only the first of those is safe to assert from a live
+    // run, wherever the fight happens to be standing; tools/engine-test.mjs pins
+    // the outcomes exactly, on boards it builds itself.
+    const sh = aim.out.shove;
+    if (sh && !sh.onUnit && sh.push !== 0) problems.push('a shove aimed at empty ground previewed a push: ' + JSON.stringify(sh));
+    if (sh && sh.push > 1) problems.push('a one-tile shove previewed several units moving: ' + JSON.stringify(sh));
+    if (aim.out.strike && aim.out.strike.push !== 0) problems.push('strike previewed a push it does not have');
     const burst = aim.out.burst;
     if (!burst) problems.push('aimPreview returned nothing for burst');
     else if (!(burst.hit > 1 && burst.hit <= 7 && burst.tag === 1 && burst.kind === 'damage')) {
@@ -321,7 +335,7 @@ fs.mkdirSync(OUT, { recursive: true });
     const p = bt.aimPreview(k);
     // One mark per tile the cast touches: the blast, the tag, and each pushed
     // tile with the trail behind it.
-    const want = p ? p.hit.length + p.tag.length + p.push.reduce((n, s) => n + 1 + s.path.length, 0) + (p.dash ? 1 : 0) : 0;
+    const want = p ? p.hit.length + p.tag.length + p.push.reduce((n, s) => n + (s.to !== s.from ? 2 : 1), 0) + (p.dash ? 1 : 0) : 0;
     v.syncAimFx(k);
     const on = { key: v.aimFxKey, meshes: v.aimFx.length, want };
     v.syncAimFx(null);

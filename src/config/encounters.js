@@ -49,14 +49,15 @@ export const ENCOUNTERS = {
   // Authored arenas for encounters that open a local map. When such an
   // encounter is placed at world generation it rolls `rate` to use a crafted
   // map instead of the random generator; a crafted battle also brings its own
-  // enemies (they REPLACE the rolled group) and may declare its own danger
-  // chevrons. Parsed by src/local/mapcode.js; paste any of these codes into
-  // Menu -> Preview map code to walk around it.
+  // enemies (they REPLACE the rolled group). The chevrons a battle tile shows
+  // come only from its ring band (config.battle.danger.ringBands, see
+  // game.js dangerRank) - a crafted map has no say over them. Parsed by
+  // src/local/mapcode.js; paste any of these codes into Menu -> Preview map
+  // code to walk around it.
   //
   // MAP CODE FORMAT - one line per statement, '#' starts a comment:
   //   id: <name>            required, the map's id
   //   radius: <n>           optional, rings of local hexes (default config.local.radius)
-  //   danger: <n>           optional, chevrons the world tile shows (battle maps)
   //   q,r: <type> [elevation] [tags...] [!Enemy Name]
   // Tile lines list only the tiles that differ from plain ground at the
   // neutral elevation (2); everything unlisted stays that. Types: ground,
@@ -73,7 +74,6 @@ export const ENCOUNTERS = {
 # causeway held by raiders, with braziers of fire guarding the mouth.
 id: the-causeway
 radius: 4
-danger: 1
 1,-4: ether
 1,-3: ether
 1,-2: ether
@@ -97,7 +97,6 @@ danger: 1
 # rains shots down; whoever falls in fights out of a firepit.
 id: ember-hollow
 radius: 6
-danger: 2
 0,0: ground 0 fire
 1,0: ground 0
 0,1: ground 0 fire

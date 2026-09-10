@@ -27,7 +27,7 @@
 //  party's ability damage (the Stasis "damage" debuff); and a fatigue-forced
 //  fight opens with an ambush enemy phase before round 1.
 // =====================================================================
-import { DIRS, K, PK, addK, hexDist, rotOff, aimRot, abRotFor, rotDir, boardTiles } from './bhex.js';
+import { DIRS, K, PK, addK, hexDist, hexLine, rotOff, aimRot, abRotFor, rotDir, boardTiles } from './bhex.js';
 import { abilityById, tagDefById, statusOverridesFor } from '../../config/abilities.js';
 import { combatStatsFor } from '../../config/units.js';
 
@@ -607,13 +607,21 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     flushDeaths(st, depth);
     // 5 - spawns: none in the starter content (spawnId is unused); the hook stays
     //     for when summoning abilities come over from hex-box.
-    // 6 - caster dash / teleport to the aimed tile
-    if (ab.moveToTarget && caster.uid !== undefined && caster.hp > 0 && caster.pos !== targetK
-        && tilePass(targetK) && !sUnitAt(st, targetK) && !sBarrier(st, targetK)) {
-      sMoveTo(st, caster, targetK);
-      if (!st.sim) { floater(targetK, '⤳', '#5fc7e0'); blog(caster.name + ' moves to the target'); }
-      sArrive(st, caster, depth);
-      flushDeaths(st, depth);
+    // 6 - caster dash: as far along the line to the aim point as it can get.
+    // This runs LAST on purpose. The shoves in step 2 have already resolved, so a
+    // charge aimed at an enemy lands on the enemy's tile when the ram cleared it,
+    // and pulls up short of it when it did not.
+    if (ab.moveToTarget && caster.uid !== undefined && caster.hp > 0 && caster.pos !== targetK) {
+      const land = dashLanding(st, caster, targetK);
+      if (land !== caster.pos) {
+        sMoveTo(st, caster, land);
+        if (!st.sim) {
+          floater(land, '⤳', '#5fc7e0');
+          blog(caster.name + (land === targetK ? ' moves to the target' : ' charges in as far as it can'));
+        }
+        sArrive(st, caster, depth);
+        flushDeaths(st, depth);
+      }
     }
     st.atk = prevAtk; st.csr = prevCsr; st.shieldUsed = prevSU;
   }
@@ -701,17 +709,51 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   }
 
   // ----- aiming ----------------------------------------------------------
-  function dashOk(u, k) {
-    if (!tilePass(k)) return false;
-    const o = unitAt(k);
-    if (o && o.uid !== u.uid) return false;
-    const t = sb.tags[k];
-    return !(t && t.hp > 0);
+  // Is this tile something a dash can STAND on? Terrain only - a unit does not
+  // disqualify it, because the whole point of a charging shove is to aim AT the
+  // target and ram it out of the way. Whether that works is settled at
+  // resolution (dashLanding), by which time the shove has happened.
+  const dashTileOk = (k) => { if (!tilePass(k)) return false; const t = sb.tags[k]; return !(t && t.hp > 0); };
+  // Can a dash be AIMED here? The destination must be stand-on-able AND the way
+  // to it must be CLEAR: a charge is a run across the floor, not a teleport.
+  // Everything strictly between the caster and the aim point has to be empty
+  // ground; only the aim point itself may be occupied.
+  // Without this the ability was offered through a body and then half-happened -
+  // the far enemy took the hit and the shove while the caster, blocked by the one
+  // in front, never moved (reported 2026-09-11).
+  function dashAimOk(c, k) {
+    if (!dashTileOk(k)) return false;
+    const line = hexLine(c.pos, k);
+    for (let i = 1; i < line.length - 1; i++) {
+      const mid = line[i];
+      if (!dashTileOk(mid)) return false;
+      const o = unitAt(mid);
+      if (o && o.uid !== c.uid) return false;
+    }
+    return true;
+  }
+  // Where a dash actually ENDS, given the board as it stands after the rest of
+  // the cast. The caster walks the line towards the aim point and takes the
+  // furthest tile it can stand on, stopping in front of the first thing in the
+  // way. Its own tile means it never left.
+  function dashLanding(st, caster, targetK) {
+    const line = hexLine(caster.pos, targetK);
+    let last = caster.pos;
+    for (let i = 1; i < line.length; i++) {
+      const k = line[i];
+      if (!tilePass(k)) break;
+      const t = st.tags[k];
+      if (t && t.hp > 0) break;                       // a solid tag blocks like a wall
+      const o = sUnitAt(st, k);
+      if (o && o.uid !== caster.uid) break;           // someone is still standing there
+      last = k;
+    }
+    return last;
   }
   function buildAim(c, ab) {
     const targets = new Set();
     const anchors = new Set();
-    const ok = (k) => !ab.moveToTarget || dashOk(c, k);
+    const ok = (k) => !ab.moveToTarget || dashAimOk(c, k);
     if (ab.castAny) for (const t of activeTiles()) { if (!ok(t)) continue; targets.add(t); anchors.add(t); }
     else for (const off of ab.castZone) {
       const t = addK(c.pos, off);
@@ -721,7 +763,13 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     }
     const map = {};
     for (const t of targets) map[t] = t;
-    if (ab.rotatable) {
+    // The dmgZone ALIASES below let you click any tile a rotatable ability would
+    // cover and have it aim at the castZone tile that covers it - you point at the
+    // enemy you mean to skewer, not at the empty tile in front of you.
+    // A DASH is excluded: for a charge the aim point is also where the caster ends
+    // up, so an alias would light up a tile the unit is not going to, which is
+    // exactly the confusion this pass is fixing.
+    if (ab.rotatable && !ab.moveToTarget) {
       for (const t of anchors) {
         const rk = abRotFor(ab, c.pos, t);
         for (const off of ab.dmgZone) {
@@ -740,14 +788,16 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // where an ability MAY be aimed; this says what happens if it is aimed there,
   // so the player can see the extent of a blast before committing to it.
   //
-  // Every zone is read exactly the way resolveCast reads it - same anchor, same
-  // rotation, same tilePass filter - so the preview cannot drift away from what
-  // the cast actually does. It is a pure query: nothing here writes to the board.
-  //
-  // One honest limit, in `push`: a shove is shown as the tiles it AIMS through,
-  // not where the victim ends up. Collisions, crushes and falls are resolved in
-  // waves against everything else the same cast moves, and playing that out here
-  // would mean simulating the cast to draw a hint about it.
+  // Two halves, for two kinds of question:
+  //  * WHERE the zones fall (hit / tag / height) is read straight off the
+  //    ability, with the same anchor, rotation and tilePass filter resolveCast
+  //    uses. Exact by construction.
+  //  * WHAT MOVES (shoves, and where a charge ends up) cannot be read off a zone
+  //    at all: shoves resolve in waves against everything else the same cast
+  //    moves, and a charge only reaches the target's tile if the ram cleared it.
+  //    So the cast is played out on a COPY of the board - the same machinery the
+  //    enemy AI uses to judge its own moves - and the result read back. Nothing
+  //    here touches the real board.
   function aimPreview(k) {
     if (!sb.selAb || !sb.aimMap || sb.aimMap[k] === undefined) return null;
     const c = curP(); if (!c) return null;
@@ -762,17 +812,6 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       }
       return out;
     };
-    const push = [];
-    for (const o of ab.pushZone) {
-      const dt = addK(anchor, rotOff([o[0], o[1]], rk));
-      if (!tilePass(dt)) continue;
-      const dir = rotDir(o[2], rk);
-      const dist = (o[3] || 1) >= 2 ? 2 : 1;
-      const path = [];
-      let cur = dt;
-      for (let i = 0; i < dist; i++) { cur = addK(cur, DIRS[dir]); path.push(cur); }
-      push.push({ k: dt, dir, dist, path });
-    }
     const height = [];
     for (const o of ab.hZone) {
       const dt = addK(anchor, rotOff([o[0], o[1]], rk));
@@ -781,6 +820,22 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       const to = Math.max(0, Math.min(CFG.elevationLevels, ab.hMode === 'abs' ? o[2] : h0 + o[2]));
       height.push({ k: dt, from: h0, to });
     }
+    // Play it out on a copy. `blind: null` - the preview is for the PLAYER, who
+    // sees the whole board, not for a creature with an intellect class.
+    const st = simSt(null);
+    const se = st.units.find((u) => u.uid === c.uid);
+    let push = [];
+    let dash = null;
+    if (se) {
+      const before = new Map(st.units.map((u) => [u.uid, u.pos]));
+      resolveCast(st, se, ab, anchor);
+      for (const u of st.units) {
+        if (u.uid === c.uid) continue;
+        const from = before.get(u.uid);
+        if (from !== undefined && u.pos !== from) push.push({ uid: u.uid, from, to: u.pos });
+      }
+      if (se.pos !== c.pos) dash = se.pos;
+    }
     // What the hit tiles MEAN, so the view can colour them by consequence rather
     // than by which ability happens to be selected.
     const kind = ab.damage > 0 ? 'damage' : ab.heal > 0 ? 'heal' : ab.buff ? 'buff' : 'none';
@@ -788,9 +843,10 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       anchor, kind,
       hit: zone(ab.dmgZone),
       tag: ab.tagId && tagDefById(ab.tagId) ? zone(ab.tagZone) : [],
-      push, height,
-      // The caster only really dashes if the tile is free when the cast resolves.
-      dash: ab.moveToTarget && c.pos !== anchor && tilePass(anchor) && !unitAt(anchor) ? anchor : null,
+      push, height, dash,
+      // True when the charge stops short of what it was aimed at, because the
+      // ram did not clear the tile. Worth saying out loud in a hint.
+      dashShort: !!(dash && dash !== anchor),
     };
   }
 
@@ -1083,7 +1139,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
         const tlist = ab.castAny ? activeTiles() : ab.castZone.map((off) => addK(startK, off));
         for (const t of tlist) {
           if (!inMap(t)) continue;
-          if (ab.moveToTarget && t !== startK && !dashOk(e, t)) continue;
+          if (ab.moveToTarget && t !== startK && !dashAimOk({ pos: startK, uid: e.uid }, t)) continue;
           const st = simSt(blind);
           const se = st.units.find((u) => u.uid === e.uid);
           se.pos = startK;

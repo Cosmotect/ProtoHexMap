@@ -85,7 +85,7 @@ export const UNITS = {
     //             drives its own upgrade tree (config/upgrades.js), and the roster
     //             window and the party panel are laid out for the pair.
     roster: [
-      { name: 'Vanguard', icon: '🛡️', hp: 40, speed: 4, flying: false, abilities: ['strike', 'shove'] },
+      { name: 'Vanguard', icon: '🛡️', hp: 40, speed: 4, flying: false, abilities: ['strike', 'shove', 'chargeHeadbutt'] },
       { name: 'Archer', icon: '🏹', hp: 28, speed: 4, flying: false, abilities: ['volley', 'lance'] },
       { name: 'Mystic', icon: '🔮', hp: 22, speed: 3, flying: false, abilities: ['burst', 'mend'] },
       { name: 'Warden', icon: '⚔️', hp: 36, speed: 4, flying: false, abilities: ['strike', 'guard'] },
@@ -119,11 +119,15 @@ export const UNITS = {
     // interactive combat fights with the upgraded abilities themselves.
     simPower: { base: 3, perUpgrade: 2 },
     // Danger preview - the chevrons above a revealed fight. ABSOLUTE, not relative
-    // to the party: reading whether a fight is takeable is the player's job.
-    // Regular fights show 0..2 chevrons by the band their TOTAL enemy power falls
-    // into (0 below bands[0], 1 from bands[0], 2 from bands[1]); a Stasis Colony
-    // always shows `colony`, the Stasis Seed always shows `seed`.
-    danger: { bands: [12, 36], colony: 3, seed: 5, maxChevrons: 8 },
+    // to the party: reading whether a fight is takeable is the player's job. A
+    // STRICT rule, no calculation: a regular fight shows 0..2 chevrons purely by
+    // which RING BAND its tile sits in - `ringBands` is the ring each threshold is
+    // crossed AFTER, so [3, 7] means rings 1-3 show 0, rings 4-7 show 1, rings
+    // 8-11 show 2. Enemy power plays no part (2026-09-10); a crafted map's own
+    // per-tile danger no longer exists either - a Stasis Colony always shows
+    // `colony`, the Stasis Seed always shows `seed`, both deliberately higher
+    // than the outer band's 2 so they still read as harder than a normal fight.
+    danger: { ringBands: [3, 7], colony: 3, seed: 5, maxChevrons: 8 },
     // Player units hit harder the closer they are to death ("playing carefully"):
     // damage *= 1 + desperation * (1 - hp / maxHp). 0 = off, 0.5 = up to +50% at 1 HP.
     desperation: 0.5,
@@ -145,8 +149,9 @@ export const UNITS = {
     //                 dodecahedron  torus  torusKnot  diamond  shard  slab star
     //    color      that body's colour
     //    hp         hit points
-    //    power      its strength: feeds the damage multiplier, the danger
-    //               chevrons on the world map, and the auto-resolve simulation
+    //    power      its strength: feeds the damage multiplier and the
+    //               auto-resolve simulation (no longer the danger chevrons -
+    //               those come purely from ring band, see battle.danger above)
     //    init       turn order in a fight (higher acts first)
     //    speed      move points per turn (an uphill step costs 2)
     //    flying     ignores height and glides over anything
@@ -205,8 +210,9 @@ export const UNITS = {
     //  a list of bestiary ids; repeats are fine and get numbered ("Husk 2").
     //  Nothing is rolled inside a group: what is written here is what walks
     //  onto the arena, so a fight can be read straight off this table.
-    //  `power` in the comments is the group's total, the number the danger
-    //  chevrons on the world map are graded against (battle.danger.bands).
+    //  `power` in the comments is the group's total (feeds the damage multiplier
+    //  and the auto-resolve simulation only - the danger chevrons on the world
+    //  map no longer read it, see battle.danger.ringBands above).
     // =================================================================
     enemyGroups: {
       // --- regular groups, inner rings (total power 3-6) ---

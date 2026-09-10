@@ -124,10 +124,11 @@ export class Game {
   // Rolls which battle / shop tiles use an authored map code instead of the
   // random arena generator (config.craftedMaps: per-kind rate + map list).
   // A crafted battle brings its own garrison - the authored enemies REPLACE
-  // the group rolled at generation - and may declare the danger chevrons its
-  // tile advertises (the map code's `danger:` line). A code that fails to
-  // parse is skipped with a console warning: a typo in a config map must
-  // never take the run down with it.
+  // the group rolled at generation. A map code has no say over its tile's
+  // chevrons (2026-09-10 - the old `danger:` header line is gone): those are
+  // read purely from the tile's ring band, see dangerRank() below. A code
+  // that fails to parse is skipped with a console warning: a typo in a
+  // config map must never take the run down with it.
   assignCraftedMaps() {
     const crafted = this.config.craftedMaps ?? {};
     const rng = createRng((this.seed ^ 0x5eedca) >>> 0);
@@ -146,7 +147,6 @@ export class Game {
           const units = recipe.enemyTypeIds.map((id) => makeEnemyOfType(this.config.battle, id)).filter(Boolean);
           if (units.length === recipe.enemyTypeIds.length) h.enemies = renameDuplicates(units);
         }
-        if (recipe.danger != null) h.dangerOverride = recipe.danger;
       }
     }
   }
@@ -281,19 +281,16 @@ export class Game {
 
   // Danger rank of a battle tile, shown as chevrons above the marker
   // (config.battle.danger). ABSOLUTE, deliberately not relative to the party:
-  // judging whether a fight is takeable is the player's job. Regular fights
-  // show 0..2 chevrons by the band their total enemy power falls into; a
-  // Stasis Colony always shows danger.colony, the Seed always danger.seed.
+  // judging whether a fight is takeable is the player's job. A STRICT, static
+  // rule - no calculation, no reading enemy power: a regular fight shows
+  // 0..2 chevrons purely by which RING BAND its tile sits in (d.ringBands).
+  // A Stasis Colony always shows danger.colony, the Seed always danger.seed.
   dangerRank(hex) {
     if (!hex.enemies) return 0;
     const d = this.config.battle.danger;
     if (hex.isSeed) return d.seed;
     if (hex.isColony) return d.colony;
-    // A handcrafted arena advertises what its author wrote (the map code's
-    // `danger:` line): the chevrons are a notice to the player, not a formula.
-    if (hex.dangerOverride != null) return Math.min(d.maxChevrons ?? 8, hex.dangerOverride);
-    const total = hex.enemies.reduce((a, e) => a + e.power, 0);
-    const rank = (d.bands ?? []).filter((threshold) => total >= threshold).length;
+    const rank = (d.ringBands ?? []).filter((maxRing) => hex.ring > maxRing).length;
     return Math.min(d.maxChevrons ?? 8, rank);
   }
   deadUnits() { return this.state.party.filter((u) => !u.alive); }

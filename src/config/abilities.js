@@ -3,19 +3,84 @@
 //  (Part of the config split; read by src/local/battle/engine.js.)
 //
 //  This is the hand-authored slice of the hex-box combat prototype: only the
-//  DEFINITIONS came over, none of the editors or storage. Ability shapes are
-//  hex-box's zone format:
-//    castZone  offsets (from the caster) the ability may be aimed at
-//    dmgZone   offsets (from the aim point) that take damage / heal / status
-//    tagZone   offsets that receive the tile tag `tagId`
-//    pushZone  [q, r, dirIndex, dist?] - shove whoever stands there
-//    rotatable true = the zones rotate towards the aim point (6 sectors)
-//    castAny   true = aim anywhere on the board
-//    moveToTarget  the caster dashes to the aim point after the effects
-//    buff      the id of a status from STATUSES below; buffX is the list of
-//              numbers for that status's knobs (see WHAT buffX MEANS)
+//  DEFINITIONS came over, none of the editors or storage.
+//
 // =====================================================================
-import { ringOffsets, DIRS } from '../local/battle/bhex.js';
+//  EVERY KNOB AN ABILITY HAS
+//  ---------------------------------------------------------------------
+//  An ability is DATA. There is no per-ability code anywhere: one executor
+//  (`resolveCast` in local/battle/engine.js) reads the fields below and performs
+//  them, always in this order, and the enemy AI judges a new ability by playing
+//  that same executor out on a copy of the board. So anything expressible here
+//  works in the game AND is understood by the AI the moment you write it.
+//
+//  ----- 1. WHERE IT CAN BE POINTED ------------------------------------
+//    castZone   a LIST OF OFFSETS from the caster's tile: [[q, r], ...]. Any
+//               shape at all - it is a plain list, not a formula. Two helpers
+//               build the common ones (local/battle/bhex.js):
+//                 ringOffsets(minD, maxD)  every tile at distance minD..maxD.
+//                                          A BLOB: ringOffsets(1, 3) is 36 tiles.
+//                 lineOffsets(minD, maxD)  only the six straight spokes out from
+//                                          the caster. A STAR: lineOffsets(1, 3)
+//                                          is 18 tiles, with nothing in between
+//                                          the spokes. For anything that travels
+//                                          in a straight line - a charge, a bolt.
+//               Neither is special: `castZone: [[2, 0], [0, 2]]` is perfectly
+//               legal if that is the shape you want.
+//    castAny    true = ignore castZone and aim at any tile on the board.
+//
+//    ----- WHY MORE TILES LIGHT UP THAN castZone LISTS -----
+//    With `rotatable: true` the game also lets you click any tile the dmgZone
+//    would COVER, and treats it as a click on the castZone tile that covers it.
+//    Lance has a castZone of one ring but lights up 18 tiles, because you aim it
+//    by clicking the enemy you mean to skewer rather than the empty tile in front
+//    of you. It does NOT extend the ability's reach: clicking the far tile casts
+//    from the near one and hits exactly the same three tiles. If you want real
+//    reach, put the tiles in castZone.
+//
+//  ----- 2. WHAT IT DOES, in the order it happens ----------------------
+//    dmgZone    offsets FROM THE AIM POINT that take the damage / heal / status.
+//    damage     flat damage to every unit in dmgZone. An ENEMY adds
+//               round(power / combat.powerPerDamage). Height matters: 2+ levels
+//               above adds combat.highBonus, 2+ below removes combat.lowPenalty.
+//    heal       flat healing to every unit in dmgZone (applied after damage).
+//    buff       the id of a status from STATUSES below, applied to every unit in
+//               dmgZone; buffX is the list of numbers for that status's knobs
+//               (see WHAT buffX MEANS, further down this file).
+//    pushZone   [q, r, dirIndex, dist] - shove whoever stands on the offset [q, r]
+//               from the aim point.
+//                 dirIndex  which way, as an index into DIRS: 0 east, 1 north-east,
+//                           2 north-west, 3 west, 4 south-west, 5 south-east. With
+//                           `rotatable` these turn with the aim, so 0 reads as
+//                           "away from the caster" and 3 as "towards the caster" -
+//                           which is how you write a PULL.
+//                 dist      1 or 2. ANYTHING ELSE IS CLAMPED TO 2 by the engine.
+//               Shoves resolve in waves, so several of them in one cast do not
+//               walk through each other. A shove into an occupied tile is a
+//               collision (both take damage), into a wall a crash, off a lethal
+//               edge or into ether a death.
+//    hZone      [q, r, amount] - change the ground height at that offset.
+//    hMode      'rel' = add `amount` to the height there, 'abs' = set it to
+//               `amount`. Clamped to 0..combat.elevationLevels. Units standing
+//               on the tile are not moved.
+//    tagId      a tile tag from COMBAT_TAGS to leave behind...
+//    tagZone    ...on these offsets from the aim point.
+//    moveToTarget  the caster charges towards the aim point, LAST of all - after
+//               its own damage, shoves and terrain changes have resolved. It
+//               walks the straight line and takes the furthest tile it can stand
+//               on, stopping in front of the first thing still in the way. So a
+//               charge that rams its target out of the way lands on the tile the
+//               target used to hold, and one whose shove was blocked pulls up
+//               short of it. An occupied tile is a legal thing to aim at.
+//    rotatable  true = every zone above (dmgZone, pushZone, hZone, tagZone) turns
+//               to face the aim point, snapped to one of six 60-degree sectors.
+//               Write the zones facing EAST and they will point wherever you aim.
+//
+//  ----- 3. WHAT IS NOT THERE YET --------------------------------------
+//    No ability can swap places with a unit, summon anything, or push further
+//    than two tiles. Each of those needs engine work, not a config line.
+// =====================================================================
+import { ringOffsets, lineOffsets, DIRS } from '../local/battle/bhex.js';
 
 export const COMBAT_CONFIG = {
   // ----- Combat rules (hex-box "settings" block) ----------------------
@@ -79,7 +144,11 @@ export const ABILITIES = {
   //thundering strike
   //nerve agent salvo
   //Razeing Antler Swipe
-  //Rushing Headbutt
+  // A charging shove, written entirely in the fields above: it runs up to three
+  // tiles down one spoke (lineOffsets), gores the line it arrives on, shoves the
+  // unit it rammed, and takes that unit's tile - or stops just short of it when
+  // the shove had nowhere to go. Aiming a dash AT a unit became legal 2026-09-11.
+  chargeHeadbutt: A({ name: 'Charge Headbutt', icon: '🐏💨', color: '#e0b25f', damage: 2, castZone: lineOffsets(1, 3), dmgZone: [[0, 0]], pushZone: [[0, 0, 0]], rotatable: true, moveToTarget: true }),
   //Web
 
   //Player Abilities

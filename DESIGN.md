@@ -108,9 +108,12 @@ balance must be re-measured against interactive play.
   * *Battle / Stasis Seed / Stasis Colony*: interactive combat on the local map (see
     below). Enemy groups are rolled at map generation / Colony spawn and previewed as
     red danger CHEVRONS above the marker - ABSOLUTE, not party-relative
-    (`config.battle.danger`): a regular fight shows 0-2 by the band its TOTAL enemy
-    power falls into (`bands` [12, 36]), a Colony always shows `colony` (3), the Seed
-    always `seed` (5). Reading whether a fight is takeable is the player's job.
+    (`config.battle.danger`). A STRICT, static rule (2026-09-10): a regular fight
+    shows 0-2 chevrons purely by which RING BAND its tile sits in (`ringBands`
+    [3, 7] - rings 1-3 show 0, 4-7 show 1, 8-11 show 2), never by enemy power. A
+    Colony always shows `colony` (3), the Seed always `seed` (5) - both
+    deliberately above the regular cap of 2. Reading whether a fight is
+    takeable is the player's job.
     Regular groups come from RING BANDS (count range + total group power range, split
     evenly): rings 1-3 = 1-3 units / 3-6 power, 4-7 = 2-5 / 24-30, 8-11 = 4-8 /
     50-60, hp 14-22 each. The Seed rolls one of 5 `bosses` variants, a Colony one of
@@ -415,10 +418,11 @@ AUTHORED arena. The authoring format is the MAP CODE: plain text, one line per
 statement, built to be scanned by human eyes and pasted around.
 
 * **The format**: `id:` (required), `radius:` (optional - the arena takes the
-  code's size, any 1..12 rings), `danger:` (optional - the chevrons a crafted
-  battle tile advertises; a NOTICE to the player, not a formula), then tile
-  lines `q,r: <type> [elevation] [tags...] [!Enemy Name]`. Only tiles that
-  differ from plain ground at the neutral elevation are listed. Types:
+  code's size, any 1..12 rings), then tile lines
+  `q,r: <type> [elevation] [tags...] [!Enemy Name]`. (A `danger:` header line
+  existed until 2026-09-10; it's gone now - a battle tile's chevrons come
+  purely from its ring band, see `config.battle.danger.ringBands`.) Only
+  tiles that differ from plain ground at the neutral elevation are listed. Types:
   `ground`; `wall` (a rock column - nobody walks or flies through, a shove
   against it crashes like the arena rim); `ether` (a hole - nobody walks in, a
   shove over it kills, exactly like a lethal void edge). Tags are tile tag ids
@@ -437,9 +441,10 @@ statement, built to be scanned by human eyes and pasted around.
   rng of its OWN (seed ^ 0x5eedca), after every other roll - tuning the rates
   never reshuffles an existing seed's map, enemies or shop stock. A crafted
   battle's authored enemies REPLACE the rolled group (so the tile's hover, the
-  fight and the simulation all agree), and its `danger:` line overrides the
-  power-band chevron formula (`dangerRank`). Shops only STORE their recipe for
-  now - the shop flow does not open a local map yet. Scenario maps skip
+  fight and the simulation all agree); its chevrons always come from the
+  tile's ring band (`dangerRank`), independent of the recipe. Shops only
+  STORE their recipe for now - the shop flow does not open a local map yet.
+  Scenario maps skip
   crafted assignment entirely; the Virtual Playtester's world runs keep the
   crafted ENEMIES but fight them on a generated arena (the headless harness
   does not read recipes yet - a known divergence).
@@ -791,6 +796,70 @@ stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }
   nearest filled layer, so those three still draw layer 3's fights - the cells are
   simply free now to be given their own rosters without being cleared by hand
   first.
+
+
+* 2026-09-11 **The ability reference lives in the config now.** The top of
+  src/config/abilities.js spells out every knob an ability has - where it can be
+  pointed, what it does and in what order, and what is NOT possible without engine
+  work. It also explains the thing that reads as a bug and is not: with
+  `rotatable: true` the game lights up every tile the dmgZone would cover and treats
+  a click there as a click on the castZone tile that covers it, so Lance shows 18
+  tiles for a castZone of 6. It does not extend reach - the far click casts from the
+  near tile and hits the same three - but it is invisible unless someone says so.
+* 2026-09-11 **`lineOffsets(minD, maxD)` and `hexLine(a, b)`** (bhex.js). The first
+  is the star to `ringOffsets`' blob: only the six straight spokes, nothing in
+  between them, for anything that travels in a line. It was possible to write that
+  shape by hand all along - a castZone is a plain list of offsets - but nobody could
+  guess that from the config, which is the same failure the reference above fixes.
+  `hexLine` is the standard cube-interpolated hex line, used by the dash below.
+* 2026-09-11 **A dash may be aimed at an occupied tile.** `moveToTarget` used to
+  strike every occupied tile off the aim list, which made a CHARGING SHOVE
+  impossible to express: the whole point of one is to aim at the target, ram it out
+  of the way and take its place.
+  * Aiming (`dashAimOk`) now asks only whether the TERRAIN allows it - a solid tag
+    or an impassable tile still says no, a unit does not.
+  * Where the caster stops is settled at resolution (`dashLanding`), which runs
+    LAST, after the cast's own shoves. It walks `hexLine` towards the aim point and
+    takes the furthest tile it can stand on, stopping in front of the first thing
+    still in the way. So the ram that clears the tile lands on it; the one whose
+    shove was blocked by a wall, an ally or another enemy pulls up short. Landing on
+    its own tile means it never moved.
+  * The whole ability is config: `castZone: lineOffsets(1, 3)`, `dmgZone: [[0, 0]]`,
+    `pushZone: [[0, 0, 0, 1]]`, `rotatable: true`, `moveToTarget: true`.
+* 2026-09-11 **The aim preview now simulates the moving half.** Where the zones
+  fall (hit / tag / height) is still read straight off the ability and is exact by
+  construction. What MOVES cannot be: shoves resolve in waves against everything
+  else the same cast moves, and a charge only reaches the target's tile if the ram
+  cleared it. So `aimPreview` plays the cast out on a copy of the board - the same
+  machinery the enemy AI uses - and reports the real outcome: `push` became
+  `{uid, from, to}` per unit that actually moves, and `dash` is the tile the caster
+  actually reaches, with `dashShort` true when it stopped in front of what it was
+  aimed at. This removed the "intent, not outcome" caveat the previous entry
+  carried. The view fills the tile a victim leaves solid and the tile it lands on
+  lighter.
+
+
+* 2026-09-11 (b) **Fixed: a charge could be aimed through a body.** Standing in
+  front of enemy A with enemy B behind it, Charge Headbutt offered B as a target.
+  The cast then HALF happened: B took the hit and the shove, while the caster,
+  blocked by A, never moved - an ability reaching across a body it could not pass.
+  * `dashAimOk` now checks the whole run, not just the destination: everything
+    strictly between the caster and the aim point must be empty ground (`hexLine`),
+    and only the aim point itself may be occupied. A charge is a run across the
+    floor, not a teleport.
+  * A dash no longer generates dmgZone ALIASES either. Aliases exist so a rotatable
+    ability can be aimed by clicking the enemy you mean to hit rather than the tile
+    in front of you, but for a charge the aim point is also the DESTINATION, so an
+    alias lights up a tile the unit is not going to. Same confusion, same fix.
+  * Note this was never a resolution bug: `dashLanding` correctly refused to move
+    and `aimPreview` correctly showed no dash. The mistake was offering the aim.
+* 2026-09-11 (c) **The aim-preview fills no longer z-fight the highlight rings.**
+  They were two nearly coplanar surfaces sharing the same pixels. The fill is now
+  NARROWER than the ring's dark backing (0.68 of the tile radius against the
+  backing's 0.72), so they never overlap in the plane at all - which fixes it for
+  good, where nudging one a hair higher only moves the problem around. The fills
+  also sit a little above the rings now, stacking upwards where a tile carries
+  several marks.
 
 
 ## Open questions
