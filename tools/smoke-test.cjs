@@ -254,6 +254,101 @@ fs.mkdirSync(OUT, { recursive: true });
   if (knobShape.legacy.length) problems.push('statuses still carry amountIs / amountSign: ' + knobShape.legacy.join(', '));
   if (!(knobShape.slowSpeed < 0 && knobShape.hasteSpeed > 0)) problems.push('slow / haste no longer write their own sign: ' + JSON.stringify(knobShape));
 
+  // ----- tile tags are config now, and the AI can read what they do ---------
+  // Tags were the one piece of arena content that could only be changed by
+  // opening a file (2026-09-10). They are part of the config object now, which
+  // also means the Settings window lists them beside the statuses.
+  const tagWiring = await page.evaluate(() => {
+    const t = window.game.config.tags || {};
+    return { ids: Object.keys(t), fire: t.fire && { dmg: t.fire.dmg, life: t.fire.life },
+             hooks: t.fire ? ['onPeriodic', 'onPickup', 'onExpire', 'onDestroy'].every((h) => h in t.fire) : false };
+  });
+  if (!tagWiring.ids.includes('fire')) problems.push('the tag table did not reach the config: ' + JSON.stringify(tagWiring));
+  if (!tagWiring.hooks) problems.push('a tag row lost its hooks: ' + JSON.stringify(tagWiring));
+
+  // ----- the aim preview -----------------------------------------------------
+  // Selecting an ability rings the tiles it may be aimed at; hovering one shows
+  // what a cast there would actually touch. The engine works the extent out from
+  // the same zones the cast reads, so the two can never disagree.
+  const aim = await page.evaluate(() => {
+    const bt = window.__battle, sb = bt.state;
+    const me = sb.units.find((u) => !u.isEnemy && u.hp > 0 && !u.done);
+    if (!me) return { skipped: 'no unit to act with' };
+    const out = {};
+    for (const abId of ['strike', 'shove', 'burst']) {
+      if (!me.abilityIds.includes(abId)) me.abilityIds.push(abId);
+      bt.cancel(); bt.activate(me.uid); bt.selectAbility(abId);
+      // Aim at the most CENTRAL castable tile: a blast aimed at the rim has part
+      // of its zone off the board, which the preview correctly leaves out.
+      const ring = (k) => { const [q, r] = k.split(',').map(Number); return Math.max(Math.abs(q), Math.abs(r), Math.abs(q + r)); };
+      const keys = Object.keys(sb.aimMap || {}).sort((a, b) => ring(a) - ring(b));
+      const p = keys.length ? bt.aimPreview(keys[0]) : null;
+      out[abId] = p ? { kind: p.kind, hit: p.hit.length, push: p.push.length, tag: p.tag.length, at: keys[0], ring: keys.length ? ring(keys[0]) : null } : null;
+      bt.cancel();
+    }
+    // A tile nothing may be aimed at has no preview at all.
+    bt.activate(me.uid); bt.selectAbility('strike');
+    const bogus = bt.aimPreview('99,99');
+    bt.cancel();
+    return { out, bogus };
+  });
+  if (aim.skipped) problems.push('aim preview check skipped: ' + aim.skipped);
+  else {
+    if (aim.bogus !== null) problems.push('aimPreview answered for a tile that cannot be aimed at');
+    // Exact counts where the zone is one tile; shape where it is a blast, since
+    // how much of a blast lands depends on how close to the rim it was aimed.
+    const want = { strike: { hit: 1, push: 0, tag: 0 }, shove: { hit: 1, push: 1, tag: 0 } };
+    for (const [id, w] of Object.entries(want)) {
+      const got = aim.out[id];
+      if (!got) { problems.push(`aimPreview returned nothing for ${id}`); continue; }
+      if (got.kind !== 'damage') problems.push(`${id} should preview as damage, got ${got.kind}`);
+      for (const f of ['hit', 'push', 'tag']) {
+        if (got[f] !== w[f]) problems.push(`${id} preview ${f}: expected ${w[f]}, got ${got[f]} (${JSON.stringify(got)})`);
+      }
+    }
+    const burst = aim.out.burst;
+    if (!burst) problems.push('aimPreview returned nothing for burst');
+    else if (!(burst.hit > 1 && burst.hit <= 7 && burst.tag === 1 && burst.kind === 'damage')) {
+      problems.push('burst should preview as a blast that leaves one tag: ' + JSON.stringify(burst));
+    }
+  }
+  // And the view paints it: hovering a castable tile makes marks, leaving clears them.
+  const aimPaint = await page.evaluate(async () => {
+    const bt = window.__battle, sb = bt.state, v = window.__localView;
+    const me = sb.units.find((u) => !u.isEnemy && u.hp > 0 && !u.done);
+    bt.cancel(); bt.activate(me.uid); bt.selectAbility('burst');
+    const k = Object.keys(sb.aimMap || {})[0];
+    const p = bt.aimPreview(k);
+    // One mark per tile the cast touches: the blast, the tag, and each pushed
+    // tile with the trail behind it.
+    const want = p ? p.hit.length + p.tag.length + p.push.reduce((n, s) => n + 1 + s.path.length, 0) + (p.dash ? 1 : 0) : 0;
+    v.syncAimFx(k);
+    const on = { key: v.aimFxKey, meshes: v.aimFx.length, want };
+    v.syncAimFx(null);
+    const off = { key: v.aimFxKey, meshes: v.aimFx.length };
+    bt.cancel();
+    return { on, off };
+  });
+  if (aimPaint.on.meshes !== aimPaint.on.want || aimPaint.on.meshes < 2 || aimPaint.off.meshes !== 0) {
+    problems.push('the aim preview did not paint / clear: ' + JSON.stringify(aimPaint));
+  }
+
+  // ----- the settings defaults asked for on 2026-09-10 -----------------------
+  const newDefaults = await page.evaluate(() => {
+    const c = window.game.config;
+    const sp = c.battle.spawns;
+    return {
+      volume: c.audio.volume,
+      weakTick: c.battle.enemyTypes.weakTick && c.battle.enemyTypes.weakTick.color,
+      // Layers 0-2 are empty on purpose; an empty cell plays the nearest filled one.
+      emptyLow: Object.keys(sp).every((row) => [0, 1, 2].every((n) => (sp[row][n] || []).length === 0)),
+      filledHigh: Object.keys(sp).every((row) => (sp[row][3] || []).length > 0),
+    };
+  });
+  if (newDefaults.volume !== 0.05) problems.push('audio.volume default is ' + newDefaults.volume);
+  if (newDefaults.weakTick !== '#a0c437') problems.push('weakTick colour default is ' + newDefaults.weakTick);
+  if (!newDefaults.emptyLow || !newDefaults.filledHigh) problems.push('spawn layers 0-2 should be empty and 3+ filled: ' + JSON.stringify(newDefaults));
+
   // ----- intellect classes (config.intellect) -------------------------------
   // Every creature carries a class saying which facts it can weigh on its turn.
   // Check the table arrived, that no bestiary row was left without one, and that

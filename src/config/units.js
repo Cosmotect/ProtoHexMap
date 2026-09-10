@@ -10,6 +10,58 @@
 //  upgrade count - battle.simPower below.
 // =====================================================================
 
+// ----- Intellect classes ------------------------------------------------
+//  Not every creature thinks as well as every other one. A unit's INTELLECT CLASS
+//  says which facts about the board it is capable of WEIGHING when it decides what
+//  to do on its turn. It does not change the rules one bit: a witless brute still
+//  gets the high-ground damage bonus if it happens to be standing high, still dies
+//  in the void, still burns in a fire. It simply does not think about any of that
+//  when choosing where to go and what to cast.
+//
+//  Nor does it change WHOSE side an effect is aimed at. Every class knows a curse
+//  is for the party and a blessing is for its own allies - that is not cleverness,
+//  it is knowing friend from foe. What the clever ones have is the ability to pick
+//  the BEST target: a C-class creature hands its shield to whichever ally it can
+//  reach, an S-class one hands it to the ally that is actually about to be hit.
+//
+//  ----- what each flag lets a mind weigh -----
+//    statuses    the statuses on the board: which of them are worth applying to
+//                whom, that a shield can be popped, that a target already carries
+//                what it was about to be given, and which ally most needs a buff.
+//                Blind minds still apply statuses, at a flat worth, to any legal
+//                target of the right side.
+//    elevation   the damage a height difference is worth, and the value of
+//                claiming high ground while walking towards the party.
+//    tags        the tiles that burn: worth avoiding to stand on, worth shoving
+//                someone onto.
+//    ether       the holes in the arena's edge: worth shoving someone into.
+//    injuries    how hurt a target is: worth finishing the wounded rather than
+//                spreading damage evenly.
+//
+//  These are the four classes the design asks for. The table is data like
+//  everything else - a class can be re-tuned, and a fifth one invented, in the
+//  Settings window without touching the engine. It lives HERE, next to the
+//  bestiary, because a class is something a CREATURE has: every bestiary row
+//  names one in its `intellect` column. (It was in config/abilities.js until
+//  2026-09-10, which is where the status table it reads happens to live.)
+const M = (o) => Object.assign({
+  statuses: false, elevation: false, tags: false, ether: false, injuries: false,
+}, o);
+
+export const INTELLECT = {
+  S: M({ statuses: true, elevation: true, tags: true, ether: true, injuries: true }),
+  A: M({ elevation: true, ether: true, injuries: true }),
+  B: M({ elevation: true }),
+  C: M({}),
+};
+
+// (What a status is worth to a mind that cannot read them lives in
+// `combat.blindStatusValue`, which is the copy the engine actually reads. There
+// used to be a second, unread BLIND_STATUS_VALUE export here; two spellings of
+// one number is how `enraged` ended up pointing at a field it did not have.)
+
+export const intellectOf = (cls) => INTELLECT[cls] ?? INTELLECT.C;
+
 export const UNITS = {
   // ----- Party -------------------------------------------------------
   // The three units the player controls inside encounters. On the world map they
@@ -111,7 +163,7 @@ export const UNITS = {
       // soldiery B, elites A, the leaders S.
       // --- the wandering rabble of the world map ---
       frailTick: { name: 'Frail Tick', shape: 'spike', color: '#a1254a', hp: 4, power: 2, init: 4, speed: 3, flying: false, intellect: 'C', abilities: ['softeningBite'] },
-      weakTick: { name: 'Lethargy Tick', shape: 'spike', color: '#b0714a', hp: 4, power: 2, init: 4, speed: 3, flying: false, intellect: 'C', abilities: ['weakeningBite'] },
+      weakTick: { name: 'Lethargy Tick', shape: 'spike', color: '#a0c437', hp: 4, power: 2, init: 4, speed: 3, flying: false, intellect: 'C', abilities: ['weakeningBite'] },
       rageTick: { name: 'Rage Tick', shape: 'spike', color: '#c0455f', hp: 4, power: 2, init: 4, speed: 3, flying: false, intellect: 'C', abilities: ['rageBite'] },
       rushTick: { name: 'Rusher Tick', shape: 'spike', color: '#e2474b', hp: 4, power: 2, init: 4, speed: 3, flying: false, intellect: 'C', abilities: ['headbutt'] },
 
@@ -216,7 +268,12 @@ export const UNITS = {
     // =================================================================
     spawns: (() => {
       const LAYERS = [0, 1, 2, 3, 4, 5, 6];   // keep in step with config/world.js `layers`
-      const everyLayer = (ids) => Object.fromEntries(LAYERS.map((n) => [n, [...ids]]));
+      // Layers 0-2 start EMPTY on purpose (2026-09-10). An empty cell plays the
+      // nearest filled layer, so those three currently draw layer 3's fights -
+      // the same content as before, but the cells are now free to be given
+      // their own rosters without first having to be cleared by hand.
+      const FIRST_FILLED = 3;
+      const everyLayer = (ids) => Object.fromEntries(LAYERS.map((n) => [n, n < FIRST_FILLED ? [] : [...ids]]));
       return {
         inner: everyLayer(['loneRaider', 'strays', 'scoutPair', 'huskTrio', 'tickSwarm']),
         middle: everyLayer(['raidParty', 'stalkerPack', 'wardenGuard']),
@@ -226,6 +283,11 @@ export const UNITS = {
       };
     })(),
   },
+
+  // The INTELLECT CLASSES, as part of the config object, so the Settings window
+  // can edit them and the engine can read them off the same table (config.intellect).
+  intellect: INTELLECT,
+
 };
 
 // Combat stats for a unit by its DISPLAY name ("Husk 2" -> "Husk"): a roster

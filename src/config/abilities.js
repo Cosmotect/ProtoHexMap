@@ -269,58 +269,10 @@ COMBAT_CONFIG.statuses = STATUSES;
 
 export const statusById = (id) => STATUSES[id] ?? null;
 
-// ----- Intellect classes ------------------------------------------------
-//  Not every creature thinks as well as every other one. A unit's INTELLECT CLASS
-//  says which facts about the board it is capable of WEIGHING when it decides what
-//  to do on its turn. It does not change the rules one bit: a witless brute still
-//  gets the high-ground damage bonus if it happens to be standing high, still dies
-//  in the void, still burns in a fire. It simply does not think about any of that
-//  when choosing where to go and what to cast.
-//
-//  Nor does it change WHOSE side an effect is aimed at. Every class knows a curse
-//  is for the party and a blessing is for its own allies - that is not cleverness,
-//  it is knowing friend from foe. What the clever ones have is the ability to pick
-//  the BEST target: a C-class creature hands its shield to whichever ally it can
-//  reach, an S-class one hands it to the ally that is actually about to be hit.
-//
-//  ----- what each flag lets a mind weigh -----
-//    statuses    the statuses on the board: which of them are worth applying to
-//                whom, that a shield can be popped, that a target already carries
-//                what it was about to be given, and which ally most needs a buff.
-//                Blind minds still apply statuses, at a flat worth, to any legal
-//                target of the right side.
-//    elevation   the damage a height difference is worth, and the value of
-//                claiming high ground while walking towards the party.
-//    tags        the tiles that burn: worth avoiding to stand on, worth shoving
-//                someone onto.
-//    ether       the holes in the arena's edge: worth shoving someone into.
-//    injuries    how hurt a target is: worth finishing the wounded rather than
-//                spreading damage evenly.
-//
-//  These are the four classes the design asks for. The table is data like
-//  everything else - a class can be re-tuned, and a fifth one invented, in the
-//  Settings window without touching the engine.
-const M = (o) => Object.assign({
-  statuses: false, elevation: false, tags: false, ether: false, injuries: false,
-}, o);
-
-export const INTELLECT = {
-  S: M({ statuses: true, elevation: true, tags: true, ether: true, injuries: true }),
-  A: M({ elevation: true, ether: true, injuries: true }),
-  B: M({ elevation: true }),
-  C: M({}),
-};
-
-// What a status is worth to a mind that cannot read them: enough that it still
-// blesses its allies and curses the party, not enough to choose well between two
-// targets. (A reading mind uses the status table's own aiValue instead.)
-export const BLIND_STATUS_VALUE = 8;
-
-// Part of the combat config too, so the classes are editable in Settings and the
-// engine can read them off the same object (config.intellect).
-COMBAT_CONFIG.intellect = INTELLECT;
-
-export const intellectOf = (cls) => INTELLECT[cls] ?? INTELLECT.C;
+// (The INTELLECT CLASSES moved to config/units.js on 2026-09-10. A class is a
+//  property of a CREATURE - which facts it can weigh on its turn - so it belongs
+//  beside the bestiary that hands one to every row, not in the abilities table.
+//  The engine still reads it as `config.intellect`; only the file changed.)
 
 // ----- Tile tags -------------------------------------------------------
 const T = (o) => Object.assign({
@@ -334,6 +286,12 @@ const T = (o) => Object.assign({
 export const COMBAT_TAGS = {
   fire: T({ name: 'Fire', icon: '🔥', color: '#ff9950', desc: 'Burns anything standing here.', dmg: 1, life: 2 }),
 };
+
+// Tags are part of the combat config too, so they can be edited in Settings the
+// way statuses can (2026-09-10 - until then they were the one piece of arena
+// content you had to open a file to change). Same object, not a copy: tagDefById
+// and the Settings window see the same table.
+COMBAT_CONFIG.tags = COMBAT_TAGS;
 
 // (The per-unit combat stats used to live here, in a UNIT_COMBAT table. They were
 // a UNITS matter, not an abilities one, and they duplicated the roster: since

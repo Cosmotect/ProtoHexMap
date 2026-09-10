@@ -273,7 +273,7 @@ balance must be re-measured against interactive play.
     blocked hit deals no damage: without it the AI scored such a swing as worthless,
     refused to attack a shielded unit at all, and since a shield only ever expires by
     blocking something, it stayed up for the rest of the fight (fixed 2026-09-02).
-  * **Intellect classes** (`config.intellect`, the table in src/config/abilities.js;
+  * **Intellect classes** (`config.intellect`, the table in src/config/units.js;
     since 2026-09-06). Every creature carries an `intellect` of S / A / B / C on its
     bestiary row, and the class says which facts it is able to WEIGH when it plans
     its turn: `statuses`, `elevation`, `tags`, `ether`, `injuries`.
@@ -725,6 +725,72 @@ stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }
   * The badge shows the SIZE of the first knob, not the stored number: the table
     writes `slow` as -1 while every locale string reads "moves {n} tiles less", so
     the sign lives in the status's name.
+
+
+* 2026-09-10 **Tile tags became config, and the AI learned to read them.**
+  * **Tags are part of the config object** (`config.tags`, still the `COMBAT_TAGS`
+    table in src/config/abilities.js - same object, not a copy). They were the last
+    piece of arena content that could only be changed by opening a file. They now
+    have their own table on **Settings > Units**, beside the statuses, and the four
+    hook columns are DROPDOWNS of ability ids rather than text boxes, because a
+    typo in a hook fails silently.
+  * **A tag can already do anything an ability can**, and always could: its own
+    tick is only `dmg` / `heal`, but each of its four hooks - `onPeriodic` (+
+    `everyX`), `onPickup` (needs `collectible`), `onExpire`, `onDestroy` - casts a
+    whole ability at the tag's tile, statuses and all. A tag has no side: the cast
+    lands on whoever is standing there, party or enemy.
+  * **What the AI could not see**: it measured a tile by `t.dmg` alone, so a pool
+    that only poisons scored a flat zero and every class walked into it. `tagHarm`
+    now adds each hook's ability - its damage, its healing, and the `aiValue` of
+    the status it applies, divided by 10 to come back into damage units. A tag that
+    HEALS or blesses comes out negative, so a mind that reads tiles will step onto
+    it. This lands in both places that already asked: the approach walk, and the
+    per-unit term in cast scoring - which is what makes a creature avoid standing
+    on bad ground while it attacks, and prefer shoving someone onto it.
+    One honest limit: the worth is the STATUS's `aiValue`, not the amount a hook's
+    `buffX` actually applies. A pool that poisons far harder than the table's own
+    poison should be given its own status row with its own aiValue - the same
+    reason haste and slow are two rows rather than one signed one.
+* 2026-09-10 **The intellect classes moved to config/units.js.** A class is
+  something a CREATURE has - every bestiary row names one in its `intellect`
+  column - so the table belongs beside the bestiary, not in the abilities file it
+  happened to start in. `INTELLECT` and `intellectOf` are exported from there and
+  `intellect: INTELLECT` is a member of `UNITS`, so `config.intellect` is the same
+  path the engine always read; only the import in settings.js moved. The unused
+  `BLIND_STATUS_VALUE` export went with it - the number the engine actually reads
+  is `combat.blindStatusValue`, and two spellings of one number is exactly how
+  `enraged` came to point at a field it did not have.
+* 2026-09-10 **The aim preview: what a cast would touch.** Selecting an ability
+  rings every tile it MAY be aimed at; hovering one of those now fills in the tiles
+  a cast there would actually affect.
+  * `battle.aimPreview(k)` (engine) is a pure query returning `{ anchor, kind, hit,
+    tag, push, height, dash }`. It reads the same zones with the same rotation and
+    the same `tilePass` filter `resolveCast` reads, so the hint cannot drift from
+    the cast. A tile nothing may be aimed at returns null.
+  * The view (`syncAimFx` in localview.js) paints one filled hex per touched tile,
+    ADDITIVE so it reads as light on the tile rather than paint over it, coloured by
+    CONSEQUENCE rather than by ability: `colors.aimHitFill` / `aimHealFill` /
+    `aimBuffFill` for the blast, `aimPushFill` for a shove (the tile, then the way
+    it is pushed, fading), `aimRaiseFill` where the ground changes height,
+    `aimTagFill` where a tag is left, `aimDashFill` where the caster ends up.
+    `local.aimFxOpacity` sets how bright they are. Rebuilt only when the tile under
+    the cursor changes.
+  * **One honest limit**, stated in the code: a shove is drawn as the tiles it AIMS
+    through, not where the victim ends up. Collisions, crushes and falls resolve in
+    waves against everything else the same cast moves, and playing that out would
+    mean simulating the cast to draw a hint about it.
+* 2026-09-10 **`tools/engine-test.mjs`** (`npm run test:engine`): headless rules
+  checks that run in seconds. The smoke test drives the real browser and stays the
+  authority on anything the player can see, but some rules are far easier to state
+  as a fight built by hand than as a click path. Note the two traps it documents:
+  the engine needs `instant: true` for a whole enemy phase to resolve inside
+  `endTurn`, and passing an `onAnim` stub that never calls `anim.enter()` gives a
+  test in which nothing ever moves.
+* 2026-09-10 Defaults: `audio.volume` 0.35 -> 0.05, `weakTick.color` -> `#a0c437`,
+  and `battle.spawns` layers 0-2 emptied in all five rows. An empty cell plays the
+  nearest filled layer, so those three still draw layer 3's fights - the cells are
+  simply free now to be given their own rosters without being cleared by hand
+  first.
 
 
 ## Open questions

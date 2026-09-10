@@ -736,6 +736,64 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     return map;
   }
 
+  // WHAT A CAST WOULD TOUCH, for the tile under the cursor. `sb.aimMap` says
+  // where an ability MAY be aimed; this says what happens if it is aimed there,
+  // so the player can see the extent of a blast before committing to it.
+  //
+  // Every zone is read exactly the way resolveCast reads it - same anchor, same
+  // rotation, same tilePass filter - so the preview cannot drift away from what
+  // the cast actually does. It is a pure query: nothing here writes to the board.
+  //
+  // One honest limit, in `push`: a shove is shown as the tiles it AIMS through,
+  // not where the victim ends up. Collisions, crushes and falls are resolved in
+  // waves against everything else the same cast moves, and playing that out here
+  // would mean simulating the cast to draw a hint about it.
+  function aimPreview(k) {
+    if (!sb.selAb || !sb.aimMap || sb.aimMap[k] === undefined) return null;
+    const c = curP(); if (!c) return null;
+    const ab = abFor(c, sb.selAb); if (!ab) return null;
+    const anchor = sb.aimMap[k];
+    const rk = abRotFor(ab, c.pos, anchor);
+    const zone = (offs) => {
+      const out = [];
+      for (const off of offs) {
+        const dt = addK(anchor, rotOff([off[0], off[1]], rk));
+        if (tilePass(dt) && !out.includes(dt)) out.push(dt);
+      }
+      return out;
+    };
+    const push = [];
+    for (const o of ab.pushZone) {
+      const dt = addK(anchor, rotOff([o[0], o[1]], rk));
+      if (!tilePass(dt)) continue;
+      const dir = rotDir(o[2], rk);
+      const dist = (o[3] || 1) >= 2 ? 2 : 1;
+      const path = [];
+      let cur = dt;
+      for (let i = 0; i < dist; i++) { cur = addK(cur, DIRS[dir]); path.push(cur); }
+      push.push({ k: dt, dir, dist, path });
+    }
+    const height = [];
+    for (const o of ab.hZone) {
+      const dt = addK(anchor, rotOff([o[0], o[1]], rk));
+      if (!tilePass(dt)) continue;
+      const h0 = sb.heights[dt] ?? 0;
+      const to = Math.max(0, Math.min(CFG.elevationLevels, ab.hMode === 'abs' ? o[2] : h0 + o[2]));
+      height.push({ k: dt, from: h0, to });
+    }
+    // What the hit tiles MEAN, so the view can colour them by consequence rather
+    // than by which ability happens to be selected.
+    const kind = ab.damage > 0 ? 'damage' : ab.heal > 0 ? 'heal' : ab.buff ? 'buff' : 'none';
+    return {
+      anchor, kind,
+      hit: zone(ab.dmgZone),
+      tag: ab.tagId && tagDefById(ab.tagId) ? zone(ab.tagZone) : [],
+      push, height,
+      // The caster only really dashes if the tile is free when the cast resolves.
+      dash: ab.moveToTarget && c.pos !== anchor && tilePass(anchor) && !unitAt(anchor) ? anchor : null,
+    };
+  }
+
   // ----- turn flow (hex-box 11, reworked player phase) ---------------------
   // The player phase is ONE simultaneous turn: any unit can be selected and
   // repositioned FREELY within its range (always measured from the tile it
@@ -987,9 +1045,30 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     const blind = blindfold(mind);
     const live = new Map(sb.units.map((u) => [u.uid, u]));
     const flat = CFG.blindStatusValue ?? 8;
-    // How much damage a tile does to whatever stands on it (0 = none). Only a mind
-    // that weighs tags ever asks.
-    const tagHarm = (k) => { const t = sb.tags[k]; return t && !(t.hp > 0) ? (t.dmg || 0) : 0; };
+    // What standing on this tile is worth, in DAMAGE units (the callers scale it).
+    // Only a mind that weighs tags ever asks.
+    // A tag hurts - or helps - in two ways, and until 2026-09-10 only the first
+    // was counted: the tick it does while you stand on it (`dmg` / `heal`), and
+    // whatever its four hooks CAST on whoever is there. A hook names an ordinary
+    // ability, so it can carry a status; a venom pool that only poisons scored a
+    // flat zero and every mind walked straight into it.
+    // A status's aiValue is in the AI's own units, where a point of damage is 10,
+    // so it is divided back into damage units to sit beside the tick.
+    const tagHarm = (k) => {
+      const t = sb.tags[k];
+      if (!t || t.hp > 0) return 0;
+      let n = (t.dmg || 0) - (t.heal || 0);
+      for (const hook of ['onPeriodic', 'onPickup', 'onExpire', 'onDestroy']) {
+        const ab = t[hook] ? abById(t[hook]) : null;
+        if (!ab) continue;
+        n += (ab.damage || 0) - (ab.heal || 0);
+        // Positive aiValue = bad to carry = one more reason to keep off this tile,
+        // which is the same sign the tick damage already has. A boon tile comes out
+        // negative and the minds that can read tiles will step onto it.
+        if (ab.buff) n += statusValue(ab.buff) / 10;
+      }
+      return n;
+    };
     let best = null;
     for (const abId of e.abilityIds) {
       const ab = abFor(e, abId); if (!ab) continue;
@@ -1009,6 +1088,10 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
           const se = st.units.find((u) => u.uid === e.uid);
           se.pos = startK;
           resolveCast(st, se, ab, t);
+          // (The tile the caster CHOOSES TO STAND on is weighed too, but not here:
+          // the loop below walks every unit, the caster among them, and an enemy
+          // standing on harmful ground has that ground subtracted from the score
+          // like any other. Adding it here as well double-counted it.)
           let score = 0;
           for (const u of st.units) {
             const d = st.rec.dmg[u.uid] || 0;
@@ -1215,6 +1298,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     start,
     clickTile, selectAbility, endTurn, inspect, cancel, activate: (uid) => { const u = sb.units.find((x) => x.uid === uid && !x.isEnemy && x.hp > 0 && !x.done); if (u && sb.phase === 'player' && !sb.busy) select(u); },
     abilityById: abById,
+    aimPreview,
     abilityFor: abFor,   // (unit, id) - the unit's UPGRADED def where it has one
     curPlayer: curP,
     reachFor: () => sb.reach,

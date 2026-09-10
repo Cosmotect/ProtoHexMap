@@ -296,6 +296,11 @@ export class LocalMapView {
     this.hlRingGeo.rotateX(-Math.PI / 2);
     this.hlRingBackGeo = new THREE.RingGeometry(tileRadius * 0.72, tileRadius * 0.97, 6, 1, ringStart);
     this.hlRingBackGeo.rotateX(-Math.PI / 2);
+    // The AIM PREVIEW fills the tile instead of outlining it, so the two readings
+    // never blur into each other: a ring says "you may aim here", a fill says
+    // "this is what it hits". Same six-sided footprint, drawn just inside the ring.
+    this.aimFillGeo = new THREE.CircleGeometry(tileRadius * 0.86, 6, ringStart);
+    this.aimFillGeo.rotateX(-Math.PI / 2);
 
     // Which arena edges are a hole rather than a wall (see computeVoidEdges).
     this.voidEdges = this.computeVoidEdges(edges);
@@ -1173,6 +1178,12 @@ export class LocalMapView {
       if (tok) { tok.userData.uid = u.uid; this.battleTokens.set(u.uid, tok); }
     }
     this.highlights = [];
+    // The aim preview: filled tiles showing what the selected ability would touch
+    // if it were aimed at the tile under the cursor. Rebuilt only when that tile
+    // changes, so hovering costs nothing while the cursor sits still.
+    this.aimFx = [];
+    this.aimFxKey = null;
+
     // Keep the sprites build() made for a recipe's authored tags: the engine's
     // startTags carry the same tiles, so syncBattle() simply adopts them.
     this.tagSprites = this.tagSprites ?? new Map();
@@ -1320,12 +1331,74 @@ export class LocalMapView {
     if (tok.userData.ring) tok.userData.ring.position.set(tile.x, tile.top + 0.02, -tile.y);
   }
 
+  // ----- the aim preview --------------------------------------------------
+  // Selecting an ability rings every tile it MAY be aimed at. This fills in the
+  // tiles a cast would actually touch if it were aimed at the one under the
+  // cursor - the blast, the shove and its direction, the ground that changes
+  // height, the tag it leaves, and where the caster ends up.
+  //
+  // The engine works the extent out (battle.aimPreview), reading the same zones
+  // and the same rotation the cast itself reads, so this can never promise
+  // something the cast does not do. All the view decides is the colour.
+  clearAimFx() {
+    for (const m of this.aimFx ?? []) { this.scene?.remove(m); m.material.dispose(); }
+    this.aimFx = [];
+    this.aimFxKey = null;
+  }
+
+  syncAimFx(key) {
+    for (const m of this.aimFx ?? []) { this.scene?.remove(m); m.material.dispose(); }
+    this.aimFx = [];
+    this.aimFxKey = key;
+    if (!this.battle || !this.scene || !key) return;
+    const p = this.battle.aimPreview ? this.battle.aimPreview(key) : null;
+    if (!p) return;
+    const c = this.config.colors;
+    const baseOpacity = this.config.local?.aimFxOpacity ?? 0.34;
+    // Later marks are drawn a hair higher so an overlap reads as layers rather
+    // than as z-fighting (a tile can be hit AND shoved AND have a tag dropped).
+    let layer = 0;
+    const fill = (k, color, opacity = baseOpacity) => {
+      const tile = this.map.hexes.get(k);
+      if (!tile) return;
+      // ADDITIVE, so the fill reads as light thrown onto the tile rather than as
+      // paint over it: the arena floor stays legible underneath, and a colour
+      // still shows up on the dark tiles, where flat alpha all but vanished.
+      const m = new THREE.Mesh(this.aimFillGeo, new THREE.MeshBasicMaterial({
+        color, transparent: true, opacity, depthWrite: false, side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+      }));
+      m.position.set(tile.x, tile.top + 0.012 + (layer++) * 0.004, -tile.y);
+      // The hovered tile rises; its fill has to rise with it or it hangs in the air.
+      m.userData.tile = tile;
+      m.userData.baseY = m.position.y;
+      this.scene.add(m);
+      this.aimFx.push(m);
+    };
+    // What the blast MEANS decides its colour, not which ability is selected.
+    const hitColor = p.kind === 'heal' ? c.aimHealFill : p.kind === 'buff' ? c.aimBuffFill : c.aimHitFill;
+    for (const k of p.hit) fill(k, hitColor);
+    for (const h of p.height) fill(h.k, c.aimRaiseFill);
+    for (const k of p.tag) fill(k, c.aimTagFill);
+    // A shove: the tile the victim is standing on, solid, then the way it is
+    // pushed, fading. The trail is the DIRECTION of the shove, not a promise of
+    // where the victim stops - a collision can cut it short (engine.aimPreview).
+    for (const sh of p.push) {
+      fill(sh.k, c.aimPushFill, Math.min(1, baseOpacity * 1.5));
+      sh.path.forEach((k, i) => fill(k, c.aimPushFill, baseOpacity * (0.55 - i * 0.15)));
+    }
+    if (p.dash) fill(p.dash, c.aimDashFill, Math.min(1, baseOpacity * 1.4));
+  }
+
   // Reach (walkable tiles) and aim (castable tiles) as hex OUTLINE rings, the
   // world map's language: bright ring + dark backing so it reads on any colour,
   // pulsing; the hovered one goes solid white and its tile rises (see update()).
   syncHighlights(battle) {
     for (const m of this.highlights) this.scene.remove(m);
     this.highlights = [];
+    // The preview belongs to a particular selected ability; a new selection (or
+    // none) must not leave the old blast painted on the floor.
+    this.clearAimFx();
     this.hlTiles = new Map();   // key -> { ring, color, phase, tile }
     const sb = battle.state;
     if (sb.over || sb.phase !== 'player') return;
@@ -1508,6 +1581,7 @@ export class LocalMapView {
     for (const m of this.highlights ?? []) this.scene?.remove(m);
     this.highlights = [];
     this.hlTiles = new Map();
+    this.clearAimFx();
     if (this.map) for (const tile of this.map.hexes.values()) { tile.lift = 0; if (tile.mesh) tile.mesh.position.y = 0; }
     for (const s of (this.tagSprites ?? new Map()).values()) this.scene?.remove(s);
     this.tagSprites = new Map();
@@ -1843,6 +1917,14 @@ export class LocalMapView {
       const hit = onBadge ? null : this.hoverRay.intersectObjects(this.tileMeshes ?? [], false)[0];
       this.hoverKey = hit ? hit.object.userData.key : null;
     }
+    // Hovering a castable tile paints what the cast would touch. Only rebuilt
+    // when the tile under the cursor changes.
+    if (this.battle) {
+      const sb = this.battle.state;
+      const aiming = !sb.over && sb.phase === 'player' && sb.selAb && sb.aimMap;
+      const want = aiming && this.hoverKey && sb.aimMap[this.hoverKey] !== undefined ? this.hoverKey : null;
+      if (want !== this.aimFxKey) this.syncAimFx(want);
+    } else if (this.aimFx.length) this.clearAimFx();
     if (this.deploy) this.stepDeployDecal();
     // The active combatant's ground ring breathes so the player sees whose turn it is.
     if (this.battle) {
@@ -1873,6 +1955,7 @@ export class LocalMapView {
           hl.ring.material.opacity = isHover ? 1 : 0.45 + 0.35 * (0.5 + 0.5 * Math.sin(this.elapsed / 260 + hl.phase));
         }
       }
+      for (const m of this.aimFx) m.position.y = m.userData.baseY + (m.userData.tile.lift ?? 0);
     }
     if (this.campfire) {
       // The flame breathes and the light jitters like a real fire.
@@ -1901,6 +1984,7 @@ export class LocalMapView {
     this.tileMeshes = [];
     if (this.hlRingGeo) { this.hlRingGeo.dispose(); this.hlRingGeo = null; }
     if (this.hlRingBackGeo) { this.hlRingBackGeo.dispose(); this.hlRingBackGeo = null; }
+    if (this.aimFillGeo) { this.aimFillGeo.dispose(); this.aimFillGeo = null; }
     if (this.scene) {
       this.scene.traverse((o) => {
         if (o.geometry) o.geometry.dispose();

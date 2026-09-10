@@ -52,6 +52,7 @@ export const CONFIG = {
   // It always uses the OPPOSITE hex orientation to the world map, so one world
   // tile visually breaks into a sub-grid of local tiles.
   local: {
+    aimFxOpacity: 0.5,        // how bright the aim-preview fills are (0..1, see colors.aim*Fill)
     radius: 6,                // rings of local hexes around the arena centre
     hexSize: 1.0,
     gap: 0.03,
@@ -180,7 +181,7 @@ export const CONFIG = {
   // whole voice of it (pitch, envelope, filter) is a fixed design decision
   // living at the top of src/audio.js; the only setting is how loud it is.
   audio: {
-    volume: 0.35,             // master volume, 0..1 (0 = silent)
+    volume: 0.05,             // master volume, 0..1 (0 = silent)
   },
 
   // ----- Fatigue bar (the boxes at the top of the screen) -------------
@@ -209,6 +210,17 @@ export const CONFIG = {
     visitedTint: 1,           // multiplier applied to the colour of tiles you already stepped on
     reachableRing: 0xffd166,
     abilityAimRing: 0xff4d4d,  // tile highlight while picking a target for a unit's ability
+    // ----- the aim PREVIEW: what a cast aimed at the hovered tile would touch.
+    // The ring above says where an ability MAY be pointed; these fills say what
+    // happens if it is pointed there. One colour per consequence, not per
+    // ability, so the reading is the same whichever ability is selected.
+    aimHitFill: 0xff4d4d,      // takes the blow
+    aimHealFill: 0xa8e05f,     // is healed
+    aimBuffFill: 0x5fc7e0,     // receives a status and nothing else
+    aimPushFill: 0xffd166,     // is shoved, and the way it is shoved
+    aimRaiseFill: 0x9a5cff,    // the ground here changes height
+    aimTagFill: 0xff9950,      // a tile tag is left here
+    aimDashFill: 0x7fe0f0,     // the caster ends up here
     enemyReachRing: 0xd0455f,  // ...and where a clicked ENEMY could walk (a readout, not a target)
     hoverRing: 0xffffff,
     player: 0xfff1c1,

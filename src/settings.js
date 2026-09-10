@@ -9,7 +9,10 @@
 
 import { t, LANGUAGES, getLanguage, setLanguage } from './i18n.js';
 import { SHAPE_NAMES } from './local/localview.js';
-import { ABILITIES, INTELLECT, statusKnobs } from './config/abilities.js';
+import { ABILITIES, statusKnobs } from './config/abilities.js';
+// The intellect classes moved next to the bestiary that hands one to every row
+// (config/units.js, 2026-09-10).
+import { INTELLECT } from './config/units.js';
 
 const STORAGE_KEY = 'hexmap-settings-v1';
 
@@ -76,7 +79,7 @@ const TABS = [
   // `battle` is listed here (not on Units) so that "Reset tab" reaches it; the
   // render loop skips it and renders it explicitly next to the Battles table.
   { id: 'encounters', sections: ['encounters', 'stasis', 'rest', 'acolyte', 'shop', 'treasure', 'events', 'fatigue', 'battle'] },
-  { id: 'units', sections: ['party', 'combat', 'statuses', 'intellect'] },
+  { id: 'units', sections: ['party', 'combat', 'statuses', 'tags', 'intellect'] },
   // NOTE: `battle` lives on the ENCOUNTERS tab - see battleScalars() in render().
   { id: 'general', sections: ['run', 'camera', 'local', 'anim', 'fatigueBar', 'colors'] },
   { id: 'audio', sections: ['audio'] },
@@ -91,7 +94,12 @@ const SKIP_KEYS = new Set(['shape', 'info', 'flavour', 'names', 'icon']);
 // containing one lays its sections out on a GRID (where a section can be told to
 // span several columns) instead of the CSS multi-column flow the other tabs use -
 // see `has-matrix` in render() and style.css.
-const MATRIX_SECTIONS = new Set(['tileTypes', 'biomes', 'statuses', 'intellect']);
+const MATRIX_SECTIONS = new Set(['tileTypes', 'biomes', 'statuses', 'intellect', 'tags']);
+// A tile tag's four HOOKS each name an ability, which is how a tag can do
+// anything an ability can - damage, healing, pushes, a status. They get a
+// dropdown of the ability ids rather than a text box, so a typo cannot quietly
+// turn a hook off (config/abilities.js, COMBAT_TAGS).
+const TAG_HOOKS = new Set(['onPeriodic', 'onPickup', 'onExpire', 'onDestroy']);
 
 export function createSettings({ config, defaults, onChange, getUiScale, onSetUiScale, getShowLog, onSetShowLog, onClose }) {
   const $ = (id) => document.getElementById(id);
@@ -695,7 +703,11 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
   function renderCell(path, key, value, def) {
     const kind = kindOf(key, value ?? def, path);
     let control;
-    if (kind === 'bool') control = `<input type="checkbox" data-path="${path}" data-kind="bool" ${value ? 'checked' : ''}>`;
+    if (path.startsWith('tags.') && TAG_HOOKS.has(key)) {
+      const opts = ['', ...Object.keys(ABILITIES)];
+      control = `<select data-path="${path}" data-kind="text">${opts.map((o) => `<option value="${escapeAttr(o)}"${String(value ?? '') === o ? ' selected' : ''}>${o || '-'}</option>`).join('')}</select>`;
+    }
+    else if (kind === 'bool') control = `<input type="checkbox" data-path="${path}" data-kind="bool" ${value ? 'checked' : ''}>`;
     else if (kind === 'color') control = `<input type="color" data-path="${path}" data-kind="color"${colorShapeAttr(value)} value="${cssColor(value)}">`;
     else if (kind === 'number') control = `<input type="number" step="any" data-path="${path}" data-kind="number" value="${value ?? ''}">`;
     else control = `<input type="text" data-path="${path}" data-kind="text" value="${escapeAttr(String(value ?? ''))}">`;
