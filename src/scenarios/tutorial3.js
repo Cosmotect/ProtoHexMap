@@ -40,19 +40,19 @@ export const TUTORIAL_3 = {
       type: 'stasisSeed',
       title: 'Stasis Sprout',
       enemies: [
-        { name: 'Stasis Sprout', hp: 60, power: 9 },
-        { name: 'Stasis Mote', hp: 20, power: 3 },
-        { name: 'Stasis Mote', hp: 20, power: 3 },
+        { name: 'Stasis Sprout', hp: 60 },
+        { name: 'Stasis Mote', hp: 20 },
+        { name: 'Stasis Mote', hp: 20 },
       ],
     },
     // The chevron contrast: a bare skirmish (0 chevrons) and a 2-chevron wall,
     // side by side; the wall guards a cache. Optional - a lesson in reading.
-    '-2,0': { type: 'battle', enemies: [{ name: 'Husk', hp: 14, power: 3 }, { name: 'Husk', hp: 14, power: 3 }] },
+    '-2,0': { type: 'battle', enemies: [{ name: 'Husk', hp: 14 }, { name: 'Husk', hp: 14 }] },
     '-1,3': {
       type: 'battle',
       enemies: [
-        { name: 'Raider', hp: 18, power: 10 }, { name: 'Stalker', hp: 16, power: 10 },
-        { name: 'Husk', hp: 14, power: 6 }, { name: 'Husk', hp: 14, power: 6 }, { name: 'Husk', hp: 14, power: 6 },
+        { name: 'Raider', hp: 18 }, { name: 'Stalker', hp: 16 },
+        { name: 'Husk', hp: 14 }, { name: 'Husk', hp: 14 }, { name: 'Husk', hp: 14 },
       ],
     },
     '-2,3': { type: 'treasure', supplies: 40 },
@@ -67,8 +67,8 @@ export const TUTORIAL_3 = {
         debuff: 'maxHp',
         title: 'Rot Chorus',
         enemies: [
-          { name: 'Rot Chorister', hp: 16, power: 6 }, { name: 'Rot Chorister', hp: 16, power: 6 },
-          { name: 'Rot Chorister', hp: 16, power: 6 }, { name: 'Rot Chorister', hp: 16, power: 6 },
+          { name: 'Rot Chorister', hp: 16 }, { name: 'Rot Chorister', hp: 16 },
+          { name: 'Rot Chorister', hp: 16 }, { name: 'Rot Chorister', hp: 16 },
         ],
       },
     ],

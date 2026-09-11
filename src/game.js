@@ -74,11 +74,9 @@ export class Game {
       // The starting party is the first `party.size` entries of the roster, so a
       // character's stats are defined once (config/units.js, party.roster).
       // A scenario may fix its own party instead.
-      // `upgrades` holds the unit's unlocked ability tree nodes ("ability:node"
-      // refs); `power` is only the auto-resolve SIMULATION's strength proxy,
-      // derived from the upgrade count (refreshSimPower) - nothing displays it.
+      // `upgrades` holds the unit's unlocked ability tree nodes ("ability:node" refs).
       party: (scenario?.party ?? (config.party.roster ?? []).slice(0, config.party.size ?? 3))
-        .map((u) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.hp, upgrades: [], power: config.battle.simPower.base, alive: true, isPlayer: true })),
+        .map((u) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.hp, upgrades: [], alive: true, isPlayer: true })),
       supplies,
       maxSupplies: scenario?.maxSupplies ?? supplies,
       turn: 0,
@@ -300,7 +298,7 @@ export class Game {
   setPartyUnit(index, def) {
     const s = this.state;
     if (s.turn !== 0 || s.status !== 'playing' || !s.party[index] || !def) return false;
-    s.party[index] = { name: def.name, icon: def.icon, hp: def.hp, maxHp: def.hp, upgrades: [], power: this.config.battle.simPower.base, alive: true, isPlayer: true };
+    s.party[index] = { name: def.name, icon: def.icon, hp: def.hp, maxHp: def.hp, upgrades: [], alive: true, isPlayer: true };
     this.addLog('log.joined', { name: { name: def.name } });
     this.emit('change');
     return true;
@@ -747,12 +745,13 @@ export class Game {
 
     // Stasis debuffs: temporarily weaken the party and/or reinforce the enemy for
     // this one fight. Damage taken stays after the fight; max HP comes back.
-    // The "damage" debuff travels on the context: the interactive engine takes it
-    // as a flat ability-damage penalty (damageMod), while the auto-resolve
-    // simulation approximates it by lowering the party's sim power proxy.
+    // The "damage" debuff travels on the context as a flat ability-damage penalty
+    // (damageMod) - both the interactive engine and the auto-resolve simulation
+    // apply it the same way now (see dmgMod() in local/battle/engine.js and
+    // damageFor() in battle.js).
     const debuffs = this.activeDebuffsFor(hex);
     const cfgDebuffs = this.config.stasis.debuffs;
-    const saved = s.party.map((u) => ({ maxHp: u.maxHp, power: u.power }));
+    const saved = s.party.map((u) => ({ maxHp: u.maxHp }));
     let damageMod = 0;
     for (const id of debuffs) {
       if (id === 'maxHp') {
@@ -762,7 +761,6 @@ export class Game {
         }
       } else if (id === 'damage') {
         damageMod += cfgDebuffs.damage.amount;
-        for (const u of s.party) u.power -= cfgDebuffs.damage.amount * (this.config.battle.powerStep ?? 3);
       } else if (id === 'extraEnemies') {
         enemies.push(...makeRegulars(this.rng, this.config.battle, hex.ring, cfgDebuffs.extraEnemies.count));
         renameDuplicates(enemies);
@@ -772,7 +770,7 @@ export class Game {
       this.addLog('log.debuffs', { list: { list: debuffs.map((id) => ({ key: `debuff.${id}.name` })) } });
     }
 
-    const who = { list: enemies.map((e) => ({ key: 'log.battle.enemy', params: { name: { name: e.name }, hp: e.maxHp, power: e.power } })) };
+    const who = { list: enemies.map((e) => ({ key: 'log.battle.enemy', params: { name: { name: e.name }, hp: e.maxHp } })) };
     const first = { key: forced ? 'log.battle.enemiesFirst' : 'log.battle.partyFirst' };
     if (enemies.title) this.addLog('log.battle.stasis', { title: { name: enemies.title }, who, first });
     else this.addLog('log.battle', { who, first });
@@ -794,7 +792,6 @@ export class Game {
     for (let i = 0; i < s.party.length; i++) {
       const u = s.party[i];
       u.maxHp = saved[i].maxHp;
-      u.power = saved[i].power;
       u.hp = Math.min(u.hp, u.maxHp);
     }
 
@@ -875,7 +872,7 @@ export class Game {
   // middle. Used when no combatDelegate is wired in (headless tests, safety net).
   resolveBattle(hex, forced, opts = {}) {
     const ctx = this.prepareCombat(hex, forced, opts);
-    const result = simulateBattle(this.rng, this.config.battle, this.state.party, ctx.enemies, !forced);
+    const result = simulateBattle(this.rng, this.config.battle, this.state.party, ctx.enemies, !forced, ctx.damageMod);
     return this.finishCombat(ctx, result);
   }
 
@@ -888,7 +885,7 @@ export class Game {
       const ctx = this.prepareCombat(hex, forced, opts);
       if (this.combatDelegate(ctx)) return true;
       // Delegate refused: fall through to the simulation on the SAME context.
-      const result = simulateBattle(this.rng, this.config.battle, this.state.party, ctx.enemies, !forced);
+      const result = simulateBattle(this.rng, this.config.battle, this.state.party, ctx.enemies, !forced, ctx.damageMod);
       return this.finishCombat(ctx, result);
     }
     return this.resolveBattle(hex, forced, opts);
@@ -1053,18 +1050,10 @@ export class Game {
     return this.state.party.some((u) => u.alive && availableUpgrades(u).length > 0);
   }
 
-  // Keeps the auto-resolve simulation's strength proxy in step with the
-  // unit's real growth. Nothing displays this number.
-  refreshSimPower(u) {
-    const sp = this.config.battle.simPower;
-    u.power = sp.base + upgradeCount(u) * sp.perUpgrade;
-  }
-
   // Called by the reward dialog with one of upgradeOffers()'s entries.
   applyUpgradePick(offer) {
     const u = this.state.party[offer.index];
     if (!u || !u.alive || !unlockUpgrade(u, offer.ref)) return false;
-    this.refreshSimPower(u);
     this.addLog('log.learned', { name: { name: u.name }, upgrade: { key: `upgrade.${offer.abilityId}.${offer.nodeId}.name` } });
     this.emit('change');
     return true;
@@ -1077,7 +1066,6 @@ export class Game {
     if (!pool.length) return null;
     const pick = this.rng.pick(pool);
     unlockUpgrade(u, pick.ref);
-    this.refreshSimPower(u);
     return pick;
   }
 
@@ -1105,7 +1093,6 @@ export class Game {
     if (!u || !u.alive || !ref) return false;
     const offer = availableUpgrades(u).find((o) => o.ref === ref);
     if (!offer || !unlockUpgrade(u, ref)) return false;
-    this.refreshSimPower(u);
     const loss = this.blackMarketHpLoss(index);
     u.maxHp = Math.max(1, u.maxHp - loss);
     u.hp = Math.min(u.hp, u.maxHp);

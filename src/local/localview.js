@@ -145,8 +145,8 @@ export class LocalMapView {
   // Creates the whole local scene from scratch.
   //   worldHex  = the world tile being entered (used for the base colour + seeding)
   //   baseColor = final world-tile colour (number); local tiles are shades of it
-  //   party     = living player units [{ name, hp, power }]
-  //   enemies   = enemy units [{ name, hp, power }]
+  //   party     = living player units [{ name, hp }]
+  //   enemies   = enemy units [{ name, hp }]
   //   seed      = number, so the same fight always lays out the same arena
   //   recipe    = future handcrafted arena description (see localmap.js)
   // layout: 'battle' (default) scatters both sides on random tiles;

@@ -58,9 +58,9 @@ export const TUTORIAL_2 = {
     '6,-3': {
       type: 'battle',
       enemies: [
-        { name: 'Raider', hp: 18, power: 3 },
-        { name: 'Stalker', hp: 16, power: 3 },
-        { name: 'Husk', hp: 14, power: 0 },
+        { name: 'Raider', hp: 18 },
+        { name: 'Stalker', hp: 16 },
+        { name: 'Husk', hp: 14 },
       ],
       recipe: GUARD_ARENA,
     },
@@ -74,7 +74,7 @@ export const TUTORIAL_2 = {
     'fatigue.byStep': { 2: 0, 3: 30, 4: 70, 5: 100 },
   },
   ambushes: [
-    { afterSteps: 4, enemies: [{ name: 'Husk', hp: 12, power: 0 }, { name: 'Husk', hp: 12, power: 0 }] },
+    { afterSteps: 4, enemies: [{ name: 'Husk', hp: 12 }, { name: 'Husk', hp: 12 }] },
   ],
   goal: { type: 'reach', tile: '7,-4' },
   next: 'tutorial3',

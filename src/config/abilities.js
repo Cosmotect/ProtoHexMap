@@ -40,9 +40,10 @@
 //
 //  ----- 2. WHAT IT DOES, in the order it happens ----------------------
 //    dmgZone    offsets FROM THE AIM POINT that take the damage / heal / status.
-//    damage     flat damage to every unit in dmgZone. An ENEMY adds
-//               round(power / combat.powerPerDamage). Height matters: 2+ levels
-//               above adds combat.highBonus, 2+ below removes combat.lowPenalty.
+//    damage     flat damage to every unit in dmgZone - a creature's whole
+//               strength is this number now (no more enemy-only power bonus,
+//               removed 2026-09-10). Height matters: 2+ levels above adds
+//               combat.highBonus, 2+ below removes combat.lowPenalty.
 //    heal       flat healing to every unit in dmgZone (applied after damage).
 //    buff       the id of a status from STATUSES below, applied to every unit in
 //               dmgZone; buffX is the list of numbers for that status's knobs
@@ -89,7 +90,6 @@ export const COMBAT_CONFIG = {
     highBonus: 1,       // damage added when attacking from 2+ levels above
     lowPenalty: 1,      // damage removed when attacking from 2+ levels below
     voidEdges: false,   // true = shoves over the map edge kill instead of crashing
-    powerPerDamage: 3,  // +1 ability damage per this much of the unit's world-map power
     // (What popping a shield is worth to the enemy AI used to live here as
     // `shieldStripScore`. It moved into the shield's own row in the status table
     // below, as `aiValue`, so every status carries its own worth in one place.)
@@ -142,7 +142,7 @@ export const ABILITIES = {
   //strike
   //heavy strike
   //thundering strike
-  //nerve agent salvo
+  lobbedNagentBurst: A({ name: 'Lobbed Nerve Agent', icon: '💥', color: '#ff9950', damage: 1, castZone: ringOffsets(1, 3), dmgZone: ringOffsets(0, 1) }),
   //Razeing Antler Swipe
   // A charging shove, written entirely in the fields above: it runs up to three
   // tiles down one spoke (lineOffsets), gores the line it arrives on, shoves the
@@ -180,7 +180,7 @@ export const ABILITIES = {
 //                 pin a unit in place. Read in effSpeed().
 //    damageDealt  MULTIPLIER on damage the carrier deals (1 = no change, 2 =
 //                 double, 0.5 = half). Applied where an ability's damage is
-//                 computed, after the height bonus and the power bonus.
+//                 computed, after the height bonus.
 //    damageTaken  MULTIPLIER on damage the carrier receives. Applied in sHit(),
 //                 so it covers ability damage, tile tags and crash damage alike.
 //    blocks       true = the carrier ignores an incoming hit ENTIRELY (and a

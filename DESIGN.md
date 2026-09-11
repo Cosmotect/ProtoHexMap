@@ -860,6 +860,30 @@ stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }
   good, where nudging one a hair higher only moves the problem around. The fills
   also sit a little above the rings now, stacking upwards where a tile carries
   several marks.
+* 2026-09-10 (d) **"power" is gone.** No unit, party or enemy, carries a power
+  number any more - it fed a damage-multiplier in auto-resolve (`src/battle.js`)
+  and a flat bonus in the interactive engine (`src/local/battle/engine.js`),
+  both now removed along with `battle.powerBase`, `battle.powerStep`,
+  `battle.simPower` and the bestiary's `power` column. A unit's actual hit now
+  comes ONLY from the ability it used (`config/abilities.js` `damage`, plus any
+  unlocked upgrade adds) - so two enemies sharing an ability (most still do)
+  hit for the same amount regardless of tier, until stronger enemies are given
+  their own, stronger abilities. The Stasis "damage" debuff, which used to lean
+  on the power number for auto-resolve fights only, now applies the same
+  `damageMod` penalty in BOTH combat systems. `tools/smoke-test.cjs` was found
+  to already fail before this change, at an unrelated step (it never completes
+  party deployment, so `window.__battle` never appears) - not something this
+  change touched or fixed.
+* 2026-09-10 (e) **The battle-spawn table moved to config/encounters.js.** It
+  used to live in config/units.js as `battle.spawns`, built by a helper that
+  copied one list onto every layer. It is now `ENCOUNTERS.battleSpawns` in
+  config/encounters.js, spelled out one layer at a time for all 5 rows (inner,
+  middle, outer, colonies, seed) x 7 layers (0-6) so each layer can be edited on
+  its own - wired back onto `CONFIG.battle.spawns` by a single line in
+  config.js so every existing reader (`src/battle.js`, `src/settings.js`'s
+  Battles tab) needed no change. Content is unchanged: layers 0-2 still start
+  empty (playing layer 3's roster), layers 3-6 still carry what the old table
+  held.
 
 
 ## Open questions

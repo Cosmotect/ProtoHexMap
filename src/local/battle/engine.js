@@ -20,12 +20,13 @@
 //  collisions, falls, crush chains and void edges, height changes, tag
 //  placement with on-destroy / on-expire / periodic casts, high/low ground
 //  damage modifiers, and the outcome-scoring enemy AI.
-//  Added for Everlands: an ENEMY's world-map power gives bonus ability damage
-//  (config.combat.powerPerDamage); PARTY units instead fight with their
-//  UPGRADED ability defs (def.abilityDefs, resolved by src/upgrades.js from
-//  the unit's unlocked tree nodes); partyDamageMod is a flat penalty to the
-//  party's ability damage (the Stasis "damage" debuff); and a fatigue-forced
-//  fight opens with an ambush enemy phase before round 1.
+//  Added for Everlands: every ability carries its own flat `damage` (no more
+//  ENEMY-only power bonus - removed 2026-09-10, a bestiary row's abilities are
+//  its whole strength now); PARTY units instead fight with their UPGRADED
+//  ability defs (def.abilityDefs, resolved by src/upgrades.js from the unit's
+//  unlocked tree nodes); partyDamageMod is a flat penalty to the party's
+//  ability damage (the Stasis "damage" debuff); and a fatigue-forced fight
+//  opens with an ambush enemy phase before round 1.
 // =====================================================================
 import { DIRS, K, PK, addK, hexDist, hexLine, rotOff, aimRot, abRotFor, rotDir, boardTiles } from './bhex.js';
 import { abilityById, tagDefById, statusOverridesFor } from '../../config/abilities.js';
@@ -125,7 +126,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     // hand-authored def, still reads the table by name.
     const cs = combatStatsFor(def.name);
     return {
-      uid: 's' + i, name: def.name, icon: def.icon ?? null, power: def.power ?? 0,
+      uid: 's' + i, name: def.name, icon: def.icon ?? null,
       // Enemies only: the enemy queue sorts by it. Party rows carry no init
       // (removed 2026-09-06), so a character lands on 0 and nothing reads it.
       init: def.init ?? cs.init ?? 0,
@@ -320,16 +321,17 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     const def = statusDef(id);
     return def ? (def.aiValue || 0) : 0;
   }
-  // Bonus ability damage from the unit's world-map power (enemies only in
-  // practice: party defs carry no power). partyDamageMod hits party casts.
-  const powBonus = (c) => (c && c.power ? Math.round(c.power / (CFG.powerPerDamage || 3)) : 0);
+  // partyDamageMod is a flat penalty applied to party casts only (the Stasis
+  // "damage" debuff) - there is no equivalent enemy-side bonus any more
+  // (removed 2026-09-10, an ability's own `damage` field is a bestiary row's
+  // whole strength now).
   const dmgMod = (c) => (c && c.isEnemy === false ? -partyDamageMod : 0);
 
   // ----- live / simulated effect state (hex-box 10-battle-effects) -------
   function liveSt() { return { sim: false, units: sb.units, tags: sb.tags, heights: sb.heights, deathQueue: sb.deathQueue, rec: null }; }
   function simSt(blind) {
     return { sim: true, blind: blind || null,
-      units: sb.units.map((u) => ({ uid: u.uid, isEnemy: u.isEnemy, flying: u.flying, hp: u.hp, maxHp: u.maxHp, pos: u.pos, power: u.power,
+      units: sb.units.map((u) => ({ uid: u.uid, isEnemy: u.isEnemy, flying: u.flying, hp: u.hp, maxHp: u.maxHp, pos: u.pos,
         // the whole status bag, copied one level deep - forgetting this is what used
         // to make the AI simulate a board it could not actually see
         status: Object.fromEntries(Object.entries(u.status || {}).map(([id, v]) => [id, { ...v }])) })),
@@ -530,7 +532,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       const tgt = u || bt;
       if (!tgt) { if (!st.sim) floater(dt, '✸', ab.color); continue; }
       if (ab.damage > 0) {
-        let dmg = Math.max(0, ab.damage + powBonus(caster) + dmgMod(caster)), lbl = '';
+        let dmg = Math.max(0, ab.damage + dmgMod(caster)), lbl = '';
         // A mind blind to elevation judges the blow as if the ground were flat. The
         // REAL cast (st.sim false) always counts the height - the rule is the rule.
         if (u && !(st.blind && st.blind.elevation)) {

@@ -2,10 +2,11 @@
 //  ABILITY UPGRADE TREES - one directed graph per ability.
 //  (Part of the config split; resolved by src/upgrades.js.)
 //
-//  The party grows through these instead of a unit "power" number: every
-//  reward pick unlocks one node of one ability's tree, and the ability is
-//  re-derived from its base definition (config/abilities.js) plus every
-//  unlocked node, in the fixed order the nodes are listed here.
+//  The party grows through these - there is no "power" number for anyone any
+//  more (removed 2026-09-10): every reward pick unlocks one node of one
+//  ability's tree, and the ability is re-derived from its base definition
+//  (config/abilities.js) plus every unlocked node, in the fixed order the
+//  nodes are listed here.
 //
 //  Node format (all fields optional except where noted):
 //    requires     [nodeIds]  - ALL of them must be unlocked first (multi-parent

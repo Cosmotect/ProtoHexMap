@@ -33,7 +33,6 @@ const BESTIARY_COLS = [
   { key: 'shape', kind: 'select', options: () => SHAPE_NAMES },
   { key: 'color', kind: 'color' },
   { key: 'hp', kind: 'number', w: 48 },
-  { key: 'power', kind: 'number', w: 48 },
   { key: 'init', kind: 'number', w: 44 },
   { key: 'speed', kind: 'number', w: 44 },
   { key: 'flying', kind: 'bool' },
@@ -43,7 +42,7 @@ const BESTIARY_COLS = [
 ];
 // A brand new creature: deliberately weak and plain, so an unfinished row that
 // finds its way into a fight cannot wreck a run.
-const NEW_ENEMY = () => ({ name: 'New enemy', shape: 'octahedron', color: 0xe2474b, hp: 10, power: 2, init: 5, speed: 4, flying: false, intellect: 'C', abilities: ['strike'] });
+const NEW_ENEMY = () => ({ name: 'New enemy', shape: 'octahedron', color: 0xe2474b, hp: 10, init: 5, speed: 4, flying: false, intellect: 'C', abilities: ['strike'] });
 const NEW_GROUP = () => ({ title: 'New group', units: [] });
 
 // Colours are written two ways in the config: as CSS strings ('#a1254a', what the

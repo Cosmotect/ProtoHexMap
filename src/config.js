@@ -227,3 +227,10 @@ export const CONFIG = {
     playerGlow: 0xffd166,
   },
 };
+
+// The "which enemy GROUPS spawn on which world layer" table lives in
+// config/encounters.js (ENCOUNTERS.battleSpawns) so it sits next to the rest
+// of encounter design, but every existing reader still asks for it at
+// CONFIG.battle.spawns (src/battle.js, src/settings.js) - so it is wired in
+// here rather than making those files know about two config sections.
+CONFIG.battle.spawns = ENCOUNTERS.battleSpawns;

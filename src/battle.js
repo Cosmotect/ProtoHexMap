@@ -1,5 +1,5 @@
 // Battle simulation: pure logic, no rendering. Both sides are arrays of units
-// { name, hp, maxHp, power, alive }. Returns a transcript + the outcome.
+// { name, hp, maxHp, alive }. Returns a transcript + the outcome.
 // Units are mutated in place (the party keeps its wounds).
 
 // Random damage in [min, max], shaped like a bell: average of `dice` uniform rolls.
@@ -11,23 +11,21 @@ export function rollDamage(rng, cfg) {
   return cfg.damageMin + t * (cfg.damageMax - cfg.damageMin);
 }
 
-// Power multiplier: powerBase ^ ((attacker power - defender power) / powerStep).
-// The exponent is continuous - only the final damage is rounded (see damageFor) - so
-// every single point of power moves the number a little.
-export function powerMultiplier(cfg, attacker, defender) {
-  const step = cfg.powerStep || 1;
-  return Math.pow(cfg.powerBase, (attacker.power - defender.power) / step);
-}
-
-export function damageFor(rng, cfg, attacker, defender) {
-  const base = rollDamage(rng, cfg);
-  let mult = powerMultiplier(cfg, attacker, defender);
+// `damageMod` is the flat Stasis "damage" debuff (config.stasis.debuffs.damage.amount),
+// subtracted from a PLAYER attacker's roll before the desperation bonus - the exact
+// same flat penalty the interactive engine applies to a party cast (see dmgMod() in
+// local/battle/engine.js). There used to also be a power-ratio multiplier here
+// (removed 2026-09-10, enemy strength now comes purely from the abilities a bestiary
+// row gives it - see config/units.js battle.enemyTypes).
+export function damageFor(rng, cfg, attacker, defender, damageMod = 0) {
+  let base = rollDamage(rng, cfg);
+  if (attacker.isPlayer && damageMod) base = Math.max(0, base - damageMod);
   // Player units fight harder the closer they are to death.
   if (attacker.isPlayer && cfg.desperation) {
     const missing = 1 - Math.max(0, attacker.hp) / attacker.maxHp;
-    mult *= 1 + cfg.desperation * missing;
+    base *= 1 + cfg.desperation * missing;
   }
-  return Math.max(1, Math.round(base * mult));
+  return Math.max(1, Math.round(base));
 }
 
 const alive = (units) => units.filter((u) => u.alive !== false && u.hp > 0);
@@ -52,8 +50,9 @@ function pickTarget(rng, cfg, targets) {
  * @param party     player units
  * @param enemies   enemy units
  * @param partyFirst true if the player initiated the battle
+ * @param damageMod flat Stasis "damage" debuff to apply to party hits (see damageFor)
  */
-export function simulateBattle(rng, cfg, party, enemies, partyFirst) {
+export function simulateBattle(rng, cfg, party, enemies, partyFirst, damageMod = 0) {
   const lines = [];
   const deaths = [];
   let round = 0;
@@ -65,7 +64,7 @@ export function simulateBattle(rng, cfg, party, enemies, partyFirst) {
       const targets = alive(defenders);
       if (!targets.length) return;
       const d = sideName === 'enemy' ? pickTarget(rng, cfg, targets) : rng.pick(targets);
-      const dmg = damageFor(rng, cfg, a, d);
+      const dmg = damageFor(rng, cfg, a, d, damageMod);
       d.hp = Math.max(0, d.hp - dmg);
       let down = false;
       if (d.hp <= 0) {
@@ -108,7 +107,7 @@ export function renameDuplicates(units) {
 
 // ----- building enemy groups from the bestiary --------------------------------
 // Since 2026-08-31 nothing about a fight is rolled unit by unit: config/units.js
-// holds a BESTIARY (battle.enemyTypes: name, shape, colour, hp, power) and a
+// holds a BESTIARY (battle.enemyTypes: name, shape, colour, hp, abilities) and a
 // table of GROUPS (battle.enemyGroups: a title plus a list of bestiary ids).
 // A fight picks one whole GROUP, so what is written in the config is exactly
 // what walks onto the arena.
@@ -151,7 +150,6 @@ export function makeEnemyOfType(cfg, typeId) {
     typeId,
     name: t.name,
     hp: t.hp, maxHp: t.hp,
-    power: t.power,
     shape: t.shape ?? 'octahedron',
     color: t.color ?? 0xe2474b,
     init: t.init, speed: t.speed, flying: t.flying, intellect: t.intellect,
@@ -177,20 +175,6 @@ export function makeGroup(cfg, groupId) {
   out.title = g.title ?? groupId;
   out.groupId = groupId;
   return out;
-}
-
-// The power of ONE average enemy on this ring: the mean unit power across every
-// group the band can roll. Used where enemies appear outside a group (the Stasis
-// "extra enemies" debuff).
-export function regularUnitPower(cfg, ring, layer = 0) {
-  let total = 0, count = 0;
-  for (const gid of spawnPool(cfg, ringBandId(cfg, ring), layer)) {
-    for (const id of cfg.enemyGroups?.[gid]?.units ?? []) {
-      total += cfg.enemyTypes?.[id]?.power ?? 0;
-      count += 1;
-    }
-  }
-  return count ? Math.max(1, Math.round(total / count)) : 1;
 }
 
 // `count` loose enemies for a tile on `ring`, rolled from the band's

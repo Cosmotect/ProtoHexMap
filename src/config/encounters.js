@@ -155,6 +155,59 @@ radius: 3
     },
   },
 
+  // =================================================================
+  //  BATTLE SPAWNS - which enemy GROUPS (config/units.js battle.enemyGroups)
+  //  a fight may roll, one row per kind of fight and one column per LAYER of
+  //  the worldflake (0 = the core, 6 = the highest; config/world.js `layers`).
+  //  A fight rolls one group out of its own cell. An EMPTY cell is not an
+  //  error: that fight plays the nearest FILLED layer of the same row
+  //  instead, so a half-finished table still runs.
+  //  Moved here from config/units.js and spelled out one layer at a time
+  //  (2026-09-10) - it used to be one list copied onto every layer by a
+  //  helper function, which is why layers 3-6 below all still read the same:
+  //  nothing has been given its own roster yet. Edit any single layer's list
+  //  here (or in Settings > Units > Spawns) without touching the others.
+  //  Layers 0-2 start EMPTY on purpose - they play layer 3's roster until
+  //  given their own.
+  // =================================================================
+  battleSpawns: {
+    inner: {
+      0: [], 1: [], 2: [],
+      3: ['loneRaider', 'strays', 'scoutPair', 'huskTrio', 'tickSwarm'],
+      4: ['loneRaider', 'strays', 'scoutPair', 'huskTrio', 'tickSwarm'],
+      5: ['loneRaider', 'strays', 'scoutPair', 'huskTrio', 'tickSwarm'],
+      6: ['loneRaider', 'strays', 'scoutPair', 'huskTrio', 'tickSwarm'],
+    },
+    middle: {
+      0: [], 1: [], 2: [],
+      3: ['raidParty', 'stalkerPack', 'wardenGuard'],
+      4: ['raidParty', 'stalkerPack', 'wardenGuard'],
+      5: ['raidParty', 'stalkerPack', 'wardenGuard'],
+      6: ['raidParty', 'stalkerPack', 'wardenGuard'],
+    },
+    outer: {
+      0: [], 1: [], 2: [],
+      3: ['warband', 'huskTide', 'ruinHunt'],
+      4: ['warband', 'huskTide', 'ruinHunt'],
+      5: ['warband', 'huskTide', 'ruinHunt'],
+      6: ['warband', 'huskTide', 'ruinHunt'],
+    },
+    colonies: {
+      0: [], 1: [], 2: [],
+      3: ['colonyWarden', 'stasisBrood', 'twinSentinels', 'colonyAnchor', 'rotChorus'],
+      4: ['colonyWarden', 'stasisBrood', 'twinSentinels', 'colonyAnchor', 'rotChorus'],
+      5: ['colonyWarden', 'stasisBrood', 'twinSentinels', 'colonyAnchor', 'rotChorus'],
+      6: ['colonyWarden', 'stasisBrood', 'twinSentinels', 'colonyAnchor', 'rotChorus'],
+    },
+    seed: {
+      0: [], 1: [], 2: [],
+      3: ['forgeTyrant', 'wardenOfTheRim', 'huskChoir', 'etherLeviathan', 'twinStalkers'],
+      4: ['forgeTyrant', 'wardenOfTheRim', 'huskChoir', 'etherLeviathan', 'twinStalkers'],
+      5: ['forgeTyrant', 'wardenOfTheRim', 'huskChoir', 'etherLeviathan', 'twinStalkers'],
+      6: ['forgeTyrant', 'wardenOfTheRim', 'huskChoir', 'etherLeviathan', 'twinStalkers'],
+    },
+  },
+
   // ----- The Stasis ----------------------------------------------------
   // A single Stasis Seed spawns with the map; destroying it wins the run.
   // Four future Colony sites are picked at generation. After every player turn a line

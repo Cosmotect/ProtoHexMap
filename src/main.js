@@ -272,7 +272,7 @@ function beginInteractiveBattle(ctx, placementOverride = null) {
   // to the `default` combat stats - which is why a creature given its own ability in
   // the config still walked in swinging Strike.
   const enemyDefs = ctx.enemies.map((e) => ({
-    name: e.name, hp: e.hp, maxHp: e.maxHp, power: e.power,
+    name: e.name, hp: e.hp, maxHp: e.maxHp,
     shape: e.shape, color: e.color, typeId: e.typeId,
     intellect: e.intellect,   // its INTELLECT CLASS - how well it plays its turn
     abilityIds: e.abilityIds, init: e.init, speed: e.speed, flying: e.flying,
@@ -879,7 +879,7 @@ function showDialog(d) {
       const text = t(l.down ? 'battle.hitDown' : 'battle.hit', { attacker: tn(l.attacker), defender: tn(l.defender), dmg: l.dmg });
       lines.push(`<div class="${l.side}">${escapeHtml(text)}</div>`);
     }
-    const enemies = r.enemies.map((e) => t('log.battle.enemy', { name: tn(e.name), hp: e.maxHp, power: e.power })).join(', ');
+    const enemies = r.enemies.map((e) => t('log.battle.enemy', { name: tn(e.name), hp: e.maxHp })).join(', ');
     const intro = d.intro ? `<p>${escapeHtml(d.intro.text)}</p>` : '';
     // Stasis debuffs that shaped this fight, listed under the summary.
     const debuffs = (r.debuffs ?? []).length

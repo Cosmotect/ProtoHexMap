@@ -33,7 +33,7 @@ export const TUTORIAL_1 = {
   },
   encounters: {
     // One weak enemy: enough to teach move / aim / cast, never enough to kill.
-    '4,-2': { type: 'battle', enemies: [{ name: 'Husk', hp: 14, power: 0 }] },
+    '4,-2': { type: 'battle', enemies: [{ name: 'Husk', hp: 14 }] },
     // Exactly enough supplies appear for the camp the wounded party now wants.
     '6,-3': { type: 'treasure', supplies: 40 },
     '9,-4': { type: 'goal' },

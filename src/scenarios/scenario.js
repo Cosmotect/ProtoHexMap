@@ -17,13 +17,13 @@
 //      start: 'q,r',
 //      tiles: { 'q,r': { type, biome?, revealed? } },
 //      encounters: {
-//        'q,r': { type: 'battle', enemies: [{ name, hp, power }], title?, recipe? }
+//        'q,r': { type: 'battle', enemies: [{ name, hp }], title?, recipe? }
 //        'q,r': { type: 'treasure', supplies? }
 //        'q,r': { type: 'shop', stock: ['rest', 'upgrade', ...] }
 //        'q,r': { type: 'event', event: '<events.js id>' }
 //        'q,r': { type: 'goal' }        // reaching this tile completes the map
 //      },
-//      party?: [{ name, icon, hp, power }],   // default: the roster's first size entries
+//      party?: [{ name, icon, hp }],   // default: the roster's first size entries
 //      supplies?: number, maxSupplies?: number,
 //      ambushes?: [{ afterSteps, enemies: [...], title? }],  // scripted forced fights
 //      goal: { type: 'reach', tile: 'q,r' },  // (more goal types come with later maps)
@@ -129,9 +129,9 @@ export function buildScenarioMap(config, scenario) {
 
 // Fresh battle-ready copies of an authored enemy list.
 // A scenario's hand-written enemy list. An entry may name a bestiary id
-// (`type: 'husk'`) or just a name; either way the creature's SHAPE and COLOUR
-// come from the bestiary (config/units.js, battle.enemyTypes), while hp and
-// power written here override it - a scripted fight often wants a weaker husk
+// (`type: 'husk'`) or just a name; either way the creature's SHAPE, COLOUR and
+// ABILITIES come from the bestiary (config/units.js, battle.enemyTypes), while
+// hp written here overrides it - a scripted fight often wants a weaker husk
 // than the wild one.
 export function cloneEnemies(list, cfg = null) {
   return list.map((e) => {
@@ -143,7 +143,6 @@ export function cloneEnemies(list, cfg = null) {
       name: e.name ?? type?.name ?? 'Enemy',
       hp: e.hp ?? type?.hp ?? 10,
       maxHp: e.hp ?? type?.hp ?? 10,
-      power: e.power ?? type?.power ?? 0,
       shape: e.shape ?? type?.shape ?? 'octahedron',
       color: e.color ?? type?.color ?? 0xe2474b,
       // The bestiary row's combat half travels too, so a scripted creature
