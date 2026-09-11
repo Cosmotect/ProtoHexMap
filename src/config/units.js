@@ -85,7 +85,7 @@ export const UNITS = {
     //             drives its own upgrade tree (config/upgrades.js), and the roster
     //             window and the party panel are laid out for the pair.
     roster: [
-      { name: 'Vanguard', icon: '🛡️', hp: 40, speed: 4, flying: false, abilities: ['strike', 'shove', 'chargeHeadbutt'] },
+      { name: 'Gorm', icon: '🪲', hp: 40, speed: 3, flying: false, abilities: ['clawSwipe', 'chargeHeadbutt'] },
       { name: 'Archer', icon: '🏹', hp: 28, speed: 4, flying: false, abilities: ['volley', 'lance'] },
       { name: 'Mystic', icon: '🔮', hp: 22, speed: 3, flying: false, abilities: ['burst', 'mend'] },
       { name: 'Warden', icon: '⚔️', hp: 36, speed: 4, flying: false, abilities: ['strike', 'guard'] },

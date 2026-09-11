@@ -70,7 +70,7 @@ export const ENCOUNTERS = {
     combat: {
       rate: 0.25,             // chance a battle encounter uses a crafted map
       maps: [
-`# A sunken ether trench splits the arena; the only way across is a walled
+        `# A sunken ether trench splits the arena; the only way across is a walled
 # causeway held by raiders, with braziers of fire guarding the mouth.
 id: the-causeway
 radius: 4
@@ -93,7 +93,7 @@ radius: 4
 3,-3: ground 3 !Raider
 2,2: ground 3 !Husk
 3,0: ground 4 !Drifter`,
-`# A ring of high ground around a burning hollow: whoever holds the rim
+        `# A ring of high ground around a burning hollow: whoever holds the rim
 # rains shots down; whoever falls in fights out of a firepit.
 id: ember-hollow
 radius: 6
@@ -130,9 +130,9 @@ radius: 6
     },
     shop: {
       rate: 0.25,             // shops do not open a local map yet: the recipe is
-                              // stored on the tile now so the flow can use it later
+      // stored on the tile now so the flow can use it later
       maps: [
-`# A calm terraced hollow for a wayside trader: no enemies, just a bowl of
+        `# A calm terraced hollow for a wayside trader: no enemies, just a bowl of
 # steps sheltered by two standing stones.
 id: wayside-hollow
 radius: 3
@@ -172,35 +172,45 @@ radius: 3
   // =================================================================
   battleSpawns: {
     inner: {
-      0: [], 1: [], 2: [],
+      0: [],
+      1: [],
+      2: [],
       3: ['loneRaider', 'strays', 'scoutPair', 'huskTrio', 'tickSwarm'],
       4: ['loneRaider', 'strays', 'scoutPair', 'huskTrio', 'tickSwarm'],
       5: ['loneRaider', 'strays', 'scoutPair', 'huskTrio', 'tickSwarm'],
       6: ['loneRaider', 'strays', 'scoutPair', 'huskTrio', 'tickSwarm'],
     },
     middle: {
-      0: [], 1: [], 2: [],
+      0: [],
+      1: [],
+      2: [],
       3: ['raidParty', 'stalkerPack', 'wardenGuard'],
       4: ['raidParty', 'stalkerPack', 'wardenGuard'],
       5: ['raidParty', 'stalkerPack', 'wardenGuard'],
       6: ['raidParty', 'stalkerPack', 'wardenGuard'],
     },
     outer: {
-      0: [], 1: [], 2: [],
+      0: [],
+      1: [],
+      2: [],
       3: ['warband', 'huskTide', 'ruinHunt'],
       4: ['warband', 'huskTide', 'ruinHunt'],
       5: ['warband', 'huskTide', 'ruinHunt'],
       6: ['warband', 'huskTide', 'ruinHunt'],
     },
     colonies: {
-      0: [], 1: [], 2: [],
+      0: [],
+      1: [],
+      2: [],
       3: ['colonyWarden', 'stasisBrood', 'twinSentinels', 'colonyAnchor', 'rotChorus'],
       4: ['colonyWarden', 'stasisBrood', 'twinSentinels', 'colonyAnchor', 'rotChorus'],
       5: ['colonyWarden', 'stasisBrood', 'twinSentinels', 'colonyAnchor', 'rotChorus'],
       6: ['colonyWarden', 'stasisBrood', 'twinSentinels', 'colonyAnchor', 'rotChorus'],
     },
     seed: {
-      0: [], 1: [], 2: [],
+      0: [],
+      1: [],
+      2: [],
       3: ['forgeTyrant', 'wardenOfTheRim', 'huskChoir', 'etherLeviathan', 'twinStalkers'],
       4: ['forgeTyrant', 'wardenOfTheRim', 'huskChoir', 'etherLeviathan', 'twinStalkers'],
       5: ['forgeTyrant', 'wardenOfTheRim', 'huskChoir', 'etherLeviathan', 'twinStalkers'],

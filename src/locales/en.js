@@ -426,47 +426,12 @@ export const en = {
   'ability.guard.name': 'Guard',
   'ability.guard.desc': 'Shields a nearby ally: the next hit or shove against them is blocked outright.',
 
-  // ----- ability upgrade trees (config/upgrades.js; desc states the effect) ------
-  'upgrade.strike.edge.name': 'Edge', 'upgrade.strike.edge.desc': '+1 damage',
-  'upgrade.strike.weight.name': 'Weight', 'upgrade.strike.weight.desc': '+1 damage',
-  'upgrade.strike.reach.name': 'Reach', 'upgrade.strike.reach.desc': 'can strike from 2 tiles away',
-  'upgrade.strike.sweep.name': 'Sweep', 'upgrade.strike.sweep.desc': 'also hits the tiles around the target',
-  'upgrade.strike.execute.name': 'Execute', 'upgrade.strike.execute.desc': '+2 damage',
-  'upgrade.shove.jolt.name': 'Jolt', 'upgrade.shove.jolt.desc': '+1 damage',
-  'upgrade.shove.momentum.name': 'Momentum', 'upgrade.shove.momentum.desc': 'pushes 1 tile further',
-  'upgrade.shove.longarm.name': 'Long Arm', 'upgrade.shove.longarm.desc': 'can shove from 2 tiles away',
-  'upgrade.shove.impact.name': 'Impact', 'upgrade.shove.impact.desc': '+1 damage',
-  'upgrade.shove.avalanche.name': 'Avalanche', 'upgrade.shove.avalanche.desc': '+2 damage',
-  'upgrade.volley.barbed.name': 'Barbed Arrows', 'upgrade.volley.barbed.desc': '+1 damage',
-  'upgrade.volley.farsight.name': 'Farsight', 'upgrade.volley.farsight.desc': 'range grows to 5 tiles',
-  'upgrade.volley.closework.name': 'Close Work', 'upgrade.volley.closework.desc': 'can fire point blank',
-  'upgrade.volley.rain.name': 'Arrow Rain', 'upgrade.volley.rain.desc': 'also hits the tiles around the target',
-  'upgrade.volley.deadeye.name': 'Deadeye', 'upgrade.volley.deadeye.desc': '+2 damage',
-  'upgrade.lance.hone.name': 'Hone', 'upgrade.lance.hone.desc': '+1 damage',
-  'upgrade.lance.extend.name': 'Extend', 'upgrade.lance.extend.desc': 'the line reaches a 4th tile',
-  'upgrade.lance.pike.name': 'Pike', 'upgrade.lance.pike.desc': 'can thrust from 2 tiles away',
-  'upgrade.lance.drive.name': 'Drive', 'upgrade.lance.drive.desc': '+1 damage',
-  'upgrade.lance.skewer.name': 'Skewer', 'upgrade.lance.skewer.desc': '+2 damage',
-  'upgrade.burst.kindle.name': 'Kindle', 'upgrade.burst.kindle.desc': '+1 damage',
-  'upgrade.burst.lob.name': 'Lob', 'upgrade.burst.lob.desc': 'can be thrown 4 tiles',
-  'upgrade.burst.spread.name': 'Spread', 'upgrade.burst.spread.desc': 'the blast covers one more ring',
-  'upgrade.burst.scorch.name': 'Scorch', 'upgrade.burst.scorch.desc': 'fire also covers the ring around the centre',
-  'upgrade.burst.inferno.name': 'Inferno', 'upgrade.burst.inferno.desc': '+1 damage',
-  'upgrade.bolt.charge.name': 'Charge', 'upgrade.bolt.charge.desc': '+1 damage',
-  'upgrade.bolt.arc.name': 'Arc', 'upgrade.bolt.arc.desc': 'range grows to 3 tiles',
-  'upgrade.bolt.surge.name': 'Surge', 'upgrade.bolt.surge.desc': '+1 damage',
-  'upgrade.bolt.farcast.name': 'Farcast', 'upgrade.bolt.farcast.desc': 'range grows to 4 tiles',
-  'upgrade.bolt.thunder.name': 'Thunder', 'upgrade.bolt.thunder.desc': '+2 damage',
-  'upgrade.mend.soothe.name': 'Soothe', 'upgrade.mend.soothe.desc': '+1 healing',
-  'upgrade.mend.tend.name': 'Tend', 'upgrade.mend.tend.desc': 'can heal from 2 tiles away',
-  'upgrade.mend.bloom.name': 'Bloom', 'upgrade.mend.bloom.desc': 'also heals everyone around the target',
-  'upgrade.mend.mercy.name': 'Mercy', 'upgrade.mend.mercy.desc': '+1 healing',
-  'upgrade.mend.renewal.name': 'Renewal', 'upgrade.mend.renewal.desc': '+2 healing',
-  'upgrade.guard.patch.name': 'Patch', 'upgrade.guard.patch.desc': 'the shield also heals 1',
-  'upgrade.guard.brace.name': 'Brace', 'upgrade.guard.brace.desc': 'can shield from 2 tiles away',
-  'upgrade.guard.surgeon.name': 'Surgeon', 'upgrade.guard.surgeon.desc': 'heals 1 more',
-  'upgrade.guard.farward.name': 'Far Ward', 'upgrade.guard.farward.desc': 'can shield from 3 tiles away',
-  'upgrade.guard.aegis.name': 'Aegis', 'upgrade.guard.aegis.desc': 'heals 2 more',
+  // ----- ability upgrade trees --------------------------------------------
+  // No keys here on purpose. Since 2026-09-11 a node's name and description are
+  // part of its DEFINITION (ABILITY_UPGRADES in config/abilities.js), so English
+  // reads them straight off the node. A translation still overrides them by
+  // defining upgrade.<ability>.<node>.name / .desc - see ru.js, and upgradeInfo
+  // in src/upgrades.js.
 
   // ----- character backstories (the roster's detail window) ----------------------
   'unit.Vanguard.story': 'First through every door and last to leave it. That shield arm has stopped more than blades: doubts, routs, one small avalanche.',

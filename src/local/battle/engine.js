@@ -752,10 +752,27 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     }
     return last;
   }
+  // Can this ability be aimed at `t` from `fromK` at all?
+  //
+  // A ROTATABLE ability cannot be aimed at the caster's OWN tile. Every zone it
+  // owns turns to face the aim point, and there is no direction from a tile to
+  // itself: aimRot returns 0 for that, so the whole shape would be drawn due
+  // EAST, in a direction nobody chose. Both the player's aim map and the enemy
+  // AI's search go through here, so neither can pick it.
+  //
+  // (Found 2026-09-11. clawSwipe casts at ringOffsets(0, 1), which includes
+  // [0, 0], so its own tile was a legal anchor. Harmless while its dmgZone was
+  // the single aim tile - but once Cleave and Wide Cleave gave it a fan two
+  // tiles deep, the alias pass lit up two stray tiles two hexes away, and a cast
+  // on self would have swiped eastwards for no reason. An effect meant to
+  // surround the caster is written the other way round: rotatable: false with a
+  // ring dmgZone.)
+  const canAimAt = (ab, fromK, t) => !(ab.rotatable && t === fromK);
+
   function buildAim(c, ab) {
     const targets = new Set();
     const anchors = new Set();
-    const ok = (k) => !ab.moveToTarget || dashAimOk(c, k);
+    const ok = (k) => (!ab.moveToTarget || dashAimOk(c, k)) && canAimAt(ab, c.pos, k);
     if (ab.castAny) for (const t of activeTiles()) { if (!ok(t)) continue; targets.add(t); anchors.add(t); }
     else for (const off of ab.castZone) {
       const t = addK(c.pos, off);
@@ -1141,6 +1158,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
         const tlist = ab.castAny ? activeTiles() : ab.castZone.map((off) => addK(startK, off));
         for (const t of tlist) {
           if (!inMap(t)) continue;
+          if (!canAimAt(ab, startK, t)) continue;   // same rule the player's aim map uses
           if (ab.moveToTarget && t !== startK && !dashAimOk({ pos: startK, uid: e.uid }, t)) continue;
           const st = simSt(blind);
           const se = st.units.find((u) => u.uid === e.uid);

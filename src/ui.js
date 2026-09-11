@@ -2,9 +2,9 @@
 // (In Godot terms: a CanvasLayer with Labels and Buttons.)
 import { describeHex, lerpTable } from './game.js';
 import { terrainInfo, terrainName, encounterLabel, encounterInfo, tc } from './text.js';
-import { t, tn } from './i18n.js';
+import { t, tn, hasKey } from './i18n.js';
 import { playFatigueStep, playFatigueClear, clearStaggerMs } from './audio.js';
-import { unitAbilityIds, upgradeTree, treeLayout, upgradeRef } from './upgrades.js';
+import { unitAbilityIds, upgradeTree, treeLayout, upgradeRef, upgradeInfo, abilityDesc } from './upgrades.js';
 import { ABILITIES } from './config/abilities.js';
 import { statusesFor, badgeNumber } from './status.js';
 import { biomeColorFor } from './map.js';
@@ -207,28 +207,28 @@ export function createUI(config, handlers) {
   let legendLayer = config.layers?.startLayer ?? 3;
 
   function buildLegend() {
-  const legendItems = [];
-  for (const [name, tr] of Object.entries(config.tileTypes)) {
-    const note = !tr.passable ? t('legend.blocked')
-      : tr.supplyCost > 0 ? t('legend.cost', { supplies: tr.supplyCost, hp: tr.hpCost })
-      : tr.hpCost > 0 ? t('legend.costHp', { hp: tr.hpCost }) : '';
-    legendItems.push({ swatch: `<span class="swatch" style="background:${hex(tr.color)}"></span>`, label: `${terrainName(name)}${note}`, info: terrainInfo(name, tr) });
-  }
-  // Biomes: mostly colour - the swatch shows the pure biome colour that land tiles
-  // are shifted towards. A special biome (wither) may also add an HP cost.
-  // A biome wears a different colour on every layer of the worldflake, so the swatch
-  // asks map.js for the one THIS run is on (legendLayer, kept current in update()).
-  for (const [name, b] of Object.entries(config.biomes)) {
-    const note = (b.hpCost ?? 0) > 0 ? t('legend.costHp', { hp: b.hpCost }) : '';
-    legendItems.push({ swatch: `<span class="swatch" style="background:${hex(biomeColorFor(b, legendLayer))}"></span>`, label: `${t(`biome.${name}`)}${note}`, info: tc(`biome.${name}.info`, config) });
-  }
-  for (const [type, v] of Object.entries(config.encounters.visuals)) {
-    if (v.hidden) continue;   // scenario-only markers (the tutorial waypoint) stay out of the legend
-    legendItems.push({ swatch: `<span class="swatch marker" style="background:${hex(v.color)}"></span>`, label: encounterLabel(type), info: encounterInfo(type, config) });
-  }
-  legendItems.push({ swatch: `<span class="swatch" style="background:${hex(config.colors.fogTile)}"></span>`, label: t('legend.unexplored'), info: t('legend.unexplored.info') });
-  els.legendItems.innerHTML = legendItems.map((it, i) =>
-    `<div class="legend-item" data-i="${i}"><div class="legend-head">${it.label}${it.swatch}</div><div class="legend-info">${escapeHtml(it.info)}</div></div>`).join('');
+    const legendItems = [];
+    for (const [name, tr] of Object.entries(config.tileTypes)) {
+      const note = !tr.passable ? t('legend.blocked')
+        : tr.supplyCost > 0 ? t('legend.cost', { supplies: tr.supplyCost, hp: tr.hpCost })
+          : tr.hpCost > 0 ? t('legend.costHp', { hp: tr.hpCost }) : '';
+      legendItems.push({ swatch: `<span class="swatch" style="background:${hex(tr.color)}"></span>`, label: `${terrainName(name)}${note}`, info: terrainInfo(name, tr) });
+    }
+    // Biomes: mostly colour - the swatch shows the pure biome colour that land tiles
+    // are shifted towards. A special biome (wither) may also add an HP cost.
+    // A biome wears a different colour on every layer of the worldflake, so the swatch
+    // asks map.js for the one THIS run is on (legendLayer, kept current in update()).
+    for (const [name, b] of Object.entries(config.biomes)) {
+      const note = (b.hpCost ?? 0) > 0 ? t('legend.costHp', { hp: b.hpCost }) : '';
+      legendItems.push({ swatch: `<span class="swatch" style="background:${hex(biomeColorFor(b, legendLayer))}"></span>`, label: `${t(`biome.${name}`)}${note}`, info: tc(`biome.${name}.info`, config) });
+    }
+    for (const [type, v] of Object.entries(config.encounters.visuals)) {
+      if (v.hidden) continue;   // scenario-only markers (the tutorial waypoint) stay out of the legend
+      legendItems.push({ swatch: `<span class="swatch marker" style="background:${hex(v.color)}"></span>`, label: encounterLabel(type), info: encounterInfo(type, config) });
+    }
+    legendItems.push({ swatch: `<span class="swatch" style="background:${hex(config.colors.fogTile)}"></span>`, label: t('legend.unexplored'), info: t('legend.unexplored.info') });
+    els.legendItems.innerHTML = legendItems.map((it, i) =>
+      `<div class="legend-item" data-i="${i}"><div class="legend-head">${it.label}${it.swatch}</div><div class="legend-info">${escapeHtml(it.info)}</div></div>`).join('');
   }
   buildLegend();
   els.legendItems.addEventListener('click', (e) => {
@@ -550,8 +550,8 @@ export function createUI(config, handlers) {
         ...offers.map((o) => {
           const u = game.state.party[o.index];
           return {
-            label: `${u.icon} ${tn(u.name)}: ${t(`upgrade.${o.abilityId}.${o.nodeId}.name`)}`,
-            sub: `${abilityName(o.abilityId)} - ${t(`upgrade.${o.abilityId}.${o.nodeId}.desc`)}`,
+            label: `${u.icon} ${tn(u.name)}: ${upgradeInfo(o.abilityId, o.nodeId).name}`,
+            sub: `${abilityName(o.abilityId)} - ${upgradeInfo(o.abilityId, o.nodeId).desc}`,
             onClick: () => onPick(o),
           };
         }),
@@ -575,8 +575,8 @@ export function createUI(config, handlers) {
       html: `<p>${t('blackmarket.pick.text', { name: tn(u.name), loss })}</p>`,
       actions: [
         ...offers.map((o) => ({
-          label: t(`upgrade.${o.abilityId}.${o.nodeId}.name`),
-          sub: `${abilityName(o.abilityId)} - ${t(`upgrade.${o.abilityId}.${o.nodeId}.desc`)}`,
+          label: upgradeInfo(o.abilityId, o.nodeId).name,
+          sub: `${abilityName(o.abilityId)} - ${upgradeInfo(o.abilityId, o.nodeId).desc}`,
           onClick: () => onPick(o),
         })),
         { label: t('dialog.decline'), sub: t('dialog.decline.sub'), onClick: () => confirm({ title: t('confirm.walkAway.title'), text: t('confirm.walkAway.text'), onYes: onDecline }) },
@@ -730,11 +730,11 @@ export function createUI(config, handlers) {
       const initial = (u.name ?? '?').charAt(0);
       return `<div class="unit ${cls.trim()}" data-enemy="${u.uid}">
         ${unitCardBody({
-          portrait: escapeHtml(initial),
-          name: tn(u.name),
-          hpText: u.fled ? t('battle.ui.fled') : u.fleeing ? t('battle.ui.fleeing') : t('party.hp', { hp: Math.max(0, u.hp), max: u.maxHp }),
-          pct, segPct, slots: slots.join(''), statuses: statusesFor(u),
-        })}
+        portrait: escapeHtml(initial),
+        name: tn(u.name),
+        hpText: u.fled ? t('battle.ui.fled') : u.fleeing ? t('battle.ui.fleeing') : t('party.hp', { hp: Math.max(0, u.hp), max: u.maxHp }),
+        pct, segPct, slots: slots.join(''), statuses: statusesFor(u),
+      })}
       </div>`;
     }).join('');
     markHovered();
@@ -934,8 +934,8 @@ export function createUI(config, handlers) {
       if (!ab) return '';
       return `<div class="ud-ability">
         <div class="ud-ab-head"><span class="ud-ab-icon">${ab.icon}</span><b>${escapeHtml(abilityName(id))}</b></div>
-        <div class="ud-ab-desc">${escapeHtml(tc(`ability.${id}.desc`, config))}</div>
-        ${abilityTreeSvg(id, unlocked)}
+        <div class="ud-ab-desc">${escapeHtml(abilityDesc(id, config))}</div>
+        ${abilityTree(id, unlocked)}
       </div>`;
     }).join('');
     el.innerHTML = `
@@ -943,38 +943,68 @@ export function createUI(config, handlers) {
         <div class="ud-portrait">${def.icon}</div>
         <div class="ud-name">${escapeHtml(tn(def.name))}</div>
         <div class="ud-hp muted">${t('roster.hp', { n: def.hp })}</div>
-        <div class="ud-story">${escapeHtml(t(`unit.${def.name}.story`))}</div>
+        <div class="ud-story">${escapeHtml(hasKey(`unit.${def.name}.story`) ? t(`unit.${def.name}.story`) : (def.story ?? ''))}</div>
       </div>
-      ${sections}`;
+      <div class="ud-abilities">${sections}</div>`;
   }
 
-  // The upgrade tree as a small SVG: layered left to right (a node's column is
-  // its longest requires-chain), edges behind, node states as classes
-  // (owned / open / locked). Hover a node for its name + effect.
-  function abilityTreeSvg(abilityId, unlocked) {
+  // ----- the ability upgrade tree (roster window) -------------------------
+  // A real card per node - icon, name and what it does - laid out in columns by
+  // depth, with the requires-edges drawn behind them. It used to be an SVG of
+  // 9px circles with the name underneath: the shape of the tree was legible,
+  // but what any node actually DID was hidden in a tooltip, which is no way to
+  // choose a companion.
+  //
+  // The cards are absolutely positioned from coordinates computed here, and the
+  // edge SVG uses the SAME coordinates, so the lines meet the cards exactly
+  // without measuring the DOM after layout.
+  const TREE = {
+    cardW: 152, cardH: 62,   // one node
+    colGap: 34, rowGap: 10,  // between columns / stacked cards
+    padY: 4,
+  };
+  function abilityTree(abilityId, unlocked) {
     const tree = upgradeTree(abilityId);
     if (!tree) return '';
     const { layers, edges } = treeLayout(abilityId);
-    const W = 300, H = 116;
-    const colW = layers.length > 1 ? (W - 64) / (layers.length - 1) : 0;
+    const rows = Math.max(1, ...layers.map((l) => l.length));
+    const W = layers.length * TREE.cardW + (layers.length - 1) * TREE.colGap;
+    const H = rows * TREE.cardH + (rows - 1) * TREE.rowGap + TREE.padY * 2;
+    // Each column is centred vertically against the tallest one, so a branch of
+    // two sits level with the middle of a branch of three.
     const pos = {};
-    layers.forEach((nodes, d) => nodes.forEach((n, i) => {
-      pos[n] = { x: 32 + d * colW, y: Math.round((H - 26) * (i + 1) / (nodes.length + 1)) + 4 };
-    }));
+    layers.forEach((nodes, d) => {
+      const colH = nodes.length * TREE.cardH + (nodes.length - 1) * TREE.rowGap;
+      const top = TREE.padY + (H - TREE.padY * 2 - colH) / 2;
+      nodes.forEach((n, i) => {
+        pos[n] = { x: d * (TREE.cardW + TREE.colGap), y: top + i * (TREE.cardH + TREE.rowGap) };
+      });
+    });
     const isOpen = (n) => (tree[n].requires ?? []).every((p) => unlocked.has(upgradeRef(abilityId, p)));
-    const lines = edges.map(([a, b]) =>
-      `<line x1="${pos[a].x}" y1="${pos[a].y}" x2="${pos[b].x}" y2="${pos[b].y}"></line>`).join('');
-    const nodes = Object.keys(tree).map((n) => {
+    // Edges leave a parent's right edge and arrive at a child's left edge; the
+    // cubic keeps them clear of the cards they pass.
+    const lines = edges.map(([a, b]) => {
+      const p = pos[a], c = pos[b];
+      const x1 = p.x + TREE.cardW, y1 = p.y + TREE.cardH / 2;
+      const x2 = c.x, y2 = c.y + TREE.cardH / 2;
+      const mid = x1 + (x2 - x1) / 2;
+      const on = unlocked.has(upgradeRef(abilityId, a)) ? ' on' : '';
+      return `<path class="ut-edge${on}" d="M${x1} ${y1} C${mid} ${y1} ${mid} ${y2} ${x2} ${y2}"></path>`;
+    }).join('');
+    const cards = Object.keys(tree).map((n) => {
       const p = pos[n];
       const cls = unlocked.has(upgradeRef(abilityId, n)) ? 'owned' : isOpen(n) ? 'open' : 'locked';
-      const name = t(`upgrade.${abilityId}.${n}.name`);
-      const desc = t(`upgrade.${abilityId}.${n}.desc`);
-      return `<g class="ut-node ${cls}">
-        <circle cx="${p.x}" cy="${p.y}" r="9"><title>${escapeHtml(`${name} - ${desc}`)}</title></circle>
-        <text x="${p.x}" y="${p.y + 21}">${escapeHtml(name)}</text>
-      </g>`;
+      const { name, desc, icon } = upgradeInfo(abilityId, n);
+      return `<div class="ut-card ${cls}" style="left:${p.x}px;top:${p.y}px;width:${TREE.cardW}px;height:${TREE.cardH}px"
+        title="${escapeAttr(`${name} - ${desc}`)}">
+        <span class="ut-icon">${icon}</span>
+        <span class="ut-text"><b>${escapeHtml(name)}</b><i>${escapeHtml(desc)}</i></span>
+      </div>`;
     }).join('');
-    return `<svg class="ability-tree" viewBox="0 0 ${W} ${H}">${lines}${nodes}</svg>`;
+    return `<div class="ability-tree" style="width:${W}px;height:${H}px">
+      <svg class="ut-edges" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">${lines}</svg>
+      ${cards}
+    </div>`;
   }
 
   return { update, renderLog, setHover, showEnd, hideEnd, openDialog, closeDialog, dialogOpen, flashDialog, confirm, chooseUnit, chooseUpgrade, chooseBlackMarketUpgrade, showBanner, buildLegend, buildFatigueBar, updateBlur, setStartScreen, setLayerSelector, openRoster, closeRoster, rosterOpen, setBattleMode, setDeployBar, updateBattle };
@@ -1067,7 +1097,7 @@ function unitCard(u, config, index, live) {
     const ab = ABILITIES[id];
     if (!ab) return slotBox('ab', null, t('slot.ability.empty'));
     const owned = (u.upgrades ?? []).filter((r) => r.startsWith(`${id}:`));
-    const names = owned.map((r) => t(`upgrade.${r.replace(':', '.')}.name`)).join(', ');
+    const names = owned.map((r) => { const [a, n] = r.split(':'); return upgradeInfo(a, n).name; }).join(', ');
     const tip = `${abilityName(id)}${names ? ` - ${names}` : ''}`;
     return slotBox('ab', `${ab.icon}${owned.length ? `<b>+${owned.length}</b>` : ''}`, tip);
   });
@@ -1079,11 +1109,11 @@ function unitCard(u, config, index, live) {
   abs.push(slotBox('relic', u.relic?.icon ?? null, u.relic ? tn(u.relic.name) : t('slot.relic.empty')));
   return `<div class="unit ${cls}" data-party="${index}">
     ${unitCardBody({
-      portrait: u.icon,
-      name: tn(u.name),
-      hpText: u.alive ? t('party.hp', { hp: u.hp, max: u.maxHp }) : t('party.disabled'),
-      pct, segPct, slots: abs.join(''), statuses: statusesFor(live),
-    })}
+    portrait: u.icon,
+    name: tn(u.name),
+    hpText: u.alive ? t('party.hp', { hp: u.hp, max: u.maxHp }) : t('party.disabled'),
+    pct, segPct, slots: abs.join(''), statuses: statusesFor(live),
+  })}
   </div>`;
 }
 

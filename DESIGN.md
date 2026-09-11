@@ -459,27 +459,46 @@ statement, built to be scanned by human eyes and pasted around.
   "Exit preview" button (or Esc) flies back to the world. A debug tool by
   design: it lives in the menu next to Settings.
 
-## Ability upgrades - how the party grows (src/upgrades.js + src/config/upgrades.js)
+## Ability upgrades - how the party grows (src/upgrades.js + src/config/abilities.js)
 
 Party units have no power stat: every reward that used to raise power now unlocks
 one node of an ability's UPGRADE TREE, and the ability itself gets stronger.
 
-* **Trees** (`config/upgrades.js`): one directed graph per ability id, keyed
-  `ABILITY_UPGRADES[abilityId][nodeId]`. A node lists `requires` (ALL parents must
-  be unlocked; multi-parent capstones merge branches; none = a root) and its
-  effects: `add` {damage, heal, buffX - a list adds slot by slot}, `castZoneAdd` / `dmgZoneAdd` / `tagZoneAdd`
-  offset lists, `pushDistAdd`, and `flags` - booleans for upgrade-specific ability
-  logic the engine can branch on (reserved for the unique upgrades to come). Every
-  current ability has a 5-node tree (2 roots, 2 mids, 1 two-parent capstone) mixing
-  numeric bumps with cast / effect shape growth. Texts:
-  `upgrade.<ability>.<node>.name/.desc` in the locales. The plan is 16+ characters
+* **Trees** live in `config/abilities.js`, beside the abilities they change
+  (moved out of a `config/upgrades.js` of their own on 2026-09-11 - an upgrade is
+  a change to an ability, and splitting them meant opening two files to read one
+  thing). Keyed `ABILITY_UPGRADES[abilityId][nodeId]`. A node lists `requires`
+  (ALL parents must be unlocked; multi-parent capstones merge branches; none = a
+  root) and its effects: `add` {damage, heal, buffX - a list adds slot by slot},
+  `castZoneAdd` / `dmgZoneAdd` / `tagZoneAdd` offset lists, `pushDistAdd`, and
+  `flags` - booleans for upgrade-specific ability logic the engine can branch on.
+  Every current ability has a 5-node tree (2 roots, 2 mids, 1 two-parent capstone)
+  mixing numeric bumps with cast / effect shape growth. The plan is 16+ characters
   x 2 abilities = 32+ trees; a tree is found purely by ability id.
+* **A node that adds tiles the ability already covers does NOTHING**, and says
+  nothing about it: `addZone` deduplicates, so the node unlocks, shows as taken
+  in the tree, and changes not one rule. clawSwipe's Cleave sat broken exactly
+  this way - it added two tiles to a cast zone that was already the whole ring
+  (`ringOffsets(0, 1)`), when what it meant to widen was the SWIPE, the dmgZone.
+  `auditUpgrades()` in src/upgrades.js now resolves every node against the state
+  it arrives in and warns in the console (dev builds only) about any that change
+  nothing - the only way to catch this, since no field in the data declares that
+  a node is supposed to matter.
+* **A node carries its own `name`, `icon` and `desc`.** They used to exist only as
+  `upgrade.<ability>.<node>.name/.desc` in the locale tables, which put a node's
+  EFFECT and the sentence describing that effect in different files, free to drift
+  apart. Now the definition is the source and English has no such keys at all; a
+  translation overrides it by defining them (ru.js still does). `upgradeInfo()` in
+  src/upgrades.js is the one lookup, locale first, definition second.
+  The same rule now applies to an ability's own `desc` (`abilityDesc()`) and a
+  character's `story`: locale if translated, definition otherwise, and **nothing**
+  if neither - an untranslated ability used to print the raw key at the player.
 * **Resolution** (`src/upgrades.js`, pure functions): a unit carries
   `upgrades: ["ability:node", ...]`; `resolveAbility(id, unlocked)` folds the
   unlocked nodes over the base def in tree order (order-independent),
   `resolvedAbilitiesFor(unit)` feeds the combat engine, `availableUpgrades(unit)`
   is the unlockable pool (parents all unlocked, not yet taken), `treeLayout`
-  drives the UI's SVG graphs.
+  gives the UI its columns and edges.
 * **Rewards**: after a won battle the game drafts ONE random available upgrade per
   living unit (`game.upgradeOffers()`) and the player unlocks exactly one of the
   offers (a Colony grants `rewardPicks` such choices back to back; offers re-drawn
@@ -492,9 +511,17 @@ one node of an ability's UPGRADE TREE, and the ability itself gets stronger.
   unit's hidden `power` = `battle.simPower.base + perUpgrade x unlocked count`,
   refreshed on every unlock. Nothing displays it; interactive combat ignores it.
 * **UI**: the roster's DETAIL WINDOW (start screen, below the grid; hover a card
-  to preview) shows portrait, backstory (`unit.<Name>.story`), and per ability its
-  description (`ability.<id>.desc`) plus the tree as an SVG (owned / open / locked
-  node states). The party panel shows two ability CHIPS per unit (icon + name,
+  to preview) shows the portrait and backstory in a narrow left column, and the
+  abilities STACKED down a wide one - each with its description and its upgrade
+  tree. The tree is **one card per node**: icon, name and what the node does, laid
+  out in columns by depth with the requires-edges curving behind them (an edge out
+  of an unlocked node is lit green). Until 2026-09-11 it was an SVG of 9px circles
+  with a name underneath - the shape of the tree was legible, but what any node
+  actually DID was hidden in a tooltip, which is no way to choose a companion. The
+  cards are absolutely positioned from coordinates computed in `abilityTree()`,
+  and the edge SVG uses the same ones, so the lines meet the cards exactly without
+  measuring the DOM after layout. States: owned (green), open (gold - every
+  prerequisite unlocked), locked (dimmed). The party panel shows two ability CHIPS per unit (icon + name,
   "+n" = unlocked count, tooltip lists them) where the power rating used to sit.
 
 ## Scenarios - hand-authored maps (the tutorial series, src/scenarios/)
@@ -806,6 +833,19 @@ stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }
   a click there as a click on the castZone tile that covers it, so Lance shows 18
   tiles for a castZone of 6. It does not extend reach - the far click casts from the
   near tile and hits the same three - but it is invisible unless someone says so.
+* 2026-09-11 **A rotatable ability cannot be aimed at the caster's own tile.**
+  Every zone such an ability owns turns to face the aim point, and there is no
+  direction from a tile to itself - `aimRot` returns 0 for that - so the shape
+  would be drawn due EAST, in a direction nobody chose. `canAimAt()` in
+  local/battle/engine.js is the one rule, used by the player's aim map AND by the
+  enemy AI's search, so neither side can pick it.
+  The symptom that found it: clawSwipe casts at `ringOffsets(0, 1)`, which
+  includes `[0, 0]`, so its own tile was a legal anchor. Harmless while its
+  dmgZone was the single aim tile - but once Cleave and Wide Cleave gave it a fan
+  two tiles deep, the ALIAS pass rotated that fan around the self-anchor and lit
+  up two stray tiles two hexes from Gorm, outside anything the ability can reach.
+  An effect that is meant to surround the caster is written the other way round:
+  `rotatable: false` with a ring dmgZone.
 * 2026-09-11 **`lineOffsets(minD, maxD)` and `hexLine(a, b)`** (bhex.js). The first
   is the star to `ringOffsets`' blob: only the six straight spokes, nothing in
   between them, for anything that travels in a line. It was possible to write that

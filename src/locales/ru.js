@@ -424,6 +424,14 @@ export const ru = {
   'ability.guard.desc': 'Прикрывает союзника щитом: следующий удар или толчок по нему полностью блокируется.',
 
   // ----- деревья улучшений способностей (config/upgrades.js) ---------------------
+  // Коготь: пять узлов общие с ударом, два свои.
+  'upgrade.clawSwipe.cleave.name': 'Рассечение', 'upgrade.clawSwipe.cleave.desc': 'задевает два гекса рядом с целью',
+  'upgrade.clawSwipe.wideCleave.name': 'Широкое рассечение', 'upgrade.clawSwipe.wideCleave.desc': 'взмах накрывает ещё два гекса вокруг',
+  'upgrade.clawSwipe.edge.name': 'Заточка', 'upgrade.clawSwipe.edge.desc': '+1 к урону',
+  'upgrade.clawSwipe.weight.name': 'Вес', 'upgrade.clawSwipe.weight.desc': '+1 к урону',
+  'upgrade.clawSwipe.reach.name': 'Размах', 'upgrade.clawSwipe.reach.desc': 'бьёт с расстояния в 2 гекса',
+  'upgrade.clawSwipe.sweep.name': 'Взмах', 'upgrade.clawSwipe.sweep.desc': 'задевает гексы вокруг цели',
+  'upgrade.clawSwipe.execute.name': 'Добивание', 'upgrade.clawSwipe.execute.desc': '+2 к урону',
   'upgrade.strike.edge.name': 'Заточка', 'upgrade.strike.edge.desc': '+1 к урону',
   'upgrade.strike.weight.name': 'Вес', 'upgrade.strike.weight.desc': '+1 к урону',
   'upgrade.strike.reach.name': 'Замах', 'upgrade.strike.reach.desc': 'бьёт с 2 гексов',

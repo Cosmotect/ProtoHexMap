@@ -122,10 +122,15 @@ export const COMBAT_CONFIG = {
   },
 };
 
-// ----- Abilities -------------------------------------------------------
+// ===================================ABILITIES===================================
 // A small starter kit; balance numbers are first guesses.
 const A = (o) => Object.assign({
-  name: 'Ability', icon: '💥', color: '#5fc7e0',
+  // `desc` is what the roster window and the ability tooltips show. Like an
+  // upgrade node's (see ABILITY_UPGRADES below), it belongs on the definition:
+  // write it here and English needs no locale entry at all. A translation still
+  // overrides it with `ability.<id>.desc`. Left empty, nothing is shown - which
+  // is why an ability with neither used to print the raw key on screen.
+  name: 'Ability', icon: '💥', color: '#5fc7e0', desc: '',
   damage: 0, heal: 0, buff: '', buffX: null,   // buffX null = "use the status's own values"
   castZone: [], castAny: false, dmgZone: [], tagZone: [], tagId: null,
   hZone: [], hMode: 'rel', pushZone: [], rotatable: false, moveToTarget: false,
@@ -160,7 +165,133 @@ export const ABILITIES = {
   bolt: A({ name: 'Bolt', icon: '☄️', color: '#c66dff', damage: 4, castZone: ringOffsets(1, 2), dmgZone: [[0, 0]] }),
   mend: A({ name: 'Mend', icon: '🏥', color: '#a8e05f', heal: 4, castZone: ringOffsets(0, 1), dmgZone: [[0, 0]] }),
   guard: A({ name: 'Guard', icon: '🛡️', color: '#5fc7e0', buff: 'shield', castZone: ringOffsets(0, 1), dmgZone: [[0, 0]] }),
+  clawSwipe: A({ name: 'Claw Swipe', icon: '🔪', color: '#5fc7e0', damage: 5, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], rotatable: true })
 };
+
+
+// ========================ABILITY UPGRADE TREES=========================
+//
+//  The party grows through these: every reward pick unlocks one node of one
+//  ability's tree, and the ability is re-derived from its base definition
+//  above plus every unlocked node, in the fixed order the nodes are listed.
+//
+//  Node format (all optional except the texts):
+//    name         what the node is called        REQUIRED
+//    icon         the glyph the roster window shows on its card
+//    desc         what it does, in the player's words - the ONE place this is
+//                 written. It used to live in the locale tables as
+//                 upgrade.<ability>.<node>.desc, which meant a node's effect
+//                 and the sentence describing it were edited in two files and
+//                 drifted apart. A translation may still override it: if a
+//                 locale defines that key, it wins (see upgradeInfo in
+//                 src/upgrades.js).
+//    requires     [nodeIds]  - ALL of them must be unlocked first (multi-parent
+//                              nodes are how two branches meet in a capstone);
+//                              [] / absent = a root, available from the start
+//    add          { damage, heal, buffX } - numeric bumps, summed onto the base
+//    castZoneAdd  [offsets]  - extra tiles the ability may be aimed at
+//    dmgZoneAdd   [offsets]  - extra tiles the effect covers (from the aim point)
+//    tagZoneAdd   [offsets]  - extra tiles that receive the ability's tile tag
+//    pushDistAdd  n          - every pushZone entry shoves n tiles further
+//                              (the engine caps a single shove at 2 tiles)
+//    flags        { bool }   - switches for upgrade-specific ability logic; the
+//                              engine reads them off the resolved def
+//
+//  The final game plans at least 16 characters / 32 trees; a tree is looked up
+//  purely by ability id, so adding one is one entry here and nothing else.
+// =====================================================================
+const U = (o) => Object.assign({
+  name: '', icon: '⭐', desc: '',
+  requires: [], add: {}, castZoneAdd: [], dmgZoneAdd: [], tagZoneAdd: [],
+  pushDistAdd: 0, flags: {},
+}, o);
+
+
+export const ABILITY_UPGRADES = {
+  //Claw Swipe
+  clawSwipe: {
+    //range upgrades
+    cleave: U({ name: 'Cleave', icon: '✂️', desc: 'Wider swipe that also reaches the tiles next to target', dmgZoneAdd: [[0, -1], [-1, 1]] }),
+    wideCleave: U({ name: 'Wide Cleave', icon: '🌊', desc: 'The swipe covers almost all tiles around', requires: ['cleave'], dmgZoneAdd: [[-1, -1], [-2, 1]] }),
+  },
+  // Strike: melee jab. Branches: hit harder vs hit wider, meeting in Execute.
+  strike: {
+    edge: U({ name: 'Edge', icon: '🗡️', desc: '+1 damage', add: { damage: 1 } }),
+    weight: U({ name: 'Weight', icon: '🪨', desc: '+1 damage', add: { damage: 1 } }),
+    reach: U({ name: 'Reach', icon: '📏', desc: 'can strike from 2 tiles away', requires: ['edge'], castZoneAdd: ringOffsets(2, 2) }),
+    sweep: U({ name: 'Sweep', icon: '🌀', desc: 'also hits the tiles around the target', requires: ['weight'], dmgZoneAdd: ringOffsets(1, 1) }),
+    execute: U({ name: 'Execute', icon: '💀', desc: '+2 damage', requires: ['reach', 'sweep'], add: { damage: 2 } }),
+  },
+  // Shove: the positioning tool. Distance and damage feed the capstone.
+  shove: {
+    jolt: U({ name: 'Jolt', icon: '⚡', desc: '+1 damage', add: { damage: 1 } }),
+    momentum: U({ name: 'Momentum', icon: '🏃', desc: 'pushes 1 tile further', pushDistAdd: 1 }),
+    longarm: U({ name: 'Long Arm', icon: '📏', desc: 'can shove from 2 tiles away', requires: ['jolt'], castZoneAdd: ringOffsets(2, 2) }),
+    impact: U({ name: 'Impact', icon: '💥', desc: '+1 damage', requires: ['momentum'], add: { damage: 1 } }),
+    avalanche: U({ name: 'Avalanche', icon: '🏔️', desc: '+2 damage', requires: ['longarm', 'impact'], add: { damage: 2 } }),
+  },
+  // Volley: ranged single shot. Range out, range in, then a splash and a payoff.
+  volley: {
+    barbed: U({ name: 'Barbed Arrows', icon: '🪝', desc: '+1 damage', add: { damage: 1 } }),
+    farsight: U({ name: 'Farsight', icon: '🔭', desc: 'range grows to 5 tiles', castZoneAdd: ringOffsets(5, 5) }),
+    closework: U({ name: 'Close Work', icon: '🎯', desc: 'can fire point blank', requires: ['barbed'], castZoneAdd: ringOffsets(1, 1) }),
+    rain: U({ name: 'Arrow Rain', icon: '🌧️', desc: 'also hits the tiles around the target', requires: ['farsight'], dmgZoneAdd: ringOffsets(1, 1) }),
+    deadeye: U({ name: 'Deadeye', icon: '👁️', desc: '+2 damage', requires: ['closework', 'rain'], add: { damage: 2 } }),
+  },
+  // Lance: the rotating 3-tile line. Longer line, longer arm, harder hit.
+  lance: {
+    hone: U({ name: 'Hone', icon: '🔪', desc: '+1 damage', add: { damage: 1 } }),
+    extend: U({ name: 'Extend', icon: '📏', desc: 'the line reaches a 4th tile', dmgZoneAdd: [[3, 0]] }),
+    pike: U({ name: 'Pike', icon: '🔱', desc: 'can thrust from 2 tiles away', requires: ['hone'], castZoneAdd: ringOffsets(2, 2) }),
+    drive: U({ name: 'Drive', icon: '💥', desc: '+1 damage', requires: ['extend'], add: { damage: 1 } }),
+    skewer: U({ name: 'Skewer', icon: '🍢', desc: '+2 damage', requires: ['pike', 'drive'], add: { damage: 2 } }),
+  },
+  // Ember Burst: the fire AoE. Throw further, blast wider, burn wider.
+  burst: {
+    kindle: U({ name: 'Kindle', icon: '🔥', desc: '+1 damage', add: { damage: 1 } }),
+    lob: U({ name: 'Lob', icon: '🏹', desc: 'can be thrown 4 tiles', castZoneAdd: ringOffsets(4, 4) }),
+    spread: U({ name: 'Spread', icon: '🌋', desc: 'the blast covers one more ring', requires: ['kindle'], dmgZoneAdd: ringOffsets(2, 2) }),
+    scorch: U({ name: 'Scorch', icon: '♨️', desc: 'fire also covers the ring around the centre', requires: ['lob'], tagZoneAdd: ringOffsets(1, 1) }),
+    inferno: U({ name: 'Inferno', icon: '☄️', desc: '+1 damage', requires: ['spread', 'scorch'], add: { damage: 1 } }),
+  },
+  // Bolt: the heavy single-target hit. Two damage steps, two range steps.
+  bolt: {
+    charge: U({ name: 'Charge', icon: '🔋', desc: '+1 damage', add: { damage: 1 } }),
+    arc: U({ name: 'Arc', icon: '🌩️', desc: 'range grows to 3 tiles', castZoneAdd: ringOffsets(3, 3) }),
+    surge: U({ name: 'Surge', icon: '⚡', desc: '+1 damage', requires: ['charge'], add: { damage: 1 } }),
+    farcast: U({ name: 'Farcast', icon: '🔭', desc: 'range grows to 4 tiles', requires: ['arc'], castZoneAdd: ringOffsets(4, 4) }),
+    thunder: U({ name: 'Thunder', icon: '🌪️', desc: '+2 damage', requires: ['surge', 'farcast'], add: { damage: 2 } }),
+  },
+  // Mend: the heal. Stronger, further, then a healing splash around the target.
+  // (The splash heals every unit standing in it - stand apart from enemies.)
+  mend: {
+    soothe: U({ name: 'Soothe', icon: '💚', desc: '+1 healing', add: { heal: 1 } }),
+    tend: U({ name: 'Tend', icon: '📏', desc: 'can heal from 2 tiles away', castZoneAdd: ringOffsets(2, 2) }),
+    bloom: U({ name: 'Bloom', icon: '🌸', desc: 'also heals everyone around the target', requires: ['soothe'], dmgZoneAdd: ringOffsets(1, 1) }),
+    mercy: U({ name: 'Mercy', icon: '🙏', desc: '+1 healing', requires: ['tend'], add: { heal: 1 } }),
+    renewal: U({ name: 'Renewal', icon: '✨', desc: '+2 healing', requires: ['bloom', 'mercy'], add: { heal: 2 } }),
+  },
+  // Guard: the shield. Learns to patch wounds and to reach further.
+  guard: {
+    patch: U({ name: 'Patch', icon: '🩹', desc: 'the shield also heals 1', add: { heal: 1 } }),
+    brace: U({ name: 'Brace', icon: '📏', desc: 'can shield from 2 tiles away', castZoneAdd: ringOffsets(2, 2) }),
+    surgeon: U({ name: 'Surgeon', icon: '⚕️', desc: 'heals 1 more', requires: ['patch'], add: { heal: 1 } }),
+    farward: U({ name: 'Far Ward', icon: '🔭', desc: 'can shield from 3 tiles away', requires: ['brace'], castZoneAdd: ringOffsets(3, 3) }),
+    aegis: U({ name: 'Aegis', icon: '🛡️', desc: 'heals 2 more', requires: ['surgeon', 'farward'], add: { heal: 2 } }),
+  },
+};
+
+// Part of the combat config too, so the Settings window can reach the trees the
+// way it reaches abilities and statuses. Same object, not a copy.
+COMBAT_CONFIG.abilityUpgrades = ABILITY_UPGRADES;
+
+export const abilityById = (id) => ABILITIES[id] ?? null;
+export const tagDefById = (id) => COMBAT_TAGS[id] ?? null;
+export { DIRS };
+
+
+
+
 
 // ----- Statuses ("buffs") ----------------------------------------------
 //  THE POINT OF THIS TABLE: a status used to be four hand-written fields on a
@@ -246,6 +377,7 @@ const S = (o) => Object.assign({
   turns: 0, charges: 0, spentOn: '',
   aiValue: 0,
 }, o);
+
 
 // A status's KNOBS: its numeric fields, in this fixed order. An ability's buffX
 // lines up with the ones a given status uses (see WHAT buffX MEANS above).
@@ -368,6 +500,4 @@ COMBAT_CONFIG.tags = COMBAT_TAGS;
 // roster row in config/units.js, next to its body, exactly as a bestiary row does
 // for a creature. `combatStatsFor` moved there with them.)
 
-export const abilityById = (id) => ABILITIES[id] ?? null;
-export const tagDefById = (id) => COMBAT_TAGS[id] ?? null;
-export { DIRS };
+

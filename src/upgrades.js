@@ -1,5 +1,5 @@
 // =====================================================================
-//  ABILITY UPGRADES - the rules layer over config/upgrades.js.
+//  ABILITY UPGRADES - the rules layer over the trees in config/abilities.js.
 //
 //  A party unit carries `upgrades`: an array of unlocked node refs, each the
 //  string "<abilityId>:<nodeId>". Everything else is derived on demand:
@@ -11,9 +11,10 @@
 //  No game state lives here - pure functions over the config tables, so the
 //  same code serves the world map, the combat engine and the UI.
 // =====================================================================
-import { ABILITIES } from './config/abilities.js';
+import { ABILITIES, ABILITY_UPGRADES } from './config/abilities.js';
 import { combatStatsFor } from './config/units.js';
-import { ABILITY_UPGRADES } from './config/upgrades.js';
+import { t, hasKey } from './i18n.js';
+import { tc } from './text.js';
 
 export const upgradeRef = (abilityId, nodeId) => `${abilityId}:${nodeId}`;
 export const parseRef = (ref) => {
@@ -28,6 +29,34 @@ export function unitAbilityIds(name) {
 
 export function upgradeTree(abilityId) {
   return ABILITY_UPGRADES[abilityId] ?? null;
+}
+
+// What an ability DOES, ready to show: the locale's `ability.<id>.desc` when a
+// translation defines one, otherwise the definition's own `desc`, otherwise
+// nothing. (Never the raw key - printing "ability.clawSwipe.desc" at the player
+// is what happens when a lookup has no fallback.)
+export function abilityDesc(abilityId, config = null) {
+  const key = `ability.${abilityId}.desc`;
+  if (hasKey(key)) return config ? tc(key, config) : t(key);
+  return ABILITIES[abilityId]?.desc ?? '';
+}
+
+// What a node is CALLED and what it DOES, ready to show.
+//
+// The node's own definition is the source (config/abilities.js). A locale may
+// override it - `upgrade.<ability>.<node>.name` / `.desc` - which is how the
+// Russian table still translates them; English simply has no such keys any
+// more, so the definition speaks for itself. Before 2026-09-11 the locale was
+// the ONLY source, so a node's effect and the sentence describing it lived in
+// different files and drifted apart.
+export function upgradeInfo(abilityId, nodeId) {
+  const node = ABILITY_UPGRADES[abilityId]?.[nodeId];
+  const key = `upgrade.${abilityId}.${nodeId}`;
+  return {
+    name: hasKey(`${key}.name`) ? t(`${key}.name`) : (node?.name || nodeId),
+    desc: hasKey(`${key}.desc`) ? t(`${key}.desc`) : (node?.desc || ''),
+    icon: node?.icon || '⭐',
+  };
 }
 
 // Base def + every unlocked node of this ability, applied in the order the
@@ -77,6 +106,37 @@ export function resolveAbility(abilityId, unlocked = []) {
   }
   return def;
 }
+
+// ----- a guard against upgrades that silently do nothing --------------------
+// `addZone` deduplicates, so an upgrade that adds tiles the ability ALREADY
+// covers is a no-op - it unlocks, it shows in the tree, and it changes nothing.
+// That is exactly how clawSwipe's Cleave sat broken: it added two tiles to a
+// cast zone that was already the whole ring. Nothing in the data says a node is
+// meant to matter, so the only way to catch it is to resolve every node and
+// compare. This runs once, in dev only, and just complains to the console.
+function auditUpgrades() {
+  const same = (a, b) => ['damage', 'heal'].every((k) => a[k] === b[k])
+    && ['castZone', 'dmgZone', 'tagZone'].every((k) => a[k].length === b[k].length)
+    && JSON.stringify(a.pushZone) === JSON.stringify(b.pushZone)
+    && JSON.stringify(a.buffX) === JSON.stringify(b.buffX);
+  const dead = [];
+  for (const [abilityId, tree] of Object.entries(ABILITY_UPGRADES)) {
+    if (!ABILITIES[abilityId]) { dead.push(`${abilityId}:* (no such ability)`); continue; }
+    for (const nodeId of Object.keys(tree)) {
+      // Judge the node on top of the state it actually arrives in: its own
+      // prerequisites unlocked, itself not.
+      const chain = [];
+      const pull = (n) => { for (const r of tree[n]?.requires ?? []) pull(r); if (!chain.includes(n)) chain.push(n); };
+      pull(nodeId);
+      const refs = chain.map((n) => upgradeRef(abilityId, n));
+      if (same(resolveAbility(abilityId, refs.slice(0, -1)), resolveAbility(abilityId, refs))) {
+        dead.push(upgradeRef(abilityId, nodeId));
+      }
+    }
+  }
+  if (dead.length) console.warn('[upgrades] these nodes change nothing when unlocked:', dead.join(', '));
+}
+try { if (import.meta.env?.DEV) auditUpgrades(); } catch { /* not a Vite build */ }
 
 // { abilityId: resolved def } for every ability the unit knows - what the
 // combat engine fights with.
