@@ -372,6 +372,16 @@ export const ru = {
   'dialog.unit.sub': '{hp}/{max} HP',
   'dialog.unit.disabled': 'выведен из строя',
   'battle.ui.nobody': 'Никто не выбран - нажмите на бойца, чтобы взять его, или на врага, чтобы увидеть его дальность.',
+  // ----- стоимость способностей (значки на кнопке в бою) -------------------
+  'battle.cost.hp': 'стоит {n} HP',
+  'battle.cost.supplies': 'стоит {n} припасов',
+  'battle.cost.move': 'стоит {n} очков движения',
+  'battle.cost.gain.hp': 'восстанавливает {n} HP',
+  'battle.cost.gain.supplies': 'даёт {n} припасов',
+  'battle.cost.gain.move': 'возвращает {n} очков движения',
+  'battle.cost.short.hp': 'не хватает HP - это было бы смертельно',
+  'battle.cost.short.supplies': 'не хватает припасов',
+  'battle.cost.short.move': 'не хватает очков движения в этом раунде',
   // Расстановка отряда перед боем, в который зашли сами.
   'deploy.step': 'Ставим {n} из {total}',
   'deploy.hint': 'Нажмите на клетку, чтобы поставить бойца.',

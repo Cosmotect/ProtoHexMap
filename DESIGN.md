@@ -361,7 +361,9 @@ balance must be re-measured against interactive play.
   * **Abilities** (`ABILITIES`): zone-based - castZone (where it can be aimed),
     dmgZone / tagZone / hZone / pushZone offsets from the aim point, rotatable
     abilities snap their zones to one of six 60-degree sectors towards the aim;
-    `moveToTarget` dashes the caster. 8 starter abilities. How a unit fights is
+    `moveToTarget` dashes the caster; `cost: { hp, supplies, move }` is what casting
+    it takes (negative grants instead - see the 2026-09-11 (e) entry below).
+    8 starter abilities. How a unit fights is
     written on its own row in config/units.js - a roster row carries speed / flying
     / ability ids (party characters: exactly TWO), a bestiary row those plus `init`
     - resolved by `combatStatsFor(name)`, with `party.defaultCombat` as the fallback
@@ -833,19 +835,6 @@ stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }
   a click there as a click on the castZone tile that covers it, so Lance shows 18
   tiles for a castZone of 6. It does not extend reach - the far click casts from the
   near tile and hits the same three - but it is invisible unless someone says so.
-* 2026-09-11 **A rotatable ability cannot be aimed at the caster's own tile.**
-  Every zone such an ability owns turns to face the aim point, and there is no
-  direction from a tile to itself - `aimRot` returns 0 for that - so the shape
-  would be drawn due EAST, in a direction nobody chose. `canAimAt()` in
-  local/battle/engine.js is the one rule, used by the player's aim map AND by the
-  enemy AI's search, so neither side can pick it.
-  The symptom that found it: clawSwipe casts at `ringOffsets(0, 1)`, which
-  includes `[0, 0]`, so its own tile was a legal anchor. Harmless while its
-  dmgZone was the single aim tile - but once Cleave and Wide Cleave gave it a fan
-  two tiles deep, the ALIAS pass rotated that fan around the self-anchor and lit
-  up two stray tiles two hexes from Gorm, outside anything the ability can reach.
-  An effect that is meant to surround the caster is written the other way round:
-  `rotatable: false` with a ring dmgZone.
 * 2026-09-11 **`lineOffsets(minD, maxD)` and `hexLine(a, b)`** (bhex.js). The first
   is the star to `ringOffsets`' blob: only the six straight spokes, nothing in
   between them, for anything that travels in a line. It was possible to write that
@@ -924,6 +913,42 @@ stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }
   Battles tab) needed no change. Content is unchanged: layers 0-2 still start
   empty (playing layer 3's roster), layers 3-6 still carry what the old table
   held.
+* 2026-09-11 (d) **A rotatable ability must not have `[0, 0]` in its castZone.**
+  Claw Swipe with both upgrades showed two cast tiles nobody expected. The cause is
+  not a bug in the engine: `ringOffsets(0, 1)` INCLUDES the caster's own tile, so
+  the caster could aim at itself - and there is no direction from a tile to itself,
+  so the rotation the fan snaps to comes out as 0 (due east) and the ability lit up
+  the eastern tiles as if aimed there.
+  The rule that follows: **a `rotatable` ability's castZone starts at ring 1**
+  (`ringOffsets(1, 1)`, `lineOffsets(1, 3)`), because rotation is meaningless
+  without a direction. Only a NON-rotatable ability (a self-buff, a ring centred on
+  the caster) may legitimately contain `[0, 0]`. Fixed in config on clawSwipe, in
+  preference to a new engine guard - the combat code has enough rules already, and
+  this one is a property of the shape, not of the machinery.
+* 2026-09-11 (e) **Abilities can cost something to cast.** Every ability now has a
+  `cost: { hp, supplies, move }`, all optional, all defaulting to 0.
+  * `hp` comes off the CASTER and can never kill: the unit needs strictly more hp
+    than the cost, so an ability costing 3 is blocked at 3 hp and allowed at 4.
+  * `supplies` comes off the RUN's supply counter - the party's shared purse. Only
+    the party has one, so an enemy casts a supply-cost ability for free rather than
+    being silently unable to act.
+  * `move` is movement POINTS, and it is both a gate and a payment: the unit must
+    still have that much walking left this round, and casting spends it. Walking is
+    re-measured from `startPos` every time (that is what makes movement
+    take-backable), so the cost is banked separately in `movePaid` and `reach()`
+    budgets `speed - movePaid`. Spelled this way so it keeps working the day a unit
+    is allowed to walk AFTER casting.
+  * **Any of them may be NEGATIVE**, which GRANTS the resource instead, capped by
+    what there is room for: hp at `maxHp`, supplies at the run's maximum (the engine
+    asks game.js, which clamps and reports what actually landed), movement at the
+    round's own speed.
+  * Upgrade nodes carry `costAdd: { hp, supplies, move }`, summed onto the base
+    cost, so a node can make an ability dearer or cheaper; two nodes touching one
+    resource stack.
+  * The UI shows the price as small chips on the ability button (green when it is a
+    gain), the tooltip spells it out, and an ability the unit cannot pay for is
+    greyed with the reason named. The enemy AI filters unaffordable abilities out of
+    its candidate list, so it never plans a cast it cannot make.
 
 
 ## Open questions

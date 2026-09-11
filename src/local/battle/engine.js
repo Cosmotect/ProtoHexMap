@@ -36,6 +36,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
                                partyDamageMod = 0, deferOpening = false, voidEdgeKeys = [],
                                wallKeys = [], etherKeys = [], startTags = [],
                                rng = Math.random, noFlee = false, instant = false,
+                               supplies = null,
                                onChange, onFloater, onLog, onAnim, onEnd, onUnitDeath, onUnitFlee }) {
   const CFG = config.combat;
   // INSTANT MODE (the Virtual Playtester, tools/playtester): every pacing delay
@@ -137,6 +138,11 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       abilityDefs: def.abilityDefs ?? null,
       pos, isEnemy, idx: i, partyIndex: def.partyIndex ?? null,
       startPos: pos, moveLocked: false, done: false, tagTicked: false,
+      // Movement points already spent on ABILITY COSTS this round. Walking is
+      // not counted here: a walk is re-measured from startPos every time and can
+      // be taken back, so it has no running total to keep. This is the part that
+      // cannot be taken back, and it comes off the budget (see moveBudget).
+      movePaid: 0,
       status: {}, summoned: false,
       // INTELLECT CLASS (config.intellect): which facts this creature can weigh on
       // its turn. Anything hand-authored without one is treated as the dimmest.
@@ -180,6 +186,54 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   const curP = () => sb.units.find((u) => u.uid === sb.activeUid && !u.isEnemy && u.hp > 0);
   const speedFloor = (u) => Math.min(u.speed, CFG.minSpeed);
   const effSpeed = (u) => Math.max(speedFloor(u), u.speed + statusSum(u, 'speed'), 0);
+  // How far this unit may still walk: its speed for the round, less whatever
+  // ability costs have already eaten.
+  const moveBudget = (u) => Math.max(0, effSpeed(u) - (u.movePaid || 0));
+
+  // ----- what an ability costs to cast ------------------------------------
+  // `ab.cost` is { hp, supplies, move }, any of them optional and any of them
+  // possibly NEGATIVE - a negative cost GRANTS that resource instead of taking
+  // it, and is never a reason to block a cast.
+  const costOf = (ab) => ({ hp: ab?.cost?.hp || 0, supplies: ab?.cost?.supplies || 0, move: ab?.cost?.move || 0 });
+
+  // Can `u` pay for `ab` right now? Returns '' when it can, or the id of the
+  // resource that is short - which is what the HUD shows on the greyed button.
+  function shortOf(u, ab) {
+    const c = costOf(ab);
+    // hp can never be spent down to death: strictly MORE than the cost is
+    // needed, so the ability greys out at exactly the cost.
+    if (c.hp > 0 && u.hp <= c.hp) return 'hp';
+    if (c.move > 0 && moveBudget(u) < c.move) return 'move';
+    // Supplies are the RUN's, and only the party has them. An enemy written
+    // with a supply cost casts it for free rather than standing mute.
+    if (c.supplies > 0 && !u.isEnemy) {
+      if (!supplies || supplies.get() < c.supplies) return 'supplies';
+    }
+    return '';
+  }
+  const canAfford = (u, ab) => !shortOf(u, ab);
+
+  // Pays the cost. Called ONCE, at the moment a cast is committed - never from
+  // resolveCast, which the enemy AI replays on a copy of the board to score its
+  // options and would otherwise spend the resource dozens of times per turn.
+  function payCost(u, ab) {
+    const c = costOf(ab);
+    if (c.hp) {
+      // A negative hp cost heals, and healing stops at maxHp - "if there is room".
+      const before = u.hp;
+      u.hp = Math.max(0, Math.min(u.maxHp, u.hp - c.hp));
+      const delta = u.hp - before;
+      if (delta) floater(u.pos, delta > 0 ? `+${delta}` : String(delta), delta > 0 ? '#8fd47a' : '#ff6b6b');
+    }
+    if (c.move) {
+      // Spending caps at the whole budget; granting caps at the round's speed,
+      // so a refund can never carry a unit past what it could walk anyway.
+      u.movePaid = Math.max(0, Math.min(effSpeed(u), (u.movePaid || 0) + c.move));
+    }
+    // addSupplies clamps to [0, maxSupplies], so a negative cost grants only
+    // what the packs have room for.
+    if (c.supplies && !u.isEnemy && supplies) supplies.add(-c.supplies);
+  }
 
   // ----- statuses --------------------------------------------------------
   // Everything about a status lives in the table (config.statuses, written out in
@@ -645,7 +699,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     const hard = new Set(), soft = new Set();
     for (const o of sb.units) { if (o.hp <= 0 || o === u) continue; ((!u.flying && o.isEnemy !== u.isEnemy) ? hard : soft).add(o.pos); }
     for (const k in sb.tags) { if (sb.tags[k].hp > 0) (u.flying ? soft : hard).add(k); }
-    const spd = effSpeed(u);
+    const spd = moveBudget(u);
     const d = { [fromK]: 0 }, prev = {};
     const pq = [[0, fromK]];
     while (pq.length) {
@@ -752,27 +806,10 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     }
     return last;
   }
-  // Can this ability be aimed at `t` from `fromK` at all?
-  //
-  // A ROTATABLE ability cannot be aimed at the caster's OWN tile. Every zone it
-  // owns turns to face the aim point, and there is no direction from a tile to
-  // itself: aimRot returns 0 for that, so the whole shape would be drawn due
-  // EAST, in a direction nobody chose. Both the player's aim map and the enemy
-  // AI's search go through here, so neither can pick it.
-  //
-  // (Found 2026-09-11. clawSwipe casts at ringOffsets(0, 1), which includes
-  // [0, 0], so its own tile was a legal anchor. Harmless while its dmgZone was
-  // the single aim tile - but once Cleave and Wide Cleave gave it a fan two
-  // tiles deep, the alias pass lit up two stray tiles two hexes away, and a cast
-  // on self would have swiped eastwards for no reason. An effect meant to
-  // surround the caster is written the other way round: rotatable: false with a
-  // ring dmgZone.)
-  const canAimAt = (ab, fromK, t) => !(ab.rotatable && t === fromK);
-
   function buildAim(c, ab) {
     const targets = new Set();
     const anchors = new Set();
-    const ok = (k) => (!ab.moveToTarget || dashAimOk(c, k)) && canAimAt(ab, c.pos, k);
+    const ok = (k) => !ab.moveToTarget || dashAimOk(c, k);
     if (ab.castAny) for (const t of activeTiles()) { if (!ok(t)) continue; targets.add(t); anchors.add(t); }
     else for (const off of ab.castZone) {
       const t = addK(c.pos, off);
@@ -882,7 +919,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     sb.phase = 'player'; sb.selAb = null; sb.aimMap = null; sb.activeUid = null;
     sb.inspectUid = null; sb.inspectReach = null;   // a new round, a fresh board
     for (const u of sb.units) if (!u.isEnemy && u.hp > 0) {
-      u.done = false; u.moveLocked = false; u.startPos = u.pos; u.tagTicked = false;
+      u.done = false; u.moveLocked = false; u.startPos = u.pos; u.tagTicked = false; u.movePaid = 0;
     }
     for (const u of sb.units) if (!u.isEnemy && u.hp > 0) { u.tagTicked = true; tickStatuses(u); tagTick(u); }
     if (checkEnd()) return;
@@ -968,6 +1005,9 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     sb.phase = 'enemy'; sb.activeUid = null; sb.selAb = null; sb.aimMap = null; sb.reach = null;
     sb.inspectUid = null; sb.inspectReach = null;
     sb.enemyQ = sb.units.filter((u) => u.isEnemy && u.hp > 0).sort((a, b) => b.init - a.init || a.idx - b.idx);
+    // An enemy's movement budget is its own each activation, exactly as a party
+    // member's is each round (startPlayerPhase).
+    for (const u of sb.enemyQ) u.movePaid = 0;
     sb.eqi = -1; emit();
     stepEnemy();
   }
@@ -1152,13 +1192,15 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       // designer invents in the status table) was thrown away before it was ever
       // scored, so enemies carrying Guard never once used it.
       if (!(ab.damage > 0 || ab.heal > 0 || ab.buff || ab.pushZone.length || ab.tagId || ab.hZone.length)) continue;
+      // Nor one it cannot pay for - otherwise the enemy picks it, and the cast
+      // is refused at the last moment leaving the creature standing there.
+      if (!canAfford(e, ab)) continue;
       for (const startK of Object.keys(res.d)) {
         if (startK !== e.pos && !canStop(res, startK)) continue;
         if (ab.castAny && startK !== e.pos) continue;
         const tlist = ab.castAny ? activeTiles() : ab.castZone.map((off) => addK(startK, off));
         for (const t of tlist) {
           if (!inMap(t)) continue;
-          if (!canAimAt(ab, startK, t)) continue;   // same rule the player's aim map uses
           if (ab.moveToTarget && t !== startK && !dashAimOk({ pos: startK, uid: e.uid }, t)) continue;
           const st = simSt(blind);
           const se = st.units.find((u) => u.uid === e.uid);
@@ -1226,6 +1268,14 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
             wait(() => { sb.busy = false; if (!checkEnd()) stepEnemy(); }, 450);
             return;
           }
+          // The walk to startK may have cost it the price (a trap took the hp);
+          // an enemy that can no longer pay simply does not cast.
+          if (!canAfford(e, best.ab)) {
+            emit();
+            wait(() => { sb.busy = false; if (!checkEnd()) stepEnemy(); }, 300);
+            return;
+          }
+          payCost(e, best.ab);
           resolveCast(liveSt(), e, best.ab, best.t);
           emit();
           wait(() => { sb.busy = false; if (!checkEnd()) stepEnemy(); }, 550);
@@ -1286,8 +1336,12 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       const ab = abFor(c, sb.selAb);
       const target = ab && sb.aimMap ? sb.aimMap[k] : null;
       if (target != null) {
+        // Re-checked here and not only at selection: the board can move between
+        // picking an ability and clicking a tile (a trap, a status ticking).
+        if (!canAfford(c, ab)) { sb.selAb = null; sb.aimMap = null; emit(); return; }
         sb.busy = true;
         sb.selAb = null; sb.aimMap = null;
+        payCost(c, ab);
         resolveCast(liveSt(), c, ab, target);
         emit();
         wait(() => {
@@ -1325,6 +1379,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     else {
       const ab = abFor(c, abId);
       if (!ab || !c.abilityIds.includes(abId)) return;
+      if (!canAfford(c, ab)) return;   // the HUD greys it out too; this is the rule
       sb.selAb = abId; sb.aimMap = buildAim(c, ab);
     }
     emit();
@@ -1376,6 +1431,12 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     abilityById: abById,
     aimPreview,
     abilityFor: abFor,   // (unit, id) - the unit's UPGRADED def where it has one
+    // What an ability costs, and whether this unit can pay right now. The HUD
+    // uses both: the cost badge on the button, and '' / 'hp' / 'move' /
+    // 'supplies' to grey it out and say which resource is short.
+    costOf,
+    shortOf,
+    moveBudget,
     curPlayer: curP,
     reachFor: () => sb.reach,
     debugResolve,

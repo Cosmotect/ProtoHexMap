@@ -73,6 +73,10 @@ export function resolveAbility(abilityId, unlocked = []) {
   const def = { ...base,
     castZone: [...base.castZone], dmgZone: [...base.dmgZone], tagZone: [...base.tagZone],
     pushZone: base.pushZone.map((p) => [...p]), flags: { ...(base.flags ?? {}) },
+    // `cost` is an OBJECT, so it needs its own copy for the same reason the
+    // zones do - without one, an upgraded ability would write its cost into the
+    // config table that every other unit reads.
+    cost: { ...(base.cost ?? {}) },
     // buffX is a LIST (one entry per knob of the status this ability applies), so
     // it needs a copy of its own - otherwise an upgraded ability would write into
     // the config table every unit reads.
@@ -98,6 +102,11 @@ export function resolveAbility(abilityId, unlocked = []) {
   for (const [nodeId, node] of Object.entries(tree)) {
     if (!have.has(nodeId)) continue;
     for (const [k, v] of Object.entries(node.add ?? {})) def[k] = addUp(def[k], v);
+    // `costAdd: { hp, supplies, move }` - each entry is SUMMED onto the base
+    // cost, so a node can make an ability cheaper (negative) or dearer, and two
+    // nodes touching the same resource stack. It is its own field rather than
+    // part of `add` because `add` works on plain numbers and a cost is a record.
+    for (const [k, v] of Object.entries(node.costAdd ?? {})) def.cost[k] = (def.cost[k] ?? 0) + v;
     if (node.castZoneAdd?.length) addZone(def.castZone, node.castZoneAdd);
     if (node.dmgZoneAdd?.length) addZone(def.dmgZone, node.dmgZoneAdd);
     if (node.tagZoneAdd?.length) addZone(def.tagZone, node.tagZoneAdd);
@@ -118,6 +127,7 @@ function auditUpgrades() {
   const same = (a, b) => ['damage', 'heal'].every((k) => a[k] === b[k])
     && ['castZone', 'dmgZone', 'tagZone'].every((k) => a[k].length === b[k].length)
     && JSON.stringify(a.pushZone) === JSON.stringify(b.pushZone)
+    && JSON.stringify(a.cost) === JSON.stringify(b.cost)
     && JSON.stringify(a.buffX) === JSON.stringify(b.buffX);
   const dead = [];
   for (const [abilityId, tree] of Object.entries(ABILITY_UPGRADES)) {

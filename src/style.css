@@ -2626,6 +2626,30 @@ button.small {
   transform: none;
 }
 
+/* ----- what an ability costs, on its button -----------------------------
+   One chip per resource the cast moves. A cost the unit cannot pay greys the
+   button out (the engine refuses it too - see shortOf in the battle engine),
+   and the tooltip names the resource that is short. */
+.battle-abilities .ab-costs { display: flex; gap: 3px; margin-top: 2px; }
+.battle-abilities .ab-cost {
+  font-family: var(--mono); font-size: 9.5px; line-height: 1.3;
+  padding: 0 3px; border-radius: 4px;
+  background: rgba(226, 71, 75, 0.18);
+  border: 1px solid rgba(226, 71, 75, 0.45);
+  color: #ffb3b3;
+  white-space: nowrap;
+}
+/* A NEGATIVE cost grants the resource, so it reads as a gain, not a price. */
+.battle-abilities .ab-cost.gain {
+  background: rgba(143, 212, 122, 0.18);
+  border-color: rgba(143, 212, 122, 0.5);
+  color: #b9e8ab;
+}
+/* Cannot be paid for right now: the frame goes red, so it reads as "you
+   cannot", not as the ordinary "wait a moment" of a busy engine. */
+.battle-abilities .ab.unaffordable { border-color: rgba(226, 71, 75, 0.5); }
+.battle-abilities .ab.unaffordable:disabled { opacity: 0.45; }
+
 .battle-abilities .ab-icon {
   font-size: 20px;
   line-height: 1.1;

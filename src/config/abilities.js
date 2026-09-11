@@ -134,6 +134,24 @@ const A = (o) => Object.assign({
   damage: 0, heal: 0, buff: '', buffX: null,   // buffX null = "use the status's own values"
   castZone: [], castAny: false, dmgZone: [], tagZone: [], tagId: null,
   hZone: [], hMode: 'rel', pushZone: [], rotatable: false, moveToTarget: false,
+  // WHAT IT COSTS TO CAST. Every entry is optional and defaults to 0.
+  //   hp        taken from the CASTER. It can never kill: a unit needs strictly
+  //             more hp than the cost, so the ability greys out at exactly the
+  //             cost rather than offering a suicide.
+  //   supplies  taken from the RUN's supplies, the same pool the world map
+  //             spends. Only the party has one - an enemy casts a supply-cost
+  //             ability for free (see canAfford in local/battle/engine.js).
+  //   move      movement points. The cost is BOTH a gate and a payment: the
+  //             caster must have that many points left this round, and casting
+  //             spends them, so a unit that could still walk 4 tiles can only
+  //             walk 2 after a move-2 cast. (Today a cast ends the unit's turn
+  //             anyway; the spending is what makes this work unchanged on the
+  //             day a unit is allowed to move afterwards.)
+  // ANY of them may be NEGATIVE, which GRANTS the resource instead of taking it,
+  // capped by whatever room there is: hp never passes maxHp, supplies never pass
+  // maxSupplies, move never passes the unit's speed for the round. A negative
+  // cost is never a gate - it is always affordable.
+  cost: { hp: 0, supplies: 0, move: 0 },
 }, o);
 
 export const ABILITIES = {
@@ -161,11 +179,14 @@ export const ABILITIES = {
   shove: A({ name: 'Shove', icon: '🌀', color: '#ffd75f', damage: 1, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], pushZone: [[0, 0, 0]], rotatable: true }),
   volley: A({ name: 'Volley', icon: '🎯', color: '#a8e05f', damage: 2, castZone: ringOffsets(2, 4), dmgZone: [[0, 0]] }),
   lance: A({ name: 'Lance', icon: '⚡', color: '#5fc7e0', damage: 3, castZone: ringOffsets(1, 1), dmgZone: [[0, 0], [1, 0], [2, 0]], rotatable: true }),
-  burst: A({ name: 'Ember Burst', icon: '🔥', color: '#ff9950', damage: 2, castZone: ringOffsets(1, 3), dmgZone: ringOffsets(0, 1), tagZone: [[0, 0]], tagId: 'fire' }),
-  bolt: A({ name: 'Bolt', icon: '☄️', color: '#c66dff', damage: 4, castZone: ringOffsets(1, 2), dmgZone: [[0, 0]] }),
-  mend: A({ name: 'Mend', icon: '🏥', color: '#a8e05f', heal: 4, castZone: ringOffsets(0, 1), dmgZone: [[0, 0]] }),
-  guard: A({ name: 'Guard', icon: '🛡️', color: '#5fc7e0', buff: 'shield', castZone: ringOffsets(0, 1), dmgZone: [[0, 0]] }),
-  clawSwipe: A({ name: 'Claw Swipe', icon: '🔪', color: '#5fc7e0', damage: 5, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], rotatable: true })
+  // The four `cost` lines below are SAMPLE VALUES, put here so the cost system is
+  // visible in play and testable. They are not a balance decision - delete or
+  // change any of them freely.
+  burst: A({ name: 'Ember Burst', icon: '🔥', color: '#ff9950', damage: 2, castZone: ringOffsets(1, 3), dmgZone: ringOffsets(0, 1), tagZone: [[0, 0]], tagId: 'fire', cost: { move: 1 } }),
+  bolt: A({ name: 'Bolt', icon: '☄️', color: '#c66dff', damage: 4, castZone: ringOffsets(1, 2), dmgZone: [[0, 0]], cost: { hp: 1 } }),
+  mend: A({ name: 'Mend', icon: '🏥', color: '#a8e05f', heal: 4, castZone: ringOffsets(0, 1), dmgZone: [[0, 0]], cost: { supplies: 1 } }),
+  guard: A({ name: 'Guard', icon: '🛡️', color: '#5fc7e0', buff: 'shield', castZone: ringOffsets(0, 1), dmgZone: [[0, 0]], cost: { hp: -1 } }),
+  clawSwipe: A({ name: 'Claw Swipe', icon: '🔪', color: '#5fc7e0', damage: 3, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], rotatable: true })
 };
 
 
@@ -194,6 +215,9 @@ export const ABILITIES = {
 //    tagZoneAdd   [offsets]  - extra tiles that receive the ability's tile tag
 //    pushDistAdd  n          - every pushZone entry shoves n tiles further
 //                              (the engine caps a single shove at 2 tiles)
+//    costAdd      { hp, supplies, move } - summed onto the ability's cost, so a
+//                              node can make it dearer or (negative) cheaper;
+//                              two nodes touching one resource stack
 //    flags        { bool }   - switches for upgrade-specific ability logic; the
 //                              engine reads them off the resolved def
 //
@@ -208,12 +232,60 @@ const U = (o) => Object.assign({
 
 
 export const ABILITY_UPGRADES = {
-  //Claw Swipe
-  clawSwipe: {
-    //range upgrades
-    cleave: U({ name: 'Cleave', icon: '✂️', desc: 'Wider swipe that also reaches the tiles next to target', dmgZoneAdd: [[0, -1], [-1, 1]] }),
-    wideCleave: U({ name: 'Wide Cleave', icon: '🌊', desc: 'The swipe covers almost all tiles around', requires: ['cleave'], dmgZoneAdd: [[-1, -1], [-2, 1]] }),
+
+  clawSwipe: {//A Melee attack that reaches medium range and damage and is capable of being vampiric.
+    //Ability Range Upgrades
+    //level 1
+    cleave: U({
+      dmgZoneAdd: [[0, -1], [-1, 1]],
+      name: 'Cleave', icon: '✂️', desc: 'Wider swipe that also reaches the tiles next to target'
+    }),
+    //level 2
+    wideCleave: U({
+      requires: ['cleave'], dmgZoneAdd: [[-1, -1], [-2, 1]],
+      name: 'Wide Cleave', icon: '🌊', desc: 'The swipe covers almost all tiles around'
+    }),
+    spike: U({
+      requires: ['cleave'], dmgZoneAdd: [[1, 0]],
+      name: 'Spike', icon: '⚜️', desc: 'The cleave ends in a lunge that reaches for two tiles'
+    }),
+
+    //Ability Power Upgrades
+    //level 1
+    power: U({
+      add: { damage: 1 },
+      name: 'Strength', icon: '🦾', desc: 'With strengthened sinews, Gorm hits harder'
+    }),
+    //level 2
+    longclaw: U({
+      requires: ['power'], add: { damage: 2 },
+      name: 'Long Claws', icon: '🪓', desc: 'Large claws for big damage',
+    }),
+    leechclaw: U({
+      requires: ['power'], add: { damage: 1 }, costAdd: { hp: -2 },
+      name: 'Leech Claws', icon: '🖤', desc: 'Special channels in the claws siphon material from the target'
+    }),
   },
+
+
+  chargeHeadbutt: {
+    //Ability Utility Upgrades
+    //level 1
+    collisionImmune: U({
+      name: 'Padded', icon: '🥊', desc: 'Becomes immune to collisions'
+    }),
+    //level 2
+    regenerate: U({
+      requires: ['collisionImmune'],
+      name: 'Regenerating', icon: '♻️', desc: 'Regenerates each turn'
+    }),
+    beginEnraged: U({
+      requires: ['collisionImmune'],
+      name: 'Raging Entry', icon: '😡', desc: 'Starts each combat enraged'
+    })
+  },
+
+
   // Strike: melee jab. Branches: hit harder vs hit wider, meeting in Execute.
   strike: {
     edge: U({ name: 'Edge', icon: '🗡️', desc: '+1 damage', add: { damage: 1 } }),

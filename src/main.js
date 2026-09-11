@@ -326,6 +326,15 @@ function beginInteractiveBattle(ctx, placementOverride = null) {
     wallKeys: view.wallKeys(),
     etherKeys: view.etherKeys(),
     startTags: view.startTagList(),
+    // The RUN's supplies, for abilities that cost them. Supplies are world-map
+    // state, not battle state, so the engine gets a handle rather than a copy
+    // and a spend during a fight is the same spend the world map would make.
+    // `add` clamps to [0, maxSupplies] and returns what actually moved, which is
+    // what makes a NEGATIVE cost grant only as much as the packs have room for.
+    supplies: {
+      get: () => game.state.supplies,
+      add: (n) => { const d = game.addSupplies(n); ui.update(game); return d; },
+    },
     // Every death, with the tile it happened on. Nothing reads this yet - it is
     // the hook loot dropped by beaten enemies will hang off.
     onUnitDeath: (spot) => { lastDeathSpots.push(spot); },

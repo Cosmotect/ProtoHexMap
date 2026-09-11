@@ -175,6 +175,31 @@ export function createUI(config, handlers) {
     return slots;
   }
 
+  // ----- what an ability costs, on the button and in its tooltip ------------
+  // One chip per resource the cast moves. A NEGATIVE cost grants that resource,
+  // so it reads with a + and in the healthy green rather than as a price.
+  const COST_ICON = { hp: '❤️', supplies: '📦', move: '👣' };
+  function costChips(ab) {
+    const cost = battleRef?.costOf ? battleRef.costOf(ab) : (ab.cost ?? {});
+    const out = [];
+    for (const res of ['hp', 'supplies', 'move']) {
+      const n = cost[res] || 0;
+      if (!n) continue;
+      out.push(`<span class="ab-cost ${n < 0 ? 'gain' : ''}">${COST_ICON[res]}${n < 0 ? `+${-n}` : n}</span>`);
+    }
+    return out.length ? `<span class="ab-costs">${out.join('')}</span>` : '';
+  }
+  function costText(ab) {
+    const cost = battleRef?.costOf ? battleRef.costOf(ab) : (ab.cost ?? {});
+    const parts = [];
+    for (const res of ['hp', 'supplies', 'move']) {
+      const n = cost[res] || 0;
+      if (!n) continue;
+      parts.push(t(n < 0 ? `battle.cost.gain.${res}` : `battle.cost.${res}`, { n: Math.abs(n) }));
+    }
+    return parts.join(', ');
+  }
+
   let currentSeed = 0;
   let lastGame = null;   // the party panel is redrawn from combat too, not only from update()
 
@@ -771,9 +796,21 @@ export function createUI(config, handlers) {
         const num = ab.damage > 0 ? `⚔${ab.damage}` : ab.heal > 0 ? `+${ab.heal}` : '';
         const slot = slots.indexOf(id);
         const key = slot >= 0 && slot < 3 ? ` [${slot + 1}]` : '';
-        const tip = `${ab.name}${key}${ab.damage > 0 ? ` - ${t('battle.ui.dmg', { n: ab.damage })}` : ''}${ab.heal > 0 ? ` - ${t('battle.ui.heal', { n: ab.heal })}` : ''}`;
-        return `<button class="ab ${sel}" data-ab="${id}" title="${escapeAttr(tip)}" ${sb.busy ? 'disabled' : ''}>
-          <span class="ab-icon">${ab.icon}</span><small>${escapeHtml(ab.name)}</small>${num ? `<span class="ab-num">${num}</span>` : ''}
+        // What it costs, and whether this unit can pay for it right now. `short`
+        // is '' or the id of the resource that falls short, which both greys the
+        // button out and tells the player WHICH one is missing.
+        const short = battleRef.shortOf ? battleRef.shortOf(c, ab) : '';
+        const costs = costChips(ab);
+        const tip = [
+          `${ab.name}${key}`,
+          ab.damage > 0 ? t('battle.ui.dmg', { n: ab.damage }) : '',
+          ab.heal > 0 ? t('battle.ui.heal', { n: ab.heal }) : '',
+          costText(ab),
+          short ? t(`battle.cost.short.${short}`) : '',
+        ].filter(Boolean).join(' - ');
+        const off = sb.busy || !!short;
+        return `<button class="ab ${sel} ${short ? 'unaffordable' : ''}" data-ab="${id}" title="${escapeAttr(tip)}" ${off ? 'disabled' : ''}>
+          <span class="ab-icon">${ab.icon}</span><small>${escapeHtml(ab.name)}</small>${num ? `<span class="ab-num">${num}</span>` : ''}${costs}
         </button>`;
       }).join('');
       $('btn-end-turn').disabled = !!sb.busy;
