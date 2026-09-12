@@ -12,7 +12,7 @@
 //  Local tiles have NO gameplay logic yet.
 // =====================================================================
 import { hexKey, hexesInRange, hexDistance, axialToPlane } from '../hex.js';
-import { COMBAT_CONFIG } from '../config/abilities.js';
+import { COMBAT_CONFIG } from '../config/localmap.js';
 
 // The local grid uses the opposite orientation to the world grid.
 export function localOrientation(worldOrientation) {

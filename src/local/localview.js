@@ -11,7 +11,7 @@ import * as THREE from 'three';
 import { MapControls } from 'three/addons/controls/MapControls.js';
 import { generateLocalMap, pickRandomTiles, pickClusteredTiles, applyElevationWave, neutralElevation } from './localmap.js';
 import { hexKey, hexesInRange, hexDistance, axialToPlane } from '../hex.js';
-import { COMBAT_CONFIG } from '../config/abilities.js';
+import { COMBAT_CONFIG } from '../config/localmap.js';
 import { tagDefById } from '../config/entities.js';
 import { createRng } from '../rng.js';
 import { t, hasKey } from '../i18n.js';

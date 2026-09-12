@@ -29,8 +29,8 @@
 //  opens with an ambush enemy phase before round 1.
 // =====================================================================
 import { DIRS, K, PK, addK, hexDist, hexLine, rotOff, aimRot, abRotFor, rotDir, boardTiles } from './bhex.js';
-import { abilityById, tagDefById, statusOverridesFor } from '../../config/abilities.js';
-import { combatStatsFor } from '../../config/entities.js';
+import { abilityById, statusOverridesFor } from '../../config/abilities.js';
+import { combatStatsFor, tagDefById } from '../../config/entities.js';
 
 export function createBattle({ config, radius, heights, party, enemies, partyKeys, enemyKeys, forced,
                                partyDamageMod = 0, deferOpening = false, voidEdgeKeys = [],

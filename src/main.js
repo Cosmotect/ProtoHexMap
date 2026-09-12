@@ -11,7 +11,7 @@ import { scenarioById } from './scenarios/index.js';
 import { createSettings, deepClone } from './settings.js';
 import { createCombatCinematic } from './local/transition.js';
 import { createBattle } from './local/battle/engine.js';
-import { COMBAT_CONFIG } from './config/abilities.js';
+import { COMBAT_CONFIG } from './config/localmap.js';
 import { resolvedAbilitiesFor, availableUpgrades, passivesFor, appliesFor } from './upgrades.js';
 import { recipeFromCode } from './local/mapcode.js';
 import { makeEnemyOfType } from './battle.js';

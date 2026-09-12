@@ -1,12 +1,18 @@
 import { ringOffsets, lineOffsets, DIRS } from '../local/battle/bhex.js';
 
 // =====================================================================
-//  COMBAT CONFIG - abilities, statuses and combat rules.
+//  ABILITIES, ABILITY UPGRADES AND STATUSES - the tables themselves.
 //  (Part of the config split; read by src/local/battle/engine.js. Tile tags
 //  moved to config/entities.js on 2026-09-12 - they represent things sitting
 //  on a tile, closer in spirit to a unit than to an ability. `tagDefById`
 //  moved there with them on the same day, next to the COMBAT_TAGS table it
-//  reads.)
+//  reads.
+//
+//  COMBAT_CONFIG itself - the arena's combat rules, plus the two lines that
+//  glue ABILITY_UPGRADES and STATUSES onto it - moved to config/localmap.js
+//  on 2026-09-12 as well, to sit next to the rest of the local map's config.
+//  This file still owns the three TABLES below; localmap.js only wires two
+//  of them in.)
 //
 //  This is the hand-authored slice of the hex-box combat prototype: only the
 //  DEFINITIONS came over, none of the editors or storage.
@@ -87,45 +93,6 @@ import { ringOffsets, lineOffsets, DIRS } from '../local/battle/bhex.js';
 //    No ability can swap places with a unit, summon anything, or push further
 //    than two tiles. Each of those needs engine work, not a config line.
 // =====================================================================
-
-export const COMBAT_CONFIG = {
-  // ----- Combat rules (hex-box "settings" block) ----------------------
-  combat: {
-    minSpeed: 2,        // slowed units keep at least this much speed (climbing costs 2)
-    highBonus: 1,       // damage added when attacking from 2+ levels above
-    lowPenalty: 1,      // damage removed when attacking from 2+ levels below
-    voidEdges: false,   // true = shoves over the map edge kill instead of crashing
-    // (What popping a shield is worth to the enemy AI used to live here as
-    // `shieldStripScore`. It moved into the shield's own row in the status table
-    // below, as `aiValue`, so every status carries its own worth in one place.)
-    // ----- the retreat rule (stops a decided fight from being dragged out) -----
-    // A beaten enemy side starts to break. From the round AFTER `afterRound`, on
-    // every enemy's turn, while the enemy side's remaining HP is under `hpFraction`
-    // of what it had when the fight began, each enemy that has not broken yet rolls
-    //   100 / (enemies still standing)  percent
-    // to flee - so a crowd goes a few at a time and the last one standing always
-    // runs. The roll happens once per enemy: a fleeing enemy is locked in, and
-    // walks for the nearest arena edge until it gets there or is killed on the way.
-    // It is still a normal target while it runs.
-    // The STASIS is exempt: a Stasis Seed or Colony fight never offers the roll at
-    // all (createBattle's `noFlee`, set from the encounter in main.js) - that enemy
-    // has nowhere to run to and nothing to run for.
-    // Escaping is NOT a death: nothing is reported through onUnitDeath, so when
-    // LOOT exists this is exactly the branch that must not roll it - a killed enemy
-    // pays out, one that got away does not. The fight still counts as won, so the
-    // party keeps the encounter's completion reward.
-    flee: { afterRound: 7, hpFraction: 0.3 },
-    // What a status is worth to a creature that cannot read them (see the intellect
-    // classes below): enough to bless allies and curse the party, not enough to
-    // choose between two targets.
-    blindStatusValue: 8,
-    elevationLevels: 4, // arena heights run 0..this (5 steps: 0,1,2,3,4)
-    // The MIDDLE step (2) is the arena's neutral ground: it renders
-    // flush with the surrounding world tiles, 3 and 4 stand above it,
-    // 1 and 0 are sunk below it. Keep this number EVEN so a middle
-    // step exists (see config.local.elevationMid).
-  },
-};
 
 // ===================================ABILITIES===================================
 // ----------------------------------DEFINITION-----------------------------------
@@ -381,7 +348,6 @@ export const ABILITY_UPGRADES = {
     aegis: U({ name: 'Aegis', icon: '🛡️', desc: 'heals 2 more', requires: ['surgeon', 'farward'], add: { heal: 2 } }),
   },
 };
-COMBAT_CONFIG.abilityUpgrades = ABILITY_UPGRADES;
 
 export const abilityById = (id) => ABILITIES[id] ?? null;
 
@@ -612,7 +578,5 @@ export function grantCheck(id) {
   if (def.charges > 0 || def.spentOn) return `"${id}" is spent by use (charges/spentOn) and cannot be a passive`;
   return null;
 }
-
-COMBAT_CONFIG.statuses = STATUSES;
 
 export const statusById = (id) => STATUSES[id] ?? null;

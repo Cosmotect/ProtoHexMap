@@ -28,7 +28,7 @@
 //    { id, radius, tiles: { 'q,r': { type, elevation, tags } },
 //      spawns: { enemies: [keys] }, enemyTypeIds: [ids], startTags: [{ k, id }] }
 // =====================================================================
-import { COMBAT_CONFIG } from '../config/abilities.js';
+import { COMBAT_CONFIG } from '../config/localmap.js';
 import { COMBAT_TAGS } from '../config/entities.js';
 import { neutralElevation } from './localmap.js';
 
