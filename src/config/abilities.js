@@ -64,7 +64,7 @@
 //    hMode      'rel' = add `amount` to the height there, 'abs' = set it to
 //               `amount`. Clamped to 0..combat.elevationLevels. Units standing
 //               on the tile are not moved.
-//    tagId      a tile tag from COMBAT_TAGS to leave behind...
+//    tagId      a tile tag from COMBAT_TAGS (config/units.js) to leave behind...
 //    tagZone    ...on these offsets from the aim point.
 //    moveToTarget  the caster charges towards the aim point, LAST of all - after
 //               its own damage, shoves and terrain changes have resolved. It
@@ -378,7 +378,10 @@ export const ABILITY_UPGRADES = {
 COMBAT_CONFIG.abilityUpgrades = ABILITY_UPGRADES;
 
 export const abilityById = (id) => ABILITIES[id] ?? null;
-export const tagDefById = (id) => COMBAT_TAGS[id] ?? null;
+// Tile tags moved to config/units.js (2026-09-12); that file writes them onto
+// this same COMBAT_CONFIG object as `.tags`, so this reads them from there
+// instead of a local COMBAT_TAGS that no longer exists in this file.
+export const tagDefById = (id) => COMBAT_CONFIG.tags?.[id] ?? null;
 export { DIRS };
 
 
@@ -386,15 +389,10 @@ export { DIRS };
 
 
 // ----- Statuses ("buffs") ----------------------------------------------
-//  THE POINT OF THIS TABLE: a status used to be four hand-written fields on a
-//  unit plus a branch of engine code each, which meant every new one - even a
-//  plain "2 damage a turn for 3 turns" - was surgery in six places, two of them
-//  silent (the AI's scoring and the AI's simulation copy). Everything below is
-//  built out of verbs the engine ALREADY performs, so a status made of these is
-//  a row here and nothing else: no engine change, and the enemy AI understands
-//  it on its own. A status that needs a verb this list does not have still needs
-//  engine work - but then the VERB is added once and every later status can use
-//  it, instead of each status carrying its own code.
+//  A status is a certain termporary effect that modifies how aspects of combat
+//  interact with the unit carrying the status effect.
+//  Every status is built from one or more verbs which the engine knows how to
+//  perform. New verbs must be added in code, new statuses are config only.
 //
 //  ----- what each building block does, exactly -----
 //  EFFECTS (all optional; a status may combine several):
@@ -617,35 +615,3 @@ export function grantCheck(id) {
 COMBAT_CONFIG.statuses = STATUSES;
 
 export const statusById = (id) => STATUSES[id] ?? null;
-
-// (The INTELLECT CLASSES moved to config/units.js on 2026-09-10. A class is a
-//  property of a CREATURE - which facts it can weigh on its turn - so it belongs
-//  beside the bestiary that hands one to every row, not in the abilities table.
-//  The engine still reads it as `config.intellect`; only the file changed.)
-
-// ----- Tile tags -------------------------------------------------------
-const T = (o) => Object.assign({
-  name: 'Tag', icon: '⭐', color: '#ff9950', desc: '',
-  dmg: 0, heal: 0, life: 0, hp: 0,
-  pushable: false, collectible: false, passPickup: false,
-  onDestroy: null, onExpire: null, onPickup: null, onPeriodic: null,
-  everyX: 0, everyOff: 0,
-}, o);
-
-export const COMBAT_TAGS = {
-  fire: T({ name: 'Fire', icon: '🔥', color: '#ff9950', desc: 'Burns anything standing here.', dmg: 1, life: 2 }),
-};
-
-// Tags are part of the combat config too, so they can be edited in Settings the
-// way statuses can (2026-09-10 - until then they were the one piece of arena
-// content you had to open a file to change). Same object, not a copy: tagDefById
-// and the Settings window see the same table.
-COMBAT_CONFIG.tags = COMBAT_TAGS;
-
-// (The per-unit combat stats used to live here, in a UNIT_COMBAT table. They were
-// a UNITS matter, not an abilities one, and they duplicated the roster: since
-// 2026-09-06 a character carries init / speed / flying / abilities on its own
-// roster row in config/units.js, next to its body, exactly as a bestiary row does
-// for a creature. `combatStatsFor` moved there with them.)
-
-

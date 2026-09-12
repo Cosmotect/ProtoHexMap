@@ -1,14 +1,12 @@
 // =====================================================================
 //  CONFIG - every design knob of the prototype.
 //  Change a number, save, and the browser reloads (when running "npm run dev").
-//  Think of this file as the "exported variables" panel of a Godot scene,
-//  or the "Details" panel defaults of a Blueprint.
 //
 //  The config is split into four files:
 //    config/world.js       map shape, tile types, biomes, generation noise
 //    config/encounters.js  encounter placement, the Stasis, rest / shop / treasure / events, fatigue
-//    config/units.js       the party and the battle simulation
-//    config/abilities.js   the arena: combat rules, abilities, statuses, tile tags
+//    config/units.js       the party, the NPCs, and tile tags (entities)
+//    config/abilities.js   the arena: combat rules, abilities, statuses
 //    config.js (this one)  run rules, camera, animation, colours, and the glue
 //  The rest of the code always reads CONFIG.<section>, so moving a section between
 //  files never changes any other code.
@@ -58,17 +56,17 @@ export const CONFIG = {
     gap: 0.03,
     tileHeight: 0.3,          // minimum baseline thickness of an arena tile
     typeHeightScale: 16,      // arena baseline = world tile type's visual height x this
-                              // (a hill arena starts taller than a plains one; the
-                              // backdrop hexes' tops use the same formula)
+    // (a hill arena starts taller than a plains one; the
+    // backdrop hexes' tops use the same formula)
     elevationStep: 0.35,      // world units of visual height per combat elevation level
-                              // (the LEVELS themselves are combat rules: src/config/abilities.js)
+    // (the LEVELS themselves are combat rules: src/config/abilities.js)
     elevationMid: 2,          // which level is "untouched ground": the one drawn flush with the
-                              // surrounding world tiles, with the levels above it raised and the
-                              // ones below it sunk. 2 is the middle of 0..4, so the arena has two
-                              // steps up and two steps down around an unchanged middle.
-                              // Change elevationLevels (src/config/abilities.js) and this should
-                              // move to the middle of the new range. A smaller number lifts the
-                              // whole arena, a bigger one sinks it.
+    // surrounding world tiles, with the levels above it raised and the
+    // ones below it sunk. 2 is the middle of 0..4, so the arena has two
+    // steps up and two steps down around an unchanged middle.
+    // Change elevationLevels (src/config/abilities.js) and this should
+    // move to the middle of the new range. A smaller number lifts the
+    // whole arena, a bigger one sinks it.
     // ----- arena tile colouring (LocalMapView.paintTile) ------------------
     // Arena tiles are shades of the entered world tile's colour, with a strong
     // VALUE ramp by elevation so all five height steps read at a glance. The
@@ -81,7 +79,7 @@ export const CONFIG = {
       lightPerLevel: 0.20,    // blend toward white per level ABOVE the middle (level 4 ~ 40% white)
       jitter: 0.05,           // +- random per-tile brightness, keeps the ground from looking airbrushed
       neighborBlend: 0.16,    // how hard a neighbouring world tile pulls edge tiles' colour
-                              // (was 0.5 before the elevation ramp: the bleed drowned it out)
+      // (was 0.5 before the elevation ramp: the bleed drowned it out)
       neighborBlendMax: 0.25, // hard cap on that pull (was 0.6)
     },
     // ----- authored tile types (handcrafted maps, src/local/mapcode.js) ---
@@ -122,8 +120,8 @@ export const CONFIG = {
       fov: 60,
       tiltDegrees: 70,        // 0 = straight down; higher = more of a ground-level look
       azimuthDegrees: 30,     // spin around the fire. 30 puts a TILE dead centre behind the
-                              // flame instead of the seam between two, which is what lets the
-                              // party sit as one row of three rather than two-plus-a-straggler
+      // flame instead of the seam between two, which is what lets the
+      // party sit as one row of three rather than two-plus-a-straggler
       distance: 3,             // how far from the fire
       targetHeight: 0.5,      // the camera aims this high above the centre tile (the flame)
       lockControls: true,     // true = the player cannot rotate the start shot
@@ -142,8 +140,8 @@ export const CONFIG = {
     fogFar: 60,               // ...and at which a tile is fully the background colour
     groundColor: 0x2c6369,    // the void floor far below, seen through the ether holes
     groundDepth: -5,          // how far below y=0 that floor sits (was -30: with the
-                              // tighter fogNear/fogFar above, -30 fogged out to plain
-                              // background colour before it read as a floor at all)
+    // tighter fogNear/fogFar above, -30 fogged out to plain
+    // background colour before it read as a floor at all)
   },
   localBackground: {
     color: 0x181539,

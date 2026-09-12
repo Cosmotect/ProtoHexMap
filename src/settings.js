@@ -99,7 +99,7 @@ const MATRIX_SECTIONS = new Set(['tileTypes', 'biomes', 'statuses', 'intellect',
 // A tile tag's four HOOKS each name an ability, which is how a tag can do
 // anything an ability can - damage, healing, pushes, a status. They get a
 // dropdown of the ability ids rather than a text box, so a typo cannot quietly
-// turn a hook off (config/abilities.js, COMBAT_TAGS).
+// turn a hook off (config/units.js, COMBAT_TAGS).
 const TAG_HOOKS = new Set(['onPeriodic', 'onPickup', 'onExpire', 'onDestroy']);
 
 export function createSettings({ config, defaults, onChange, getUiScale, onSetUiScale, getShowLog, onSetShowLog, onClose }) {

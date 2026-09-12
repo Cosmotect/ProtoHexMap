@@ -9,6 +9,7 @@
 //  (config/upgrades.js). Want a tougher enemy? Give it a harder-hitting
 //  ability, not a bigger number here.
 // =====================================================================
+import { COMBAT_CONFIG } from './abilities.js';
 
 // ----- Intellect classes ------------------------------------------------
 //  Not every creature thinks as well as every other one. A unit's INTELLECT CLASS
@@ -289,3 +290,22 @@ export function combatStatsFor(name) {
   for (const [k, v] of Object.entries(row)) if (v !== undefined) out[k] = v;
   return out;
 }
+
+// ----- Tile tags -------------------------------------------------------
+const T = (o) => Object.assign({
+  name: 'Tag', icon: '⭐', color: '#ff9950', desc: '',
+  dmg: 0, heal: 0, life: 0, hp: 0,
+  pushable: false, collectible: false, passPickup: false,
+  onDestroy: null, onExpire: null, onPickup: null, onPeriodic: null,
+  everyX: 0, everyOff: 0,
+}, o);
+
+export const COMBAT_TAGS = {
+  fire: T({ name: 'Fire', icon: '🔥', color: '#ff9950', desc: 'Burns anything standing here.', dmg: 1, life: 2 }),
+};
+
+// Tags are part of the combat config too, so they can be edited in Settings the
+// way statuses can (2026-09-10 - until then they were the one piece of arena
+// content you had to open a file to change). Same object, not a copy: tagDefById
+// and the Settings window see the same table.
+COMBAT_CONFIG.tags = COMBAT_TAGS;
