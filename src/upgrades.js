@@ -12,7 +12,7 @@
 //  same code serves the world map, the combat engine and the UI.
 // =====================================================================
 import { ABILITIES, ABILITY_UPGRADES, STATUSES, grantCheck } from './config/abilities.js';
-import { combatStatsFor } from './config/units.js';
+import { combatStatsFor } from './config/entities.js';
 import { t, hasKey } from './i18n.js';
 import { tc } from './text.js';
 

@@ -1,6 +1,6 @@
 // =====================================================================
 //  WORLD CONFIG - the map, its tile types, biomes and the generation noise.
-//  (Part of the config split: world.js / encounters.js / units.js / config.js)
+//  (Part of the config split: world.js / encounters.js / entities.js / config.js)
 // =====================================================================
 
 export const WORLD = {

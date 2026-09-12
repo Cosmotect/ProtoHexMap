@@ -72,7 +72,7 @@ export class Game {
       status: 'playing',      // 'playing' | 'won' | 'lost'
       // The party: a fresh copy of the config units so HP can change per run.
       // The starting party is the first `party.size` entries of the roster, so a
-      // character's stats are defined once (config/units.js, party.roster).
+      // character's stats are defined once (config/entities.js, party.roster).
       // A scenario may fix its own party instead.
       // `upgrades` holds the unit's unlocked ability tree nodes ("ability:node" refs).
       party: (scenario?.party ?? (config.party.roster ?? []).slice(0, config.party.size ?? 3))

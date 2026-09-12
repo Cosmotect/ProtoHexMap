@@ -975,7 +975,7 @@ export function createUI(config, handlers) {
   // Portrait + backstory on the left; one section per ability with its name,
   // description and upgrade tree. `unit` (a live party member, when the
   // character is in the party) supplies the unlocked nodes to light up.
-  // A character's few lines. The text lives on its ROSTER ROW (config/units.js),
+  // A character's few lines. The text lives on its ROSTER ROW (config/entities.js),
   // so one invented in the Settings window has one too and renaming a character
   // cannot lose it; a locale may override it with `unit.<Name>.story`, exactly the
   // way tn() lets a locale override a name.

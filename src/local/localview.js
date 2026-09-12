@@ -11,7 +11,8 @@ import * as THREE from 'three';
 import { MapControls } from 'three/addons/controls/MapControls.js';
 import { generateLocalMap, pickRandomTiles, pickClusteredTiles, applyElevationWave, neutralElevation } from './localmap.js';
 import { hexKey, hexesInRange, hexDistance, axialToPlane } from '../hex.js';
-import { COMBAT_CONFIG, tagDefById } from '../config/abilities.js';
+import { COMBAT_CONFIG } from '../config/abilities.js';
+import { tagDefById } from '../config/entities.js';
 import { createRng } from '../rng.js';
 import { t, hasKey } from '../i18n.js';
 import { statusesFor, badgeNumber } from '../status.js';
@@ -34,7 +35,7 @@ function roundRect(g, x, y, w, h, r) {
 }
 
 // ----- enemy bodies ----------------------------------------------------
-// Every shape a bestiary entry (config/units.js, battle.enemyTypes) may ask for.
+// Every shape a bestiary entry (config/entities.js, battle.enemyTypes) may ask for.
 // Each factory returns a geometry roughly 0.55 world units tall, sitting on the
 // origin, so any of them can stand on a tile without further fiddling.
 // Add a name here and it is instantly available to the config.

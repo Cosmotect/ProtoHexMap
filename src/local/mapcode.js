@@ -18,9 +18,9 @@
 //             it falls out of the world and dies
 //  Elevation is a whole level 0..elevationLevels (walls default to the top
 //  level, ether has no meaningful height). Tags are tile tag ids from
-//  src/config/units.js COMBAT_TAGS (e.g. `fire`). `!` pins one enemy to
+//  src/config/entities.js COMBAT_TAGS (e.g. `fire`). `!` pins one enemy to
 //  the tile - the rest of the line is a bestiary id or display name from
-//  config/units.js battle.enemyTypes ("husk" or "Husk", "Forge Tyrant"...).
+//  config/entities.js battle.enemyTypes ("husk" or "Husk", "Forge Tyrant"...).
 //
 //  parseMapCode() turns the text into plain data (+ a list of readable
 //  errors); buildRecipe() validates it against the config and produces the
@@ -29,6 +29,7 @@
 //      spawns: { enemies: [keys] }, enemyTypeIds: [ids], startTags: [{ k, id }] }
 // =====================================================================
 import { COMBAT_CONFIG } from '../config/abilities.js';
+import { COMBAT_TAGS } from '../config/entities.js';
 import { neutralElevation } from './localmap.js';
 
 const TYPE_ALIASES = { g: 'ground', ground: 'ground', w: 'wall', wall: 'wall', e: 'ether', ether: 'ether' };
@@ -115,7 +116,7 @@ export function buildRecipe(parsed, config) {
       continue;
     }
     for (const tag of t.tags) {
-      if (!COMBAT_CONFIG.tags[tag]) { errors.push(`line ${t.line}: tile ${t.key} has unknown tag "${tag}"`); continue; }
+      if (!COMBAT_TAGS[tag]) { errors.push(`line ${t.line}: tile ${t.key} has unknown tag "${tag}"`); continue; }
       startTags.push({ k: t.key, id: tag });
     }
     if (t.enemy) {
@@ -124,7 +125,7 @@ export function buildRecipe(parsed, config) {
       else if (t.type !== 'ground') errors.push(`line ${t.line}: enemy "${t.enemy}" cannot stand on a ${t.type} tile`);
       else enemies.push({ typeId, key: t.key });
     }
-    const bad = t.tags.some((tag) => !COMBAT_CONFIG.tags[tag]);
+    const bad = t.tags.some((tag) => !COMBAT_TAGS[tag]);
     if (!bad) tiles[t.key] = { type: t.type, elevation, tags: t.tags.length ? [...t.tags] : null };
   }
 

@@ -1,6 +1,12 @@
+import { ringOffsets, lineOffsets, DIRS } from '../local/battle/bhex.js';
+
 // =====================================================================
-//  COMBAT CONFIG - abilities, tile tags and per-unit combat stats.
-//  (Part of the config split; read by src/local/battle/engine.js.)
+//  COMBAT CONFIG - abilities, statuses and combat rules.
+//  (Part of the config split; read by src/local/battle/engine.js. Tile tags
+//  moved to config/entities.js on 2026-09-12 - they represent things sitting
+//  on a tile, closer in spirit to a unit than to an ability. `tagDefById`
+//  moved there with them on the same day, next to the COMBAT_TAGS table it
+//  reads.)
 //
 //  This is the hand-authored slice of the hex-box combat prototype: only the
 //  DEFINITIONS came over, none of the editors or storage.
@@ -64,7 +70,7 @@
 //    hMode      'rel' = add `amount` to the height there, 'abs' = set it to
 //               `amount`. Clamped to 0..combat.elevationLevels. Units standing
 //               on the tile are not moved.
-//    tagId      a tile tag from COMBAT_TAGS (config/units.js) to leave behind...
+//    tagId      a tile tag from COMBAT_TAGS (config/entities.js) to leave behind...
 //    tagZone    ...on these offsets from the aim point.
 //    moveToTarget  the caster charges towards the aim point, LAST of all - after
 //               its own damage, shoves and terrain changes have resolved. It
@@ -81,7 +87,6 @@
 //    No ability can swap places with a unit, summon anything, or push further
 //    than two tiles. Each of those needs engine work, not a config line.
 // =====================================================================
-import { ringOffsets, lineOffsets, DIRS } from '../local/battle/bhex.js';
 
 export const COMBAT_CONFIG = {
   // ----- Combat rules (hex-box "settings" block) ----------------------
@@ -123,7 +128,7 @@ export const COMBAT_CONFIG = {
 };
 
 // ===================================ABILITIES===================================
-// A small starter kit; balance numbers are first guesses.
+// ----------------------------------DEFINITION-----------------------------------
 const A = (o) => Object.assign({
   // `desc` is what the roster window and the ability tooltips show. Like an
   // upgrade node's (see ABILITY_UPGRADES below), it belongs on the definition:
@@ -153,7 +158,7 @@ const A = (o) => Object.assign({
   // cost is never a gate - it is always affordable.
   cost: { hp: 0, supplies: 0, move: 0 },
 }, o);
-
+// -------------------------------------TABLE-------------------------------------
 export const ABILITIES = {
   //Enemy Abilities
   softeningBite: A({ name: 'Softening Bite', icon: '⚔️', color: '#e0b25f', buff: 'vulnerable', castZone: ringOffsets(1, 1), dmgZone: [[0, 0]] }),
@@ -190,6 +195,11 @@ export const ABILITIES = {
 };
 
 
+
+
+
+
+
 // ========================ABILITY UPGRADE TREES=========================
 //
 //  The party grows through these: every reward pick unlocks one node of one
@@ -223,7 +233,7 @@ export const ABILITIES = {
 //
 //  The final game plans at least 16 characters / 32 trees; a tree is looked up
 //  purely by ability id, so adding one is one entry here and nothing else.
-// =====================================================================
+// ----------------------------------DEFINITION-----------------------------------
 const U = (o) => Object.assign({
   name: '', icon: '⭐', desc: '',
   requires: [], add: {}, castZoneAdd: [], dmgZoneAdd: [], tagZoneAdd: [],
@@ -246,8 +256,7 @@ const U = (o) => Object.assign({
   //           how hard without needing a status row of its own.
   applies: [],
 }, o);
-
-
+// -------------------------------------TABLE-------------------------------------
 export const ABILITY_UPGRADES = {
 
   clawSwipe: {//A Melee attack that reaches medium range and damage and is capable of being vampiric.
@@ -372,23 +381,17 @@ export const ABILITY_UPGRADES = {
     aegis: U({ name: 'Aegis', icon: '🛡️', desc: 'heals 2 more', requires: ['surgeon', 'farward'], add: { heal: 2 } }),
   },
 };
-
-// Part of the combat config too, so the Settings window can reach the trees the
-// way it reaches abilities and statuses. Same object, not a copy.
 COMBAT_CONFIG.abilityUpgrades = ABILITY_UPGRADES;
 
 export const abilityById = (id) => ABILITIES[id] ?? null;
-// Tile tags moved to config/units.js (2026-09-12); that file writes them onto
-// this same COMBAT_CONFIG object as `.tags`, so this reads them from there
-// instead of a local COMBAT_TAGS that no longer exists in this file.
-export const tagDefById = (id) => COMBAT_CONFIG.tags?.[id] ?? null;
-export { DIRS };
 
 
 
 
 
-// ----- Statuses ("buffs") ----------------------------------------------
+
+
+// ==============================STATUSES AND PASSIVES===============================
 //  A status is a certain termporary effect that modifies how aspects of combat
 //  interact with the unit carrying the status effect.
 //  Every status is built from one or more verbs which the engine knows how to
@@ -413,14 +416,17 @@ export { DIRS };
 //    tickDamage   damage dealt to the carrier at the start of its activation.
 //    tickHeal     healing given to the carrier at the start of its activation.
 //                 Both tick at exactly the same moment as a tile tag does.
+//    ignoresImpactImpact kinds this row shrugs off:
+//                'crash'(shoved into a wall or a body),
+//                'fall' (shoved off a ledge),
+//                'crush'(squashed between two things).
+//                 Empty = takes them all like everyone else
 //
-//  LIFETIME (how the status ends - a status with neither simply never expires):
-//    turns        how many of the carrier's own activations it survives. Counted
-//                 down at the start of each of them, AFTER the tick damage /
-//                 heal, so "3 turns of poison" deals its damage three times.
-//                 0 = no clock.
-//    charges      how many times it may be spent before it ends (see spentOn).
-//    spentOn      what spends a charge: 'hit' (something was blocked / taken),
+//  LIFETIME (how the status ends - a status with neither is a non-expiring passive):
+//    turns        How many of the carrier's turns it lasts. Counted down at the
+//                 start of the turn, AFTER the tick damage / heal. 0 = no clock.
+//    charges      How many times it may be spent before it ends (see spentOn).
+//    spentOn      What spends a charge: 'hit' (something was blocked / taken),
 //                 'attack' (the carrier cast a damaging ability), 'activation'
 //                 (the carrier's turn came up). '' = nothing spends it, only the
 //                 turn clock can end it.
@@ -444,6 +450,12 @@ export { DIRS };
 //    The numbers an ability actually applied are remembered per unit, so two
 //    sources of the same status do not have to agree.
 //
+//    passive      Confirms that a 0 turn, 0 charge, no expenditure status is in
+//                 fact a passive ability. A unit is GRANTED them (by an ability
+//                 upgrade, a relic, or one day a worldmap aura) instead of having
+//                 them applied by a cast, and nothing takes them off. This is for
+//                 the table's reader and for the check at grant time.
+//
 //  THE ENEMY AI:
 //    aiValue      how BAD carrying this status is, in the AI's own scoring units
 //                 (a point of damage is 10, a kill 45). Positive = bad for
@@ -460,23 +472,14 @@ export { DIRS };
 //  DISPLAY: `name` / `icon` / `color` are the fallback; the badge over a unit's
 //  head and the card in the panel look for the locale keys status.<id>.name and
 //  status.<id>.desc first ({n} is filled with the amount).
+//
+// ----------------------------------DEFINITION-----------------------------------
 const S = (o) => Object.assign({
   name: 'Status', icon: '⭐', color: '#9aa7bd',
   speed: 0, damageDealt: 1, damageTaken: 1, blocks: false, skipsTurn: false,
   tickDamage: 0, tickHeal: 0,
-  // Impact kinds this row shrugs off: 'crash' (shoved into a wall or a body),
-  // 'fall' (shoved off a ledge) and 'crush' (squashed between two things). Empty
-  // = takes them all like everyone else. A LIST rather than a flag so a narrower
-  // version ("ignores the wall, not the drop") is a config edit, not a code one.
   ignoresImpact: [],
-  turns: 0, charges: 0, spentOn: '',
-  // PASSIVE rows are the same rows, carried a different way: a unit is GRANTED
-  // them (by an ability upgrade, a relic, or one day a world-map aura) instead of
-  // having them applied by a cast, and nothing takes them off. Mechanically that
-  // means `turns: 0, charges: 0, spentOn: ''` - which is what "never expires"
-  // already meant - and this flag only says so out loud, for the table's reader
-  // and for the check at grant time. See PASSIVES below.
-  passive: false,
+  turns: 0, charges: 0, spentOn: '', passive: false,
   aiValue: 0,
 }, o);
 
@@ -509,14 +512,12 @@ export function statusOverridesFor(def, buffX) {
   }
   return out;
 }
-
+// -------------------------------------TABLE-------------------------------------
 export const STATUSES = {
-  // The four that already existed, written out in the vocabulary above. Their
-  // behaviour is unchanged - this is the same shield, crit, stun and haste.
   shield: S({
     name: 'Shield', icon: '🛡', color: '#5fc7e0',
     blocks: true, charges: 1, spentOn: 'hit',
-    aiValue: -14,          // good to carry: the AI guards its allies and pops the party's
+    aiValue: -14,
   }),
   crit: S({
     name: 'Charged', icon: '⚡', color: '#ffd75f',
@@ -526,22 +527,22 @@ export const STATUSES = {
   stun: S({
     name: 'Stunned', icon: '💫', color: '#c9a8ff',
     skipsTurn: true, charges: 1, spentOn: 'activation',
-    aiValue: 12,           // bad to carry: worth about a point of damage more than one
+    aiValue: 12,
   }),
   haste: S({
     name: 'Hastened', icon: '💨', color: '#a8e05f',
     speed: 1, turns: 2,
-    aiValue: -6,           // good to carry
+    aiValue: -6,
   }),
   slow: S({
     name: 'Slowed', icon: '🐌', color: '#c9a8ff',
     speed: -1, turns: 2,
-    aiValue: 9,            // bad to carry - and worth more than haste is worth giving
+    aiValue: 9,
   }),
   poison: S({
     name: 'Poisoned', icon: '🧪', color: '#8fd14f',
     tickDamage: 2, turns: 3,
-    aiValue: 20,              // three ticks of 2, valued a little under the 60 they cost
+    aiValue: 20,
   }),
   regen: S({
     name: 'Mending', icon: '🌿', color: '#a8e05f',

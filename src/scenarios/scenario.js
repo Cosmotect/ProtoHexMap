@@ -130,7 +130,7 @@ export function buildScenarioMap(config, scenario) {
 // Fresh battle-ready copies of an authored enemy list.
 // A scenario's hand-written enemy list. An entry may name a bestiary id
 // (`type: 'husk'`) or just a name; either way the creature's SHAPE, COLOUR and
-// ABILITIES come from the bestiary (config/units.js, battle.enemyTypes), while
+// ABILITIES come from the bestiary (config/entities.js, battle.enemyTypes), while
 // hp written here overrides it - a scripted fight often wants a weaker husk
 // than the wild one.
 export function cloneEnemies(list, cfg = null) {

@@ -30,7 +30,7 @@
 // =====================================================================
 import { DIRS, K, PK, addK, hexDist, hexLine, rotOff, aimRot, abRotFor, rotDir, boardTiles } from './bhex.js';
 import { abilityById, tagDefById, statusOverridesFor } from '../../config/abilities.js';
-import { combatStatsFor } from '../../config/units.js';
+import { combatStatsFor } from '../../config/entities.js';
 
 export function createBattle({ config, radius, heights, party, enemies, partyKeys, enemyKeys, forced,
                                partyDamageMod = 0, deferOpening = false, voidEdgeKeys = [],
@@ -121,7 +121,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
 
   function makeInstance(def, isEnemy, pos, i) {
     // The definition wins where it has an opinion: a bestiary row carries its
-    // own init / speed / flying / abilities (config/units.js), so a creature
+    // own init / speed / flying / abilities (config/entities.js), so a creature
     // invented in the Settings window fights as written instead of falling
     // through to party.defaultCombat, the nameless fallback. The party, and any older
     // hand-authored def, still reads the table by name.

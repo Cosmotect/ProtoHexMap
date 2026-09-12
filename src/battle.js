@@ -16,7 +16,7 @@ export function rollDamage(rng, cfg) {
 // same flat penalty the interactive engine applies to a party cast (see dmgMod() in
 // local/battle/engine.js). There used to also be a power-ratio multiplier here
 // (removed 2026-09-10, enemy strength now comes purely from the abilities a bestiary
-// row gives it - see config/units.js battle.enemyTypes).
+// row gives it - see config/entities.js battle.enemyTypes).
 export function damageFor(rng, cfg, attacker, defender, damageMod = 0) {
   let base = rollDamage(rng, cfg);
   if (attacker.isPlayer && damageMod) base = Math.max(0, base - damageMod);
@@ -106,7 +106,7 @@ export function renameDuplicates(units) {
 }
 
 // ----- building enemy groups from the bestiary --------------------------------
-// Since 2026-08-31 nothing about a fight is rolled unit by unit: config/units.js
+// Since 2026-08-31 nothing about a fight is rolled unit by unit: config/entities.js
 // holds a BESTIARY (battle.enemyTypes: name, shape, colour, hp, abilities) and a
 // table of GROUPS (battle.enemyGroups: a title plus a list of bestiary ids).
 // A fight picks one whole GROUP, so what is written in the config is exactly

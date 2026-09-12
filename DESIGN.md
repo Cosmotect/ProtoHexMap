@@ -18,7 +18,7 @@ through dialogs.
 > On a 0-100 combat difficulty scale: regular encounters occupy 0-60, Stasis Colonies
 > 50-70, bosses 80-100.
 
-The three enemy pools live in `src/config/units.js`: `battle.enemies.bands` (regular
+The three enemy pools live in `src/config/entities.js`: `battle.enemies.bands` (regular
 groups, by ring), `battle.colonies` (Stasis Colonies), `battle.bosses` (the Stasis
 Seed). Power is an ENEMY-ONLY number; the party grows through ability upgrade trees
 (see "Ability upgrades" below), so all old party-power yardsticks are void and the
@@ -276,7 +276,7 @@ balance must be re-measured against interactive play.
     blocked hit deals no damage: without it the AI scored such a swing as worthless,
     refused to attack a shielded unit at all, and since a shield only ever expires by
     blocking something, it stayed up for the rest of the fight (fixed 2026-09-02).
-  * **Intellect classes** (`config.intellect`, the table in src/config/units.js;
+  * **Intellect classes** (`config.intellect`, the table in src/config/entities.js;
     since 2026-09-06). Every creature carries an `intellect` of S / A / B / C on its
     bestiary row, and the class says which facts it is able to WEIGH when it plans
     its turn: `statuses`, `elevation`, `tags`, `ether`, `injuries`.
@@ -364,7 +364,7 @@ balance must be re-measured against interactive play.
     `moveToTarget` dashes the caster; `cost: { hp, supplies, move }` is what casting
     it takes (negative grants instead - see the 2026-09-11 (e) entry below).
     8 starter abilities. How a unit fights is
-    written on its own row in config/units.js - a roster row carries speed / flying
+    written on its own row in config/entities.js - a roster row carries speed / flying
     / ability ids (party characters: exactly TWO), a bestiary row those plus `init`
     - resolved by `combatStatsFor(name)`, with `party.defaultCombat` as the fallback
     (numbered clones like "Husk 2" fall back to the base name).
@@ -1053,6 +1053,25 @@ stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }
   * The moment fires once in `start()`, before either side has moved, which is why
     it reads the same whether the fight opens normally or with an ambush. An
     ambushing creature holds its battle-start status while it strikes.
+* 2026-09-12 (c) **`config/units.js` renamed to `config/entities.js`, and tile tags
+  moved fully into it.** A tag represents something sitting on a tile (fire, and
+  whatever future tags bring), which is closer in spirit to a unit or an object
+  than to the ability that placed it - so the file holding the party, the
+  bestiary and the intellect classes was renamed to say so, and `COMBAT_TAGS`
+  moved from being attached onto `config/abilities.js`'s `COMBAT_CONFIG` object
+  after the fact (`COMBAT_CONFIG.tags = COMBAT_TAGS`, added 2026-09-10, the
+  cross-file wiring step a later edit forgot and briefly broke the game) to
+  being a plain property of `ENTITIES` itself, `tags: COMBAT_TAGS`, defined in
+  the same file the same way `intellect: INTELLECT` already was. `tagDefById`
+  (config/abilities.js) now imports `COMBAT_TAGS` directly from entities.js
+  instead of reading it off COMBAT_CONFIG, matching how `abilityById` already
+  reads `ABILITIES` from this same file's own scope - one less place for an
+  import to be missed. Every `from '.../units.js'` (config.js, engine.js,
+  upgrades.js, settings.js, mapcode.js) now points at entities.js; `UNITS` is
+  renamed `ENTITIES` throughout. The old config/units.js could not be deleted
+  from this session (no file-delete access to the owner's computer), so it was
+  left in place as an empty, unimported stub explaining the move - safe to
+  delete by hand.
 
 
 ## Open questions

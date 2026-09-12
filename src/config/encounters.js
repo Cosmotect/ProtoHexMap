@@ -1,7 +1,7 @@
 // =====================================================================
 //  ENCOUNTER CONFIG - what sits on the tiles and what engaging it does,
 //  plus fatigue (the rule that forces encounters on a tired party).
-//  (Part of the config split: world.js / encounters.js / units.js / config.js)
+//  (Part of the config split: world.js / encounters.js / entities.js / config.js)
 // =====================================================================
 
 export const ENCOUNTERS = {
@@ -63,8 +63,8 @@ export const ENCOUNTERS = {
   // neutral elevation (2); everything unlisted stays that. Types: ground,
   // wall (blocks walking, pushes crash on it), ether (a hole: pushes into it
   // kill). Elevation is a level 0..4 (walls default to 4, ether needs none).
-  // Tags are tile tag ids from src/config/abilities.js (e.g. fire). '!' pins
-  // an enemy from the bestiary (config/units.js battle.enemyTypes, by id or
+  // Tags are tile tag ids from src/config/entities.js (e.g. fire). '!' pins
+  // an enemy from the bestiary (config/entities.js battle.enemyTypes, by id or
   // display name) to the tile; the rest of the line is its name.
   craftedMaps: {
     combat: {
@@ -156,13 +156,14 @@ radius: 3
   },
 
   // =================================================================
-  //  BATTLE SPAWNS - which enemy GROUPS (config/units.js battle.enemyGroups)
+  //  BATTLE SPAWNS - which enemy GROUPS (config/entities.js battle.enemyGroups)
   //  a fight may roll, one row per kind of fight and one column per LAYER of
   //  the worldflake (0 = the core, 6 = the highest; config/world.js `layers`).
   //  A fight rolls one group out of its own cell. An EMPTY cell is not an
   //  error: that fight plays the nearest FILLED layer of the same row
   //  instead, so a half-finished table still runs.
-  //  Moved here from config/units.js and spelled out one layer at a time
+  //  Moved here from config/entities.js (then still named units.js) and
+  //  spelled out one layer at a time
   //  (2026-09-10) - it used to be one list copied onto every layer by a
   //  helper function, which is why layers 3-6 below all still read the same:
   //  nothing has been given its own roster yet. Edit any single layer's list

@@ -1,6 +1,11 @@
 // =====================================================================
-//  UNIT CONFIG - the player's party and everything about how units fight.
-//  (Part of the config split: world.js / encounters.js / units.js / config.js)
+//  ENTITY CONFIG - the player's party, the bestiary, tile tags, and everything
+//  else that can stand or sit on a tile. (Renamed from units.js, 2026-09-12:
+//  tags used to live here but get glued onto config/abilities.js's combat
+//  object afterwards - now they are just a normal part of this file's own
+//  object, the same way `intellect` already was, so there is no cross-file
+//  wiring step left to forget.)
+//  (Part of the config split: world.js / encounters.js / entities.js / config.js)
 //
 //  There is no "power" number any more (removed 2026-09-10): a creature's
 //  whole strength is the abilities it carries - each ability has its own flat
@@ -9,7 +14,6 @@
 //  (config/upgrades.js). Want a tougher enemy? Give it a harder-hitting
 //  ability, not a bigger number here.
 // =====================================================================
-import { COMBAT_CONFIG } from './abilities.js';
 
 // ----- Intellect classes ------------------------------------------------
 //  Not every creature thinks as well as every other one. A unit's INTELLECT CLASS
@@ -63,7 +67,28 @@ export const INTELLECT = {
 
 export const intellectOf = (cls) => INTELLECT[cls] ?? INTELLECT.C;
 
-export const UNITS = {
+// ----- Tile tags -------------------------------------------------------
+// A tag is a mark left on a tile by an ability (fire from a burst, a wall from
+// a future ability, ...): closer in spirit to a unit or an object sitting on
+// the board than to the ability that placed it, which is why it lives here
+// rather than in config/abilities.js. `tagDefById` below is the lookup other
+// files use to read one; it moved here from config/abilities.js on
+// 2026-09-12 to sit next to the table it reads.
+const T = (o) => Object.assign({
+  name: 'Tag', icon: '⭐', color: '#ff9950', desc: '',
+  dmg: 0, heal: 0, life: 0, hp: 0,
+  pushable: false, collectible: false, passPickup: false,
+  onDestroy: null, onExpire: null, onPickup: null, onPeriodic: null,
+  everyX: 0, everyOff: 0,
+}, o);
+
+export const COMBAT_TAGS = {
+  fire: T({ name: 'Fire', icon: '🔥', color: '#ff9950', desc: 'Burns anything standing here.', dmg: 1, life: 2 }),
+};
+
+export const tagDefById = (id) => COMBAT_TAGS[id] ?? null;
+
+export const ENTITIES = {
   // ----- Party -------------------------------------------------------
   // The three units the player controls inside encounters. On the world map they
   // move as one token. "icon" is a placeholder glyph shown in the party panel.
@@ -271,6 +296,10 @@ export const UNITS = {
   // can edit them and the engine can read them off the same table (config.intellect).
   intellect: INTELLECT,
 
+  // Tile tags (defined above), part of the config object the same way `intellect`
+  // is, so the Settings window's Tags table (config.tags) edits this same object.
+  tags: COMBAT_TAGS,
+
 };
 
 // Combat stats for a unit by its DISPLAY name ("Husk 2" -> "Husk"): a roster
@@ -278,7 +307,7 @@ export const UNITS = {
 // bestiary row carries its own stats and hands them straight to the engine.
 export function combatStatsFor(name) {
   const base = String(name ?? '').replace(/ \d+$/, '');
-  const p = UNITS.party;
+  const p = ENTITIES.party;
   const row = p.roster.find((u) => u.name === base);
   if (!row) return p.defaultCombat;
   // A row can be INCOMPLETE: one invented in the Settings window, or one restored
@@ -290,22 +319,3 @@ export function combatStatsFor(name) {
   for (const [k, v] of Object.entries(row)) if (v !== undefined) out[k] = v;
   return out;
 }
-
-// ----- Tile tags -------------------------------------------------------
-const T = (o) => Object.assign({
-  name: 'Tag', icon: '⭐', color: '#ff9950', desc: '',
-  dmg: 0, heal: 0, life: 0, hp: 0,
-  pushable: false, collectible: false, passPickup: false,
-  onDestroy: null, onExpire: null, onPickup: null, onPeriodic: null,
-  everyX: 0, everyOff: 0,
-}, o);
-
-export const COMBAT_TAGS = {
-  fire: T({ name: 'Fire', icon: '🔥', color: '#ff9950', desc: 'Burns anything standing here.', dmg: 1, life: 2 }),
-};
-
-// Tags are part of the combat config too, so they can be edited in Settings the
-// way statuses can (2026-09-10 - until then they were the one piece of arena
-// content you had to open a file to change). Same object, not a copy: tagDefById
-// and the Settings window see the same table.
-COMBAT_CONFIG.tags = COMBAT_TAGS;

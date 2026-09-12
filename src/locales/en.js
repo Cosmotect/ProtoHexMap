@@ -434,7 +434,7 @@ export const en = {
   // in src/upgrades.js.
 
   // ----- character backstories -------------------------------------------------
-  // The English text lives on the roster row in src/config/units.js (`story`), so a
+  // The English text lives on the roster row in src/config/entities.js (`story`), so a
   // character invented in the Settings window can have one and renaming a character
   // cannot lose it. A TRANSLATION still belongs here as `unit.<Name>.story` - a key,
   // where one exists, wins over the config.

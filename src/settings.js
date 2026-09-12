@@ -11,8 +11,9 @@ import { t, LANGUAGES, getLanguage, setLanguage } from './i18n.js';
 import { SHAPE_NAMES } from './local/localview.js';
 import { ABILITIES, statusKnobs } from './config/abilities.js';
 // The intellect classes moved next to the bestiary that hands one to every row
-// (config/units.js, 2026-09-10).
-import { INTELLECT } from './config/units.js';
+// (config/entities.js, 2026-09-10; that file itself renamed from units.js on
+// 2026-09-12).
+import { INTELLECT } from './config/entities.js';
 
 const STORAGE_KEY = 'hexmap-settings-v1';
 
@@ -27,7 +28,7 @@ const STORAGE_KEY = 'hexmap-settings-v1';
 
 // The bestiary table's columns. `kind` picks the control; `options` makes it a
 // dropdown. Everything a creature is lives here - body, numbers and the combat
-// half - so one row is one whole enemy (see config/units.js).
+// half - so one row is one whole enemy (see config/entities.js).
 const BESTIARY_COLS = [
   { key: 'name', kind: 'text', w: 118 },
   { key: 'shape', kind: 'select', options: () => SHAPE_NAMES },
@@ -66,7 +67,7 @@ const ROSTER_COLS = [
   { key: 'speed', kind: 'number', w: 44 },
   { key: 'flying', kind: 'bool' },
   { key: 'abilities', kind: 'idlist', w: 130, valid: () => Object.keys(ABILITIES) },
-  // The character's few lines in the roster's detail window (config/units.js).
+  // The character's few lines in the roster's detail window (config/entities.js).
   { key: 'story', kind: 'text', w: 260 },
 ];
 // Keys of `battle` the hand-built editors own; the leftovers render as an
@@ -99,7 +100,7 @@ const MATRIX_SECTIONS = new Set(['tileTypes', 'biomes', 'statuses', 'intellect',
 // A tile tag's four HOOKS each name an ability, which is how a tag can do
 // anything an ability can - damage, healing, pushes, a status. They get a
 // dropdown of the ability ids rather than a text box, so a typo cannot quietly
-// turn a hook off (config/units.js, COMBAT_TAGS).
+// turn a hook off (config/entities.js, COMBAT_TAGS).
 const TAG_HOOKS = new Set(['onPeriodic', 'onPickup', 'onExpire', 'onDestroy']);
 
 export function createSettings({ config, defaults, onChange, getUiScale, onSetUiScale, getShowLog, onSetShowLog, onClose }) {
