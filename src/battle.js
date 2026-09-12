@@ -153,6 +153,9 @@ export function makeEnemyOfType(cfg, typeId) {
     shape: t.shape ?? 'octahedron',
     color: t.color ?? 0xe2474b,
     init: t.init, speed: t.speed, flying: t.flying, intellect: t.intellect,
+    // A creature may carry passives and battle-start statuses the same way a
+    // character does; absent on a row that names neither.
+    passives: t.passives, applies: t.applies,
     abilityIds: Array.isArray(t.abilities) && t.abilities.length ? [...t.abilities] : undefined,
     alive: true,
   };

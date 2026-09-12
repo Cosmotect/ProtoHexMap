@@ -228,6 +228,23 @@ const U = (o) => Object.assign({
   name: '', icon: '⭐', desc: '',
   requires: [], add: {}, castZoneAdd: [], dmgZoneAdd: [], tagZoneAdd: [],
   pushDistAdd: 0, flags: {},
+  // PASSIVES this node gives the UNIT (status ids from the table below). Note it
+  // is the unit that gets them, not the ability: a node can change the ability it
+  // hangs off AND make its owner tougher, and the two are unrelated.
+  grants: [],
+  // Statuses APPLIED TO THE UNIT at a moment, rather than carried forever:
+  //     applies: [{ status: 'enraged', when: 'battleStart', x: [null, 3] }]
+  // `grants` and `applies` are the two halves of the same idea and differ in
+  // exactly one way - a granted row is always on and cannot be removed, an applied
+  // one is a real status that ticks down and can be stripped. Use `grants` for
+  // "is tougher", `applies` for "starts each fight angry".
+  //   status  a row of the STATUSES table
+  //   when    the moment. 'battleStart' is the only one the engine knows today;
+  //           it is a plain string so 'roundStart', 'onKill' and the rest are new
+  //           moments rather than a new system.
+  //   x       optional, the status's buffX list, so a node can say how long or
+  //           how hard without needing a status row of its own.
+  applies: [],
 }, o);
 
 
@@ -272,16 +289,19 @@ export const ABILITY_UPGRADES = {
     //Ability Utility Upgrades
     //level 1
     collisionImmune: U({
-      name: 'Padded', icon: '🥊', desc: 'Becomes immune to collisions'
+      name: 'Padded', icon: '🥊', desc: 'Becomes immune to collisions',
+      grants: ['collisionImmune'],
     }),
     //level 2
     regenerate: U({
       requires: ['collisionImmune'],
-      name: 'Regenerating', icon: '♻️', desc: 'Regenerates each turn'
+      name: 'Regenerating', icon: '♻️', desc: 'Regenerates each turn',
+      grants: ['regeneration'],
     }),
     beginEnraged: U({
       requires: ['collisionImmune'],
-      name: 'Raging Entry', icon: '😡', desc: 'Starts each combat enraged'
+      name: 'Raging Entry', icon: '😡', desc: 'Starts each combat enraged',
+      applies: [{ status: 'enraged', when: 'battleStart' }],
     })
   },
 
@@ -446,7 +466,19 @@ const S = (o) => Object.assign({
   name: 'Status', icon: '⭐', color: '#9aa7bd',
   speed: 0, damageDealt: 1, damageTaken: 1, blocks: false, skipsTurn: false,
   tickDamage: 0, tickHeal: 0,
+  // Impact kinds this row shrugs off: 'crash' (shoved into a wall or a body),
+  // 'fall' (shoved off a ledge) and 'crush' (squashed between two things). Empty
+  // = takes them all like everyone else. A LIST rather than a flag so a narrower
+  // version ("ignores the wall, not the drop") is a config edit, not a code one.
+  ignoresImpact: [],
   turns: 0, charges: 0, spentOn: '',
+  // PASSIVE rows are the same rows, carried a different way: a unit is GRANTED
+  // them (by an ability upgrade, a relic, or one day a world-map aura) instead of
+  // having them applied by a cast, and nothing takes them off. Mechanically that
+  // means `turns: 0, charges: 0, spentOn: ''` - which is what "never expires"
+  // already meant - and this flag only says so out loud, for the table's reader
+  // and for the check at grant time. See PASSIVES below.
+  passive: false,
   aiValue: 0,
 }, o);
 
@@ -538,6 +570,50 @@ export const STATUSES = {
 // The table is part of the combat config as well, so the Settings window can edit
 // it at runtime. Same object, not a copy: the engine reads config.statuses and the
 // UI imports STATUSES, and both see an edit the moment it is made.
+// ----- PASSIVES ---------------------------------------------------------
+//  A passive is not a second system. It is a row in the table above, carried a
+//  different way: something GRANTS it (an ability upgrade's `grants`, a relic,
+//  later a world-map aura) and nothing takes it off, where an ordinary status is
+//  applied by a cast and ends on a clock or a charge. Every rule the engine reads
+//  off a status - speed, the damage multipliers, the ticks, the switches - reads
+//  off a passive identically, because it is the same lookup.
+//
+//  Two consequences worth writing down:
+//    * a passive must never be SPENT. `charges` and `spentOn` stay empty, or
+//      spendStatus would try to consume something the unit does not really hold.
+//      grantCheck() below refuses a row that breaks this.
+//    * the set is worked out when a FIGHT STARTS (passivesFor in src/upgrades.js)
+//      and fixed for its duration. None of the three sources can change mid-fight,
+//      and recomputing per fight is what makes leaving an aura's radius drop the
+//      passive by itself, with nobody having to remember to remove it.
+Object.assign(STATUSES, {
+  collisionImmune: S({
+    name: 'Padded', icon: '🥊', color: '#b0714a',
+    passive: true,
+    // All three kinds: shoved into a wall, shoved off a ledge, squashed between
+    // two things. (Being crushed FLAT - shoved into something with nowhere left
+    // to go - is still lethal: that is not damage taken, it is no room to exist.)
+    ignoresImpact: ['crash', 'fall', 'crush'],
+    aiValue: -12,          // good to carry
+  }),
+  regeneration: S({
+    name: 'Regenerating', icon: '♻️', color: '#a8e05f',
+    passive: true,
+    tickHeal: 2,           // at the start of each of the carrier's own turns
+    aiValue: -20,          // good to carry, and it never runs out
+  }),
+});
+
+// Is this row fit to be granted as a passive? A passive is never spent, so a row
+// with charges or a spendOn would quietly misbehave the first time something tried
+// to consume it. Returns an error string, or null when the row is fine.
+export function grantCheck(id) {
+  const def = STATUSES[id];
+  if (!def) return `no status row named "${id}"`;
+  if (def.charges > 0 || def.spentOn) return `"${id}" is spent by use (charges/spentOn) and cannot be a passive`;
+  return null;
+}
+
 COMBAT_CONFIG.statuses = STATUSES;
 
 export const statusById = (id) => STATUSES[id] ?? null;

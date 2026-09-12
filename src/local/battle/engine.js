@@ -136,6 +136,13 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       maxHp: def.maxHp ?? def.hp, hp: def.hp,
       abilityIds: [...(def.abilityIds?.length ? def.abilityIds : cs.abilities)],
       abilityDefs: def.abilityDefs ?? null,
+      // PASSIVES the unit walked in with (passivesFor in src/upgrades.js, handed
+      // over by main.js). Fixed for this fight: none of the sources can change
+      // during one, and the set is worked out afresh when the next fight starts.
+      passives: [...(def.passives ?? [])],
+      // ...and the statuses it is owed at a MOMENT rather than for good
+      // (appliesFor; [{ status, when, x }]). Same three sources, same journey.
+      applies: [...(def.applies ?? [])],
       pos, isEnemy, idx: i, partyIndex: def.partyIndex ?? null,
       startPos: pos, moveLocked: false, done: false, tagTicked: false,
       // Movement points already spent on ABILITY COSTS this round. Walking is
@@ -244,30 +251,68 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // knobs it actually named. Every other field is read from the table.
   const statusDef = (id) => (config.statuses ?? {})[id] ?? null;
   const carried = (u) => (u && u.status) || null;
-  // One field of one status this unit is carrying, with the ability's own
-  // overrides folded in.
+  // PASSIVES: rows from the very same table that the unit walked in with rather
+  // than had applied to it (an ability upgrade's `grants`, a relic, a world-map
+  // aura - worked out by passivesFor in src/upgrades.js and handed to the fight).
+  // The engine does not care where they came from; it only has to look in two
+  // places instead of one, which is what this pair of helpers is for. Everything
+  // below - speed, the damage multipliers, the ticks, the switches - then reads a
+  // passive and an applied status through the identical lookup.
+  const passivesOf = (u) => (u && u.passives) || [];
+  // Every row this unit is under, applied and granted alike, each named once.
+  function carriedIds(u) {
+    const out = [];
+    for (const id in (carried(u) || {})) out.push(id);
+    for (const id of passivesOf(u)) if (!out.includes(id)) out.push(id);
+    return out;
+  }
+  // One field of one row this unit is under, with the ability's own overrides
+  // folded in. A passive has no overrides - nobody handed it a buffX - so it
+  // simply reads the table.
   function statusField(u, id, field) {
     const def = statusDef(id);
-    if (!def || !carried(u) || !u.status[id]) return undefined;
-    const over = u.status[id].over;
+    if (!def) return undefined;
+    const slot = carried(u) && u.status[id];
+    if (!slot && !passivesOf(u).includes(id)) return undefined;
+    const over = slot && slot.over;
     return over && over[field] !== undefined ? over[field] : def[field];
   }
   // Additive fields (speed), multiplicative ones (damageDealt / damageTaken) and
-  // plain switches (blocks, skipsTurn), summed / multiplied over the whole bag.
+  // plain switches (blocks, skipsTurn), summed / multiplied over everything held.
   function statusSum(u, field) {
     let n = 0;
-    for (const id in (carried(u) || {})) { const v = statusField(u, id, field); if (typeof v === 'number') n += v; }
+    for (const id of carriedIds(u)) { const v = statusField(u, id, field); if (typeof v === 'number') n += v; }
     return n;
   }
   function statusMul(u, field) {
     let n = 1;
-    for (const id in (carried(u) || {})) { const v = statusField(u, id, field); if (typeof v === 'number') n *= v; }
+    for (const id of carriedIds(u)) { const v = statusField(u, id, field); if (typeof v === 'number') n *= v; }
     return n;
   }
-  // The id of the first carried status with this switch on (null = none).
+  // The id of the first held row with this switch on (null = none).
   function statusWith(u, field) {
-    for (const id in (carried(u) || {})) { if (statusField(u, id, field)) return id; }
+    for (const id of carriedIds(u)) { if (statusField(u, id, field)) return id; }
     return null;
+  }
+  // IMPACT damage - a crash into a wall or a body, a fall off a ledge, being
+  // crushed between two things. It goes through here rather than straight to
+  // sHit so that one row (`ignoresImpact`, see the status table) can wave a kind
+  // of it away for whoever holds it.
+  function sImpact(st, ent, amt, label) {
+    if (ent && ent.uid !== undefined && ent.hp > 0) {
+      for (const id of carriedIds(ent)) {
+        const list = statusField(ent, id, 'ignoresImpact');
+        if (Array.isArray(list) && list.includes(label)) {
+          if (!st.sim) {
+            const v = statusView(ent, id);
+            floater(ent.pos, v.icon, v.color);
+            blog(ent.name + ' shrugs off the ' + label);
+          }
+          return;
+        }
+      }
+    }
+    sHit(st, ent, amt, label);
   }
   // Icon and colour to show. Every status is its own row, so there is nothing to
   // work out here - a slow is not a haste wearing a different face.
@@ -277,7 +322,15 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   }
   // Puts a status on a unit (re-applying refreshes it rather than stacking).
   // buffX is the ability's number; what it MEANS is the table's business.
-  function applyStatus(st, u, id, buffX) {
+  // `fresh` marks a status that was put on OUTSIDE anybody's turn - at battle
+  // setup. Without it a one-turn buff granted at setup is dead before it is ever
+  // used: startPlayerPhase ticks every party unit at the top of the FIRST round
+  // too, so `turns: 1` would count down to nothing before the player could act
+  // (and the same on an ambush, where the enemies move first). A fresh slot skips
+  // its carrier's next tick instead of counting down, so "starts each fight
+  // enraged, one turn" means exactly one usable turn - for either side, ambush or
+  // not, with no phase-specific special case anywhere.
+  function applyStatus(st, u, id, buffX, fresh = false) {
     const def = statusDef(id);
     if (!def || !u || u.uid === undefined || u.hp <= 0) return;
     // buffX lines up, in order, with the knobs this status uses (config/abilities.js).
@@ -291,7 +344,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     u.status[id] = {
       turns: over.turns !== undefined ? over.turns : (def.turns || 0),
       charges: over.charges !== undefined ? over.charges : (def.charges || 0),
-      over,
+      over, fresh: !!fresh,
     };
     if (st.sim) (st.rec.applied[u.uid] ??= {})[id] = 1;
     else { const v = statusView(u, id); floater(u.pos, v.icon, v.color); }
@@ -319,9 +372,11 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // down. Damage first, so "3 turns of poison" really deals its damage 3 times.
   // This happens even on a turn the unit is about to lose to a stun.
   function tickStatuses(u) {
-    if (!carried(u) || u.hp <= 0) return;
+    if (u.hp <= 0) return;
     const st = liveSt();
-    for (const id of Object.keys(u.status)) {
+    // The ticks run over everything held, so a PASSIVE that heals every turn
+    // (regeneration) works through the very same line a timed regen does.
+    for (const id of carriedIds(u)) {
       const dmg = statusField(u, id, 'tickDamage') || 0;
       const heal = statusField(u, id, 'tickHeal') || 0;
       if (dmg > 0) { st.atk = null; sHit(st, u, dmg, statusDef(id).name); }
@@ -329,8 +384,13 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     }
     flushDeaths(st);
     if (u.hp <= 0) return;
-    for (const id of Object.keys(u.status)) {
+    // Only APPLIED statuses have a clock to run down. A passive has no slot, and
+    // nothing takes it off.
+    for (const id of Object.keys(carried(u) || {})) {
       const slot = u.status[id];
+      // A status applied at battle setup gets its first tick for free - see
+      // applyStatus. One tick, once: the flag is cleared as it is honoured.
+      if (slot.fresh) { slot.fresh = false; continue; }
       if (!(slot.turns > 0)) continue;
       slot.turns -= 1;
       if (slot.turns <= 0) {
@@ -513,12 +573,12 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     const nk = addK(k, DIRS[dir]);
     if (isVoid(nk)) { sVoid(st, ent); return; }
     const wall = !tilePass(nk) || (stH(st, nk) - stH(st, k) >= 2);
-    if (wall) { sHit(st, ent, 2, 'crash'); return; }
+    if (wall) { sImpact(st, ent, 2, 'crash'); return; }
     const occ = sUnitAt(st, nk) || sBarrier(st, nk);
     const drop = stH(st, k) - stH(st, nk);
     if (occ) {
       if (drop >= 2) {
-        sHit(st, occ, 2, 'crush'); sStun(st, occ);
+        sImpact(st, occ, 2, 'crush'); sStun(st, occ);
         const saved = occ.uid !== undefined && st.shieldUsed && st.shieldUsed.has(occ.uid);
         if (occ.hp > 0 && !saved) {
           const nk2 = addK(nk, DIRS[dir]);
@@ -533,18 +593,18 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
         }
         const blocked = sUnitAt(st, nk) || sBarrier(st, nk);
         if (blocked) {
-          sHit(st, ent, 2, 'crash');
+          sImpact(st, ent, 2, 'crash');
         } else if (ent.hp > 0) {
           sMoveTo(st, ent, nk);
-          sHit(st, ent, 2, 'fall'); sStun(st, ent);
+          sImpact(st, ent, 2, 'fall'); sStun(st, ent);
           if (isU) sArrive(st, ent, depth);
         }
       } else {
-        sHit(st, ent, 2, 'crash'); sHit(st, occ, 2, 'crash');
+        sImpact(st, ent, 2, 'crash'); sImpact(st, occ, 2, 'crash');
       }
     } else {
       sMoveTo(st, ent, nk);
-      if (drop >= 2) { sHit(st, ent, 2, 'fall'); sStun(st, ent); }
+      if (drop >= 2) { sImpact(st, ent, 2, 'fall'); sStun(st, ent); }
       if (isU && ent.hp > 0) sArrive(st, ent, depth);
     }
   }
@@ -552,7 +612,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     const k = ent.pos, nk = addK(k, DIRS[dir]);
     if (!tilePass(nk) || (stH(st, nk) - stH(st, k) >= 2)) return;
     const occ = sUnitAt(st, nk) || sBarrier(st, nk);
-    if (occ) sHit(st, occ, 2, 'crash');
+    if (occ) sImpact(st, occ, 2, 'crash');
   }
   function flushDeaths(st, depth = 0) {
     let guard = 0;
@@ -1415,9 +1475,25 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // enemy phase back until start() is called. A normal fight opens with
   // startPlayerPhase(), which animates nothing, so it never needs deferring.
   let opened = false;
+  // The 'battleStart' moment. It fires once, here, before either side has moved,
+  // so it lands the same way whether the fight opens normally or with an ambush -
+  // and the statuses go on FRESH, which is what buys their carrier a real first
+  // turn with them (see applyStatus).
+  function fireBattleStart() {
+    const st = liveSt();
+    for (const u of sb.units) {
+      if (u.hp <= 0) continue;
+      for (const e of u.applies ?? []) {
+        if (e.when !== 'battleStart') continue;
+        if (e.status === 'stun') { sStun(st, u); continue; }
+        if (statusDef(e.status)) applyStatus(st, u, e.status, e.x, true);
+      }
+    }
+  }
   function start() {
     if (opened) return;
     opened = true;
+    fireBattleStart();
     if (sb.ambush) { blog('AMBUSH - the enemy strikes first'); startEnemyPhase(); }
     else startPlayerPhase();
   }

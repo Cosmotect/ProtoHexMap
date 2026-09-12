@@ -79,22 +79,30 @@ export const UNITS = {
     // numbers and combat stats together, exactly like a bestiary row. (Until
     // 2026-09-06 the combat half lived in a UNIT_COMBAT table over in
     // config/abilities.js, so every character was written twice.)
+    //   story     the character's few lines in the roster's detail window. It lives
+    //             HERE so a character invented in the Settings window can have one,
+    //             and so that renaming a character cannot silently lose it - which
+    //             is exactly what happened when Vanguard became Gorm and the locale
+    //             key `unit.Vanguard.story` stopped matching anybody. A locale may
+    //             still override it with a `unit.<Name>.story` key: the same
+    //             arrangement tn() uses for names - the config is the source, a
+    //             translation wins where one exists.
     //   speed     move points per turn (an uphill step costs 2)
     //   flying    ignores height and glides over anything
     //   abilities ids from config/abilities.js - exactly TWO per character: each
     //             drives its own upgrade tree (config/upgrades.js), and the roster
     //             window and the party panel are laid out for the pair.
     roster: [
-      { name: 'Gorm', icon: '🪲', hp: 40, speed: 3, flying: false, abilities: ['clawSwipe', 'chargeHeadbutt'] },
-      { name: 'Archer', icon: '🏹', hp: 28, speed: 4, flying: false, abilities: ['volley', 'lance'] },
-      { name: 'Mystic', icon: '🔮', hp: 22, speed: 3, flying: false, abilities: ['burst', 'mend'] },
-      { name: 'Warden', icon: '⚔️', hp: 36, speed: 4, flying: false, abilities: ['strike', 'guard'] },
-      { name: 'Stonestep', icon: '🗿', hp: 52, speed: 3, flying: false, abilities: ['strike', 'shove'] },
-      { name: 'Emberwright', icon: '🔥', hp: 24, speed: 3, flying: false, abilities: ['burst', 'strike'] },
-      { name: 'Lampbearer', icon: '🏮', hp: 30, speed: 4, flying: false, abilities: ['mend', 'bolt'] },
-      { name: 'Skywatcher', icon: '🪶', hp: 20, speed: 5, flying: true, abilities: ['volley', 'lance'] },
-      { name: 'Tinker', icon: '🔧', hp: 28, speed: 4, flying: false, abilities: ['shove', 'bolt'] },
-      { name: 'Duskblade', icon: '🗡️', hp: 16, speed: 5, flying: false, abilities: ['strike', 'lance'] },
+      { name: 'Gorm', icon: '🪲', hp: 40, speed: 3, flying: false, abilities: ['clawSwipe', 'chargeHeadbutt'], story: 'Gorm is as tough as he is not patient. His clawed swipes can lethal close up, and he knows how to get close up.' },
+      { name: 'Archer', icon: '🏹', hp: 28, speed: 4, flying: false, abilities: ['volley', 'lance'], story: 'Counts distance the way merchants count coin. Keeps one arrow set aside for an old debt and never says whose name is on it.' },
+      { name: 'Mystic', icon: '🔮', hp: 22, speed: 3, flying: false, abilities: ['burst', 'mend'], story: 'Talks to the ember at the heart of things. What the fire answers is rarely comforting and has never yet been wrong.' },
+      { name: 'Warden', icon: '⚔️', hp: 36, speed: 4, flying: false, abilities: ['strike', 'guard'], story: 'Held a border fort nobody else wanted, alone, for nine years. Still checks the horizon twice before sleeping.' },
+      { name: 'Stonestep', icon: '🗿', hp: 52, speed: 3, flying: false, abilities: ['strike', 'shove'], story: 'Slow as a landslide and exactly as arguable. Where Stonestep stands, the line holds; the rest is other people\'s hurry.' },
+      { name: 'Emberwright', icon: '🔥', hp: 24, speed: 3, flying: false, abilities: ['burst', 'strike'], story: 'Apprenticed at the Great Forge until an experiment ate the workshop. Insists the fire simply agreed with the design.' },
+      { name: 'Lampbearer', icon: '🏮', hp: 30, speed: 4, flying: false, abilities: ['mend', 'bolt'], story: 'Walks ahead in the dark with the lamp held high, humming to it. Whatever waits outside the light has learned to wait longer.' },
+      { name: 'Skywatcher', icon: '🪶', hp: 20, speed: 5, flying: true, abilities: ['volley', 'lance'], story: 'Grew up on the rim cliffs reading weather and worse. Sees the whole field the way birds see a harvest.' },
+      { name: 'Tinker', icon: '🔧', hp: 28, speed: 4, flying: false, abilities: ['shove', 'bolt'], story: 'Can fix a cart, a lock or a bad plan, in that order of difficulty. The pockets rattle with parts for machines that do not exist yet.' },
+      { name: 'Duskblade', icon: '🗡️', hp: 16, speed: 5, flying: false, abilities: ['strike', 'lance'], story: 'Arrives without footsteps and leaves without goodbyes. The blade was always fast; the trust took years longer.' },
     ],
     // The last resort for a unit that is in neither the roster nor the bestiary
     // (a hand-authored scenario def that names something unknown).

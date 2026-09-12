@@ -55,7 +55,7 @@ const cssColor = (v) => (typeof v === 'string' ? v : `#${Number(v ?? 0).toString
 // back, anything else goes back as the 0xrrggbb number that config file had.
 const colorShapeAttr = (v) => (typeof v === 'string' ? ' data-cshape="css"' : '');
 const readColor = (el) => (el.dataset.cshape === 'css' ? el.value : parseInt(el.value.slice(1), 16));
-const NEW_ROSTER = () => ({ name: 'New character', icon: '🙂', hp: 24, speed: 4, flying: false, abilities: ['strike'] });
+const NEW_ROSTER = () => ({ name: 'New character', icon: '🙂', hp: 24, speed: 4, flying: false, abilities: ['strike'], story: '' });
 // No `init` column: turn order inside a fight is an ENEMY-only number (the
 // engine's enemy queue sorts by it), so a character never had one that meant
 // anything. Removed 2026-09-06.
@@ -66,6 +66,8 @@ const ROSTER_COLS = [
   { key: 'speed', kind: 'number', w: 44 },
   { key: 'flying', kind: 'bool' },
   { key: 'abilities', kind: 'idlist', w: 130, valid: () => Object.keys(ABILITIES) },
+  // The character's few lines in the roster's detail window (config/units.js).
+  { key: 'story', kind: 'text', w: 260 },
 ];
 // Keys of `battle` the hand-built editors own; the leftovers render as an
 // ordinary group of numbers so nothing silently disappears from the tab.

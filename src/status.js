@@ -19,21 +19,27 @@ import { STATUSES, statusKnobs } from './config/abilities.js';
 // What one unit is carrying right now: [{ id, icon, color, turns, amount }], in
 // the order the table lists them so the badges never jump around.
 export function statusesFor(unit) {
-  if (!unit || !unit.status) return [];
+  if (!unit) return [];
+  // PASSIVES sit in this row alongside the applied statuses, on purpose: they are
+  // rows of the same table and they read the same way. They carry no slot, so no
+  // clock and no charge count - the badge is just the icon.
+  const passives = new Set(unit.passives ?? []);
+  if (!unit.status && !passives.size) return [];
   const out = [];
   for (const [id, def] of Object.entries(STATUSES)) {
-    const slot = unit.status[id];
-    if (!slot) continue;
+    const slot = (unit.status || {})[id];
+    if (!slot && !passives.has(id)) continue;
     const knob = statusKnobs(def)[0];
-    const over = slot.over || {};
+    const over = (slot && slot.over) || {};
     const stored = knob === undefined ? null : (over[knob] !== undefined ? over[knob] : def[knob]);
     const amount = typeof stored === 'number' ? Math.abs(stored) : null;
     out.push({
       id,
       icon: def.icon,
       color: def.color,
-      turns: Number(slot.turns) || 0,
-      charges: Number(slot.charges) || 0,
+      turns: Number(slot && slot.turns) || 0,
+      charges: Number(slot && slot.charges) || 0,
+      passive: !slot,
       amount,
     });
   }

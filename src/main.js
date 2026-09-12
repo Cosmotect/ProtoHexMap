@@ -12,7 +12,7 @@ import { createSettings, deepClone } from './settings.js';
 import { createCombatCinematic } from './local/transition.js';
 import { createBattle } from './local/battle/engine.js';
 import { COMBAT_CONFIG } from './config/abilities.js';
-import { resolvedAbilitiesFor, availableUpgrades } from './upgrades.js';
+import { resolvedAbilitiesFor, availableUpgrades, passivesFor, appliesFor } from './upgrades.js';
 import { recipeFromCode } from './local/mapcode.js';
 import { makeEnemyOfType } from './battle.js';
 import { t, tn, initLanguage, applyStaticTexts, onLanguageChange } from './i18n.js';
@@ -262,7 +262,11 @@ function beginInteractiveBattle(ctx, placementOverride = null) {
   // the end. A party unit fights with its RESOLVED abilities - the base defs
   // plus every upgrade tree node it has unlocked (src/upgrades.js).
   const partyDefs = game.state.party
-    .map((u, i) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.maxHp, partyIndex: i, alive: u.alive, abilityDefs: resolvedAbilitiesFor(u) }))
+    // `passives` is worked out HERE, once per fight, from what the character is
+    // right now - unlocked upgrade nodes, a carried relic, a world-map aura it was
+    // standing in. Deriving it per fight rather than storing it on the unit is what
+    // makes a passive go away by itself when its source does (src/upgrades.js).
+    .map((u, i) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.maxHp, partyIndex: i, alive: u.alive, abilityDefs: resolvedAbilitiesFor(u), passives: passivesFor(u), applies: appliesFor(u) }))
     .filter((u) => u.alive && u.hp > 0);
   // shape and colour ride along from the bestiary entry (src/battle.js) so the
   // arena can build the right body for each enemy.
@@ -276,6 +280,10 @@ function beginInteractiveBattle(ctx, placementOverride = null) {
     shape: e.shape, color: e.color, typeId: e.typeId,
     intellect: e.intellect,   // its INTELLECT CLASS - how well it plays its turn
     abilityIds: e.abilityIds, init: e.init, speed: e.speed, flying: e.flying,
+    // A bestiary row may carry `passives` / `applies` exactly as a character does,
+    // so "this creature is always armoured" and "this one enters raging" are
+    // config, not code.
+    passives: e.passives, applies: e.applies,
   }));
   // The arena is holding the party back so the player can place them: park the
   // fight here and hand over to the deployment step. It runs when the camera

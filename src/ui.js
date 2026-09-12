@@ -638,6 +638,19 @@ export function createUI(config, handlers) {
     });
     root.addEventListener('pointerleave', () => setHovered(null));
   }
+  // Clicking an enemy's CARD does what clicking its body in the arena does:
+  // inspects it, which draws where it could walk. The card and the token are two
+  // views of one creature, so they had better answer the same click - and the
+  // strip is often the easier of the two to hit. The engine's own guards are
+  // mirrored here, so a click during the enemy phase or mid-animation is ignored
+  // just as it is on the board.
+  els.enemyRoster.addEventListener('click', (e) => {
+    const card = e.target.closest('.unit[data-enemy]');
+    if (!card || !battleRef) return;
+    const sb = battleRef.state;
+    if (sb.over || sb.busy || sb.phase !== 'player') return;
+    battleRef.inspect(card.getAttribute('data-enemy'));
+  });
   function setHovered(next) {
     if (next?.kind === hovered?.kind && next?.id === hovered?.id) return;
     hovered = next;
@@ -962,6 +975,22 @@ export function createUI(config, handlers) {
   // Portrait + backstory on the left; one section per ability with its name,
   // description and upgrade tree. `unit` (a live party member, when the
   // character is in the party) supplies the unlocked nodes to light up.
+  // A character's few lines. The text lives on its ROSTER ROW (config/units.js),
+  // so one invented in the Settings window has one too and renaming a character
+  // cannot lose it; a locale may override it with `unit.<Name>.story`, exactly the
+  // way tn() lets a locale override a name.
+  //
+  // Looked up BY NAME rather than read off the object handed in: this window is
+  // opened with a LIVE PARTY MEMBER in one place and a config row in another, and
+  // only the config row carries the text. Same trick as combatStatsFor.
+  function unitStory(def) {
+    if (!def) return '';
+    const key = `unit.${def.name}.story`;
+    if (hasKey(key)) return t(key);
+    const base = String(def.name ?? '').replace(/ \d+$/, '');
+    const row = (config.party?.roster ?? []).find((r) => r.name === base);
+    return (row && row.story) || def.story || '';
+  }
   function renderUnitDetail(def, unit = null) {
     const el = $('unit-detail');
     if (!def) { el.innerHTML = ''; return; }
@@ -980,7 +1009,7 @@ export function createUI(config, handlers) {
         <div class="ud-portrait">${def.icon}</div>
         <div class="ud-name">${escapeHtml(tn(def.name))}</div>
         <div class="ud-hp muted">${t('roster.hp', { n: def.hp })}</div>
-        <div class="ud-story">${escapeHtml(hasKey(`unit.${def.name}.story`) ? t(`unit.${def.name}.story`) : (def.story ?? ''))}</div>
+        <div class="ud-story">${escapeHtml(unitStory(def))}</div>
       </div>
       <div class="ud-abilities">${sections}</div>`;
   }

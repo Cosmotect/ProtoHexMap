@@ -433,17 +433,11 @@ export const en = {
   // defining upgrade.<ability>.<node>.name / .desc - see ru.js, and upgradeInfo
   // in src/upgrades.js.
 
-  // ----- character backstories (the roster's detail window) ----------------------
-  'unit.Vanguard.story': 'First through every door and last to leave it. That shield arm has stopped more than blades: doubts, routs, one small avalanche.',
-  'unit.Archer.story': 'Counts distance the way merchants count coin. Keeps one arrow set aside for an old debt and never says whose name is on it.',
-  'unit.Mystic.story': 'Talks to the ember at the heart of things. What the fire answers is rarely comforting and has never yet been wrong.',
-  'unit.Warden.story': 'Held a border fort nobody else wanted, alone, for nine years. Still checks the horizon twice before sleeping.',
-  'unit.Stonestep.story': 'Slow as a landslide and exactly as arguable. Where Stonestep stands, the line holds; the rest is other people\'s hurry.',
-  'unit.Emberwright.story': 'Apprenticed at the Great Forge until an experiment ate the workshop. Insists the fire simply agreed with the design.',
-  'unit.Lampbearer.story': 'Walks ahead in the dark with the lamp held high, humming to it. Whatever waits outside the light has learned to wait longer.',
-  'unit.Skywatcher.story': 'Grew up on the rim cliffs reading weather and worse. Sees the whole field the way birds see a harvest.',
-  'unit.Tinker.story': 'Can fix a cart, a lock or a bad plan, in that order of difficulty. The pockets rattle with parts for machines that do not exist yet.',
-  'unit.Duskblade.story': 'Arrives without footsteps and leaves without goodbyes. The blade was always fast; the trust took years longer.',
+  // ----- character backstories -------------------------------------------------
+  // The English text lives on the roster row in src/config/units.js (`story`), so a
+  // character invented in the Settings window can have one and renaming a character
+  // cannot lose it. A TRANSLATION still belongs here as `unit.<Name>.story` - a key,
+  // where one exists, wins over the config.
 
   // ----- flavour (lore) lines shown in the encounter windows -------------------
   // One is picked per window (seeded). game.js FLAVOUR_POOL says how many each kind has.
