@@ -14,32 +14,65 @@
 // as the stored number: the table writes `slow` as speed -1, but every locale
 // string is phrased "moves {n} tiles less", so the sign lives in the status's
 // name and the badge shows 1.
-import { STATUSES, statusKnobs } from './config/abilities.js';
+import { STATUSES, statusKnobs, isPermanent } from './config/abilities.js';
+import { t, hasKey } from './i18n.js';
 
-// What one unit is carrying right now: [{ id, icon, color, turns, amount }], in
-// the order the table lists them so the badges never jump around.
-export function statusesFor(unit) {
-  if (!unit) return [];
-  // PASSIVES sit in this row alongside the applied statuses, on purpose: they are
-  // rows of the same table and they read the same way. They carry no slot, so no
-  // clock and no charge count - the badge is just the icon.
-  const passives = new Set(unit.passives ?? []);
-  if (!unit.status && !passives.size) return [];
+// What a status is CALLED and what it DOES, ready to show, with {n} filled in.
+// The row's own `name` / `desc` (config/abilities.js) are the source; a locale
+// may override either with status.<id>.name / .desc, which is how the Russian
+// table translates them. Never the raw key: printing "status.enraged.name" at
+// the player is what happened when the lookup had no fallback (fixed 2026-09-12).
+// `hs` is a row from statusesFor (it carries the amount) or a bare status id.
+export function statusInfo(hs) {
+  const id = typeof hs === 'string' ? hs : hs.id;
+  const def = STATUSES[id] || {};
+  // A bare id reads the amount off the table (the row's first knob, as a size),
+  // exactly as statusesFor does for a carried one without overrides.
+  let amount = typeof hs === 'string' ? null : hs.amount;
+  if (typeof hs === 'string') {
+    const knob = statusKnobs(def)[0];
+    amount = knob !== undefined && typeof def[knob] === 'number' ? Math.abs(def[knob]) : null;
+  }
+  const n = amount == null ? '' : String(amount);
+  const pick = (field) => {
+    const key = `status.${id}.${field}`;
+    if (hasKey(key)) return t(key, { n });
+    return String(def[field] ?? '').replace(/\{n\}/g, n);
+  };
+  return { name: pick('name') || id, desc: pick('desc'), icon: def.icon ?? '', color: def.color ?? '' };
+}
+
+// What one unit is carrying right now: [{ id, icon, color, turns, charges,
+// amount, permanent }], in the order the table lists them so the badges never
+// jump around. A PASSIVE that was put on at battle start is in the bag like any
+// other status and comes out of here the same way; what sets it apart, if
+// anything, is the row itself.
+//
+// `permanent` marks a status nothing can end (no clock, nothing spends it - the
+// always-on kind of passive: Padded, Regenerating). The badge rows leave those
+// OUT by default: a slot on the unit card is for something the player has to
+// keep an eye on, and a thing that can never change is not that. The party view
+// will list them in full. Pass { permanent: true } to get everything.
+export function statusesFor(unit, opts) {
+  if (!unit || !unit.status) return [];
+  const withPermanent = !!(opts && opts.permanent);
   const out = [];
   for (const [id, def] of Object.entries(STATUSES)) {
-    const slot = (unit.status || {})[id];
-    if (!slot && !passives.has(id)) continue;
+    const slot = unit.status[id];
+    if (!slot) continue;
+    const permanent = isPermanent(def, slot);
+    if (permanent && !withPermanent) continue;
     const knob = statusKnobs(def)[0];
-    const over = (slot && slot.over) || {};
+    const over = slot.over || {};
     const stored = knob === undefined ? null : (over[knob] !== undefined ? over[knob] : def[knob]);
     const amount = typeof stored === 'number' ? Math.abs(stored) : null;
     out.push({
       id,
       icon: def.icon,
       color: def.color,
-      turns: Number(slot && slot.turns) || 0,
-      charges: Number(slot && slot.charges) || 0,
-      passive: !slot,
+      turns: Number(slot.turns) || 0,
+      charges: Number(slot.charges) || 0,
+      permanent,
       amount,
     });
   }

@@ -4,6 +4,7 @@ import { CONFIG } from './config.js';
 import { Game } from './game.js';
 import { MapRenderer } from './render.js';
 import { createUI } from './ui.js';
+import { createPartyView } from './partyview.js';
 import { resolveSeed } from './rng.js';
 import { DIRECTIONS, axialToPlane } from './hex.js';
 import { createTutorial } from './tutorial.js';
@@ -12,7 +13,7 @@ import { createSettings, deepClone } from './settings.js';
 import { createCombatCinematic } from './local/transition.js';
 import { createBattle } from './local/battle/engine.js';
 import { COMBAT_CONFIG } from './config/localmap.js';
-import { resolvedAbilitiesFor, availableUpgrades, passivesFor, appliesFor } from './upgrades.js';
+import { resolvedAbilitiesFor, availableUpgrades, passivesFor } from './upgrades.js';
 import { recipeFromCode } from './local/mapcode.js';
 import { makeEnemyOfType } from './battle.js';
 import { t, tn, initLanguage, applyStaticTexts, onLanguageChange } from './i18n.js';
@@ -266,7 +267,7 @@ function beginInteractiveBattle(ctx, placementOverride = null) {
     // right now - unlocked upgrade nodes, a carried relic, a world-map aura it was
     // standing in. Deriving it per fight rather than storing it on the unit is what
     // makes a passive go away by itself when its source does (src/upgrades.js).
-    .map((u, i) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.maxHp, partyIndex: i, alive: u.alive, abilityDefs: resolvedAbilitiesFor(u), passives: passivesFor(u), applies: appliesFor(u) }))
+    .map((u, i) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.maxHp, partyIndex: i, alive: u.alive, abilityDefs: resolvedAbilitiesFor(u), passives: passivesFor(u) }))
     .filter((u) => u.alive && u.hp > 0);
   // shape and colour ride along from the bestiary entry (src/battle.js) so the
   // arena can build the right body for each enemy.
@@ -280,10 +281,10 @@ function beginInteractiveBattle(ctx, placementOverride = null) {
     shape: e.shape, color: e.color, typeId: e.typeId,
     intellect: e.intellect,   // its INTELLECT CLASS - how well it plays its turn
     abilityIds: e.abilityIds, init: e.init, speed: e.speed, flying: e.flying,
-    // A bestiary row may carry `passives` / `applies` exactly as a character does,
-    // so "this creature is always armoured" and "this one enters raging" are
-    // config, not code.
-    passives: e.passives, applies: e.applies,
+    // A bestiary row may carry `passives` exactly as an upgrade node does, so
+    // "this creature is always armoured" and "this one enters raging" are
+    // config, not code. Still in their written form here; the engine parses them.
+    passives: e.passives,
   }));
   // The arena is holding the party back so the player can place them: park the
   // fight here and hand over to the deployment step. It runs when the camera
@@ -350,7 +351,7 @@ function beginInteractiveBattle(ctx, placementOverride = null) {
     // the field alive, so it is not in lastDeathSpots and (when loot exists) must
     // not drop any. The fight can still be won by everyone running.
     onUnitFlee: (uid, done) => view.vanishToken(uid, done),
-    onChange: () => { view.syncBattle(); ui.updateBattle(); syncPartyPanel(); },
+    onChange: () => { view.syncBattle(); ui.updateBattle(); syncPartyPanel(); partyView.refresh(); },
     onFloater: (k, text, color) => view.addFloater(k, text, color),
     onLog: () => {},   // the floaters carry the story; a combat log can come later
     onAnim: (anim, done) => view.runMoveAnim(anim, done),
@@ -536,9 +537,20 @@ function endMapPreview() {
   cinematic.flyOut({});
 }
 
+// The party view (TAB). It reads the run and the fight through the two getters
+// and never holds either, so it is as current as the moment it is opened.
+const partyView = createPartyView({ config: CONFIG, getGame: () => game, getBattle: () => battle });
+window.__partyView = partyView;   // for automated tests
+
 ui = createUI(CONFIG, {
   isInputBlocked: () => tutorial.isBlocking(),
-  isSubWindowOpen: () => settings.isOpen(),
+  isSubWindowOpen: () => settings.isOpen() || partyView.isOpen(),
+  onTogglePartyView: () => {
+    // Not over the start screen's roster or the settings window: one window at a time.
+    if (partyView.isOpen()) { partyView.close(); ui.updateBlur(); return; }
+    if (settings.isOpen() || ui.rosterOpen() || !game) return;
+    partyView.open(); ui.updateBlur();
+  },
   // The arena, for the party panel's pointer line: it needs to project a unit's
   // body into screen space, and only the local view knows where the bodies are.
   getLocalView: () => (cinematic.isActive() ? cinematic.localView : null),
@@ -546,6 +558,7 @@ ui = createUI(CONFIG, {
   onMapCodePreview: () => openMapCodeDialog(),
   onEscape: () => {
     if (mapPreview) { endMapPreview(); return; }
+    if (partyView.isOpen()) { partyView.close(); ui.updateBlur(); return; }
     if (settings.isOpen()) { settings.close(); ui.updateBlur(); }
   },
   onDialogClosed: () => {

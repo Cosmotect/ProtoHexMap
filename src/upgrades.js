@@ -11,7 +11,7 @@
 //  No game state lives here - pure functions over the config tables, so the
 //  same code serves the world map, the combat engine and the UI.
 // =====================================================================
-import { ABILITIES, ABILITY_UPGRADES, STATUSES, grantCheck } from './config/abilities.js';
+import { ABILITIES, ABILITY_UPGRADES, parsePassive } from './config/abilities.js';
 import { combatStatsFor } from './config/entities.js';
 import { t, hasKey } from './i18n.js';
 import { tc } from './text.js';
@@ -148,13 +148,13 @@ function auditUpgrades() {
 }
 try { if (import.meta.env?.DEV) auditUpgrades(); } catch { /* not a Vite build */ }
 
-// { abilityId: resolved def } for every ability the unit knows - what the
-// combat engine fights with.
-// The PASSIVES a unit is under. Derived, never stored: recomputed from what the
-// unit is right now, so nothing has to remember to take one away. Today that is
-// the `grants` of its unlocked upgrade nodes; a relic it carries and a world-map
+// The PASSIVES a unit is under, as [{ status, when, buffX }] (see PASSIVES in
+// config/abilities.js). Derived, never stored: recomputed from what the unit is
+// right now, so nothing has to remember to take one away. Today that is the
+// `passives` of its unlocked upgrade nodes; a relic it carries and a world-map
 // aura it stands in are the next two sources and slot in here, with no change to
-// anything downstream.
+// anything downstream. (An ENEMY's passives come straight off its bestiary row -
+// see makeEnemyOfType in src/battle.js - and the engine parses them the same way.)
 //
 // Worked out when a FIGHT STARTS (main.js hands the list to createBattle) and
 // fixed for its duration - none of the three sources can change mid-fight, and
@@ -162,41 +162,13 @@ try { if (import.meta.env?.DEV) auditUpgrades(); } catch { /* not a Vite build *
 // drop the passive by itself.
 export function passivesFor(unit) {
   const out = [];
-  const add = (id) => {
-    if (!id || out.includes(id)) return;
-    const bad = grantCheck(id);
-    // A row that is spent by use cannot be a passive: say so loudly rather than
-    // hand the engine something it will try to consume.
-    if (bad) { console.warn('passive refused:', bad); return; }
-    out.push(id);
-  };
-  const unlocked = new Set(unit?.upgrades ?? []);
-  for (const abilityId of unitAbilityIds(unit?.name)) {
-    const tree = ABILITY_UPGRADES[abilityId];
-    if (!tree) continue;
-    for (const [nodeId, node] of Object.entries(tree)) {
-      if (!unlocked.has(upgradeRef(abilityId, nodeId))) continue;
-      for (const id of node.grants ?? []) add(id);
-    }
-  }
-  // A carried relic grants its own while it is carried (relics are not items yet;
-  // when they are, this is the whole hook).
-  for (const id of unit?.relic?.passives ?? []) add(id);
-  // Standing inside a world-map aura, decided by the world map before the fight.
-  for (const id of unit?.auraPassives ?? []) add(id);
-  return out;
-}
-
-// Statuses this unit gets AT A MOMENT rather than carries forever - the other
-// half of passivesFor, gathered from the same three sources and in the same way.
-// Each entry is { status, when, x }; `when` is a plain string, so a new moment is
-// a new moment and not a new system.
-export function appliesFor(unit) {
-  const out = [];
   const add = (e) => {
-    if (!e || !e.status || !e.when) return;
-    if (!STATUSES[e.status]) { console.warn('applies: no status row named', e.status); return; }
-    out.push({ status: e.status, when: e.when, x: e.x ?? null });
+    const p = parsePassive(e);
+    if (!p) return;
+    // The same row at the same moment twice is one passive: a second copy would
+    // only re-apply what the first already did.
+    if (out.some((q) => q.status === p.status && q.when === p.when)) return;
+    out.push(p);
   };
   const unlocked = new Set(unit?.upgrades ?? []);
   for (const abilityId of unitAbilityIds(unit?.name)) {
@@ -204,11 +176,14 @@ export function appliesFor(unit) {
     if (!tree) continue;
     for (const [nodeId, node] of Object.entries(tree)) {
       if (!unlocked.has(upgradeRef(abilityId, nodeId))) continue;
-      for (const e of node.applies ?? []) add(e);
+      for (const e of node.passives ?? []) add(e);
     }
   }
-  for (const e of unit?.relic?.applies ?? []) add(e);
-  for (const e of unit?.auraApplies ?? []) add(e);
+  // A carried relic brings its own while it is carried (relics are not items yet;
+  // when they are, this is the whole hook).
+  for (const e of unit?.relic?.passives ?? []) add(e);
+  // Standing inside a world-map aura, decided by the world map before the fight.
+  for (const e of unit?.auraPassives ?? []) add(e);
   return out;
 }
 

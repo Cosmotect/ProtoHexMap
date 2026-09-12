@@ -6,14 +6,14 @@ import { t, tn, hasKey } from './i18n.js';
 import { playFatigueStep, playFatigueClear, clearStaggerMs } from './audio.js';
 import { unitAbilityIds, upgradeTree, treeLayout, upgradeRef, upgradeInfo, abilityDesc } from './upgrades.js';
 import { ABILITIES } from './config/abilities.js';
-import { statusesFor, badgeNumber } from './status.js';
+import { statusesFor, badgeNumber, statusInfo } from './status.js';
 import { biomeColorFor } from './map.js';
 
 // A status badge's hover text, in plain text (the overhead plaque builds the
 // same thing as HTML - see statusTipHtml in src/local/localview.js).
 function statusTipText(hs) {
-  const n = hs.amount == null ? '' : String(hs.amount);   // statuses are authored as magnitudes
-  const parts = [t(`status.${hs.id}.name`, { n }), t(`status.${hs.id}.desc`, { n })];
+  const info = statusInfo(hs);
+  const parts = [info.name, info.desc];
   if (hs.turns > 0) parts.push(t('status.turns', { n: hs.turns }));
   return parts.filter(Boolean).join(' - ');
 }
@@ -29,7 +29,7 @@ function abilityTip(id, ab) {
   const nums = [];
   if (ab.damage > 0) nums.push(t('battle.ui.dmg', { n: ab.damage }));
   if (ab.heal > 0) nums.push(t('battle.ui.heal', { n: ab.heal }));
-  if (ab.buff) nums.push(t(`status.${ab.buff === 'crit' ? 'crit' : ab.buff}.name`, { n: ab.buffX }));
+  if (ab.buff) nums.push(statusInfo(ab.buff).name);
   if (nums.length) parts.push(nums.join(', '));
   return parts.join(' - ');
 }
@@ -140,6 +140,9 @@ export function createUI(config, handlers) {
     // The menu is the one thing that always answers; everything else waits while input is blocked.
     if (e.key === 'm' || e.key === 'M') { toggleMenu(); return; }
     if (handlers.isInputBlocked && handlers.isInputBlocked()) return;
+    // TAB opens and closes the party view (src/partyview.js), in and out of a
+    // fight. Swallowed so the browser does not walk the focus ring instead.
+    if (e.key === 'Tab') { e.preventDefault(); handlers.onTogglePartyView && handlers.onTogglePartyView(); return; }
     if (e.key === 'n' || e.key === 'N') handlers.onNewMap();
     if (e.key === 'r' || e.key === 'R') handlers.onRestart();
     if (e.key === 'e' || e.key === 'E') {
@@ -799,7 +802,17 @@ export function createUI(config, handlers) {
     const c = battleRef.curPlayer();
     if (sb.phase === 'player' && c) {
       const hint = c.moveLocked ? t('battle.ui.locked') : t('battle.ui.canMove');
-      els.battleActive.innerHTML = `<b>${c.icon ?? ''} ${escapeHtml(tn(c.name))}</b> <span class="hp">${t('battle.ui.hp', { hp: c.hp, max: c.maxHp })}</span> <span class="muted">${escapeHtml(hint)}</span>`;
+      // The two pools an ability cost can draw on, so a spend is SEEN where it
+      // happens: movement left this round (walk included) and the run's
+      // supplies. The world-map supplies counter is hidden during a fight, which
+      // is how a Mend that did cost a supply looked as if it had not.
+      const moveLeft = battleRef.moveLeft ? battleRef.moveLeft(c) : null;
+      const supplies = battleRef.supplies ? battleRef.supplies() : null;
+      const pools = [
+        moveLeft == null ? '' : `<span class="pool" title="${escapeAttr(t('battle.ui.moveLeft.title'))}">${COST_ICON.move} ${moveLeft}/${battleRef.moveBudget(c)}</span>`,
+        supplies == null ? '' : `<span class="pool" title="${escapeAttr(t('battle.ui.supplies.title'))}">${COST_ICON.supplies} ${supplies}</span>`,
+      ].filter(Boolean).join(' ');
+      els.battleActive.innerHTML = `<b>${c.icon ?? ''} ${escapeHtml(tn(c.name))}</b> <span class="hp">${t('battle.ui.hp', { hp: c.hp, max: c.maxHp })}</span> ${pools} <span class="muted">${escapeHtml(hint)}</span>`;
       // The hotkeys (1 / 2 / 3) address this same list, so the tooltip names the key.
       const slots = battleAbilitySlots();
       els.battleAbilities.innerHTML = c.abilityIds.map((id) => {

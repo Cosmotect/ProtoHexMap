@@ -536,7 +536,8 @@ input:focus-visible {
 /* The health bar. The enemy roster reuses these exact rules, so a bar is drawn
    and read identically in the party panel and above the arena. */
 .unit .bar,
-.enemy-roster .bar {
+.enemy-roster .bar,
+.pv-member .bar {
   position: relative;
   height: 18px;
   border-radius: 4px;
@@ -547,7 +548,8 @@ input:focus-visible {
 }
 
 .unit .bar .fill,
-.enemy-roster .bar .fill {
+.enemy-roster .bar .fill,
+.pv-member .bar .fill {
   position: absolute;
   inset: 0;
   width: 0;
@@ -556,13 +558,15 @@ input:focus-visible {
 
 /* segment lines: one per hpSegment HP, drawn on top of the fill (width set inline) */
 .unit .bar .segs,
-.enemy-roster .bar .segs {
+.enemy-roster .bar .segs,
+.pv-member .bar .segs {
   position: absolute;
   inset: 0;
   background: repeating-linear-gradient(to right, transparent 0, transparent calc(var(--seg) - 2px), rgba(0, 0, 0, 0.55) calc(var(--seg) - 2px), rgba(0, 0, 0, 0.55) var(--seg));
 }
 
-.unit.hurt .bar .fill {
+.unit.hurt .bar .fill,
+.pv-member.hurt .bar .fill {
   background: var(--danger);
 }
 
@@ -2589,6 +2593,16 @@ button.small {
   color: var(--muted);
 }
 
+/* The pools an ability cost draws on - movement left, supplies - beside the
+   active unit's HP, so a spend is visible the moment it happens. */
+.battle-active .pool {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: #d7dce6;
+  margin-left: 8px;
+  white-space: nowrap;
+}
+
 .battle-abilities {
   display: flex;
   gap: 8px;
@@ -2782,4 +2796,237 @@ button.small {
   font: inherit;
   color: inherit;
   z-index: 30;
+}
+/* ----- The party view (TAB) - src/partyview.js ------------------------------
+   Near-fullscreen like the settings window, one column per party member. The
+   3D portraits are drawn by a transparent canvas laid over the whole modal
+   (pointer-events off, so the columns underneath still scroll) through a
+   scissor rectangle per .pv-portrait box; the box itself only paints the
+   gradient the body turns in front of. */
+.party-view {
+  z-index: 54;
+  padding-bottom: 0 !important;
+  background: rgba(4, 6, 12, 0.7);
+}
+
+.pv-box {
+  position: relative;
+  width: min(1180px, 94vw);
+  height: min(860px, 90vh);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  padding: 16px 20px 18px;
+  box-sizing: border-box;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+.pv-top {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.pv-top h2 {
+  margin: 0;
+  color: var(--accent);
+  font-family: var(--display);
+}
+
+.pv-top .muted {
+  flex: 1;
+  font-size: 12px;
+}
+
+.pv-members {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.pv-member {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--accent);
+  background: rgba(8, 11, 22, 0.55);
+  box-sizing: border-box;
+}
+
+.pv-member.dead {
+  opacity: 0.5;
+}
+
+.pv-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pv-icon {
+  font-size: 26px;
+  line-height: 1;
+}
+
+.pv-name {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.pv-stats {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* The portrait box: a gradient the 3D body turns in front of. Its height is the
+   one number the canvas layer measures, so it is fixed rather than fluid. */
+.pv-portrait {
+  flex: none;
+  height: 170px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, #2b3557 0%, #141a2c 55%, #0b0f1a 100%);
+}
+
+.pv-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-right: 4px;
+}
+
+.pv-section {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 9px 11px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.pv-section.empty {
+  color: var(--muted);
+  border-style: dashed;
+}
+
+.pv-sec-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+}
+
+.pv-sec-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.pv-sec-desc {
+  margin-top: 3px;
+}
+
+.pv-sec-nums {
+  margin-top: 3px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: #8fd47a;
+}
+
+.pv-sub {
+  margin-top: 7px;
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.pv-passives .pv-sub,
+.pv-effects .pv-sub {
+  margin-top: 0;
+}
+
+.pv-none {
+  color: var(--muted);
+  font-style: italic;
+  margin-top: 3px;
+}
+
+.pv-ups {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.pv-ups li {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+}
+
+.pv-ups li > div {
+  min-width: 0;
+}
+
+.pv-up-icon,
+.pv-st-icon {
+  flex: none;
+  position: relative;
+  width: 22px;
+  text-align: center;
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.pv-st-icon i {
+  position: absolute;
+  right: -4px;
+  bottom: -3px;
+  font-style: normal;
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.7);
+  border-radius: 6px;
+  padding: 0 3px;
+}
+
+.pv-ability .pv-ups li b {
+  margin-right: 5px;
+}
+
+.pv-up-desc {
+  color: #c9d0dd;
+}
+
+.pv-when,
+.pv-from {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.pv-from {
+  margin-top: 1px;
+}
+
+.pv-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }

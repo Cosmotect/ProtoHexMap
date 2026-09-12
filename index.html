@@ -210,6 +210,23 @@
         </div>
       </div>
 
+      <!-- The party view (TAB): one column per party member - health, a live 3D
+           portrait, abilities with their unlocked upgrades, the relic slot, the
+           passives, and in a fight every status on the unit. src/partyview.js
+           fills it; the canvas draws the three portraits through scissor
+           rectangles over the column boxes. -->
+      <div id="party-view" class="modal party-view hidden">
+        <div class="pv-box">
+          <div class="pv-top">
+            <h2 data-i18n="partyview.title">Party</h2>
+            <span class="muted" data-i18n="partyview.hint">TAB or Esc closes</span>
+            <button id="pv-close" class="small" data-i18n="partyview.close">Close</button>
+          </div>
+          <div id="pv-members" class="pv-members"></div>
+        </div>
+        <canvas id="pv-canvas" class="pv-canvas"></canvas>
+      </div>
+
       <div id="overlay" class="modal hidden">
         <div class="modal-box">
           <h2 id="overlay-title">Run over</h2>

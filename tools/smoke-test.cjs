@@ -291,11 +291,12 @@ fs.mkdirSync(OUT, { recursive: true });
   });
   if (stories.withStory !== stories.rows) problems.push('roster rows without a story: ' + JSON.stringify(stories));
 
-  // ----- passives show as badges beside the statuses --------------------------
-  // A passive is a row of the same table carried a different way, and (the owner's
-  // call) it shares the status row on the unit card. It has no clock and no charge
-  // count, so its badge is the icon alone.
-  const passiveBadges = await page.evaluate(async () => {
+  // ----- permanent statuses stay off the unit card's slots --------------------
+  // A passive sits in the status bag like any status (2026-09-12). The card's
+  // slots are for things the player has to watch, so a row nothing can end (no
+  // clock, nothing spends it - Padded, Regenerating) is left out; the party view
+  // will list those. A row WITH a clock still shows, wherever it came from.
+  const cardSlots = await page.evaluate(async () => {
     const bt = window.__battle, sb = bt.state;
     const u = sb.units.find((x) => !x.isEnemy && x.hp > 0);
     const card = () => {
@@ -303,19 +304,49 @@ fs.mkdirSync(OUT, { recursive: true });
       return cards[u.partyIndex] || cards[0];
     };
     const redraw = async () => { bt.inspect(sb.units.find((x) => x.isEnemy).uid); bt.cancel(); await new Promise((r) => setTimeout(r, 200)); };
+    const count = () => card().querySelectorAll('.u-st:not(.empty)').length;
     await redraw();
-    const before = card().querySelectorAll('.u-st:not(.empty)').length;
-    u.passives = ['collisionImmune', 'regeneration'];
+    const before = count();
+    u.status = { ...(u.status || {}), collisionImmune: { turns: 0, charges: 0, over: {} }, regeneration: { turns: 0, charges: 0, over: {} } };
     await redraw();
-    const after = card().querySelectorAll('.u-st:not(.empty)').length;
-    u.passives = [];
+    const withPermanent = count();
+    u.status.haste = { turns: 2, charges: 0, over: {} };
     await redraw();
-    const cleared = card().querySelectorAll('.u-st:not(.empty)').length;
-    return { before, after, cleared };
+    const withClock = count();
+    delete u.status.collisionImmune; delete u.status.regeneration; delete u.status.haste;
+    await redraw();
+    const cleared = count();
+    return { before, withPermanent, withClock, cleared };
   });
-  if (passiveBadges.after !== passiveBadges.before + 2 || passiveBadges.cleared !== passiveBadges.before) {
-    problems.push('passives did not show as badges on the unit card: ' + JSON.stringify(passiveBadges));
+  if (cardSlots.withPermanent !== cardSlots.before || cardSlots.withClock !== cardSlots.before + 1 || cardSlots.cleared !== cardSlots.before) {
+    problems.push('the unit card did not hide permanent statuses (and only those): ' + JSON.stringify(cardSlots));
   }
+
+  // ----- the party view (TAB) ---------------------------------------------------
+  // One column per member, a live 3D portrait per column, abilities with their
+  // upgrades, passives, and (in a fight) the effects. No raw locale key may leak
+  // through - a status must show its name, never "status.enraged.name".
+  await page.keyboard.press('Tab');
+  await page.waitForTimeout(400);
+  const pv = await page.evaluate(() => {
+    const root = document.getElementById('party-view');
+    const open = root && !root.classList.contains('hidden');
+    const members = root.querySelectorAll('.pv-member').length;
+    const abilities = root.querySelectorAll('.pv-ability').length;
+    const passives = root.querySelectorAll('.pv-passives').length;
+    const effects = root.querySelectorAll('.pv-effects').length;
+    const canvas = document.getElementById('pv-canvas');
+    const rawKeys = (root.textContent.match(/\b(status|partyview|ability|upgrade)\.[a-zA-Z]+\.[a-zA-Z]+/g) || []).length;
+    return { open, members, abilities, passives, effects, canvasW: canvas.width, canvasH: canvas.height, rawKeys };
+  });
+  await page.screenshot({ path: path.join(OUT, '05b-party-view.png') });
+  if (!pv.open || pv.members !== 3 || pv.abilities !== 6 || pv.passives !== 3 || pv.effects !== 3 || pv.canvasW === 0 || pv.rawKeys !== 0) {
+    problems.push('the party view did not open as three full columns: ' + JSON.stringify(pv));
+  }
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+  const pvClosed = await page.evaluate(() => document.getElementById('party-view').classList.contains('hidden'));
+  if (!pvClosed) problems.push('Escape did not close the party view');
 
   // ----- tile tags are config now, and the AI can read what they do ---------
   // Tags were the one piece of arena content that could only be changed by

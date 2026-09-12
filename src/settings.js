@@ -9,7 +9,7 @@
 
 import { t, LANGUAGES, getLanguage, setLanguage } from './i18n.js';
 import { SHAPE_NAMES } from './local/localview.js';
-import { ABILITIES, statusKnobs } from './config/abilities.js';
+import { ABILITIES, statusKnobs, parsePassive, passiveToString } from './config/abilities.js';
 // The intellect classes moved next to the bestiary that hands one to every row
 // (config/entities.js, 2026-09-10; that file itself renamed from units.js on
 // 2026-09-12).
@@ -40,10 +40,18 @@ const BESTIARY_COLS = [
   // The creature's INTELLECT CLASS: which facts it can weigh on its turn.
   { key: 'intellect', kind: 'select', w: 56, options: () => Object.keys(INTELLECT) },
   { key: 'abilities', kind: 'idlist', w: 130, valid: () => Object.keys(ABILITIES) },
+  // The creature's PASSIVES, in their string form: 'regeneration' (at battle
+  // start) or 'enraged@hit' (see PASSIVES in config/abilities.js). An entry the
+  // file wrote as an object with buffX shows as its string form and, if this
+  // cell is edited, is saved back as that string - the override is lost. Red
+  // when an entry names no status row or no known moment.
+  { key: 'passives', kind: 'idlist', w: 130,
+    show: (v) => { const p = parsePassive(v, true); return p ? passiveToString(p) : (typeof v === 'string' ? v : '?'); },
+    check: (v) => !!parsePassive(v, true) },
 ];
 // A brand new creature: deliberately weak and plain, so an unfinished row that
 // finds its way into a fight cannot wreck a run.
-const NEW_ENEMY = () => ({ name: 'New enemy', shape: 'octahedron', color: 0xe2474b, hp: 10, init: 5, speed: 4, flying: false, intellect: 'C', abilities: ['strike'] });
+const NEW_ENEMY = () => ({ name: 'New enemy', shape: 'octahedron', color: 0xe2474b, hp: 10, init: 5, speed: 4, flying: false, intellect: 'C', abilities: ['strike'], passives: [] });
 const NEW_GROUP = () => ({ title: 'New group', units: [] });
 
 // Colours are written two ways in the config: as CSS strings ('#a1254a', what the
@@ -376,10 +384,14 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
       // A comma-separated list of ids, marked red the moment one of them is not
       // a real id - a typo here would otherwise show up as a silently missing
       // creature much later, in a fight.
+      // `valid` lists the ids that exist; a column whose entries are not plain
+      // ids (the passives, 'enraged@hit') gives `check` (is this entry fine?)
+      // and `show` (its text form) instead.
       const valid = col.valid ? col.valid() : null;
       const arr = Array.isArray(value) ? value : [];
-      const bad = valid ? arr.some((v) => !valid.includes(v)) : false;
-      return `<input type="text" class="${bad ? 'rt-bad' : ''}" ${a} value="${escapeAttr(arr.join(', '))}"${w}>`;
+      const show = col.show || ((v) => v);
+      const bad = col.check ? arr.some((v) => !col.check(v)) : valid ? arr.some((v) => !valid.includes(v)) : false;
+      return `<input type="text" class="${bad ? 'rt-bad' : ''}" ${a} value="${escapeAttr(arr.map(show).join(', '))}"${w}>`;
     }
     return `<input type="text" ${a} value="${escapeAttr(String(value ?? ''))}"${w}>`;
   }

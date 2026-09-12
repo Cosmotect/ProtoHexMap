@@ -15,7 +15,7 @@ import { COMBAT_CONFIG } from '../config/localmap.js';
 import { tagDefById } from '../config/entities.js';
 import { createRng } from '../rng.js';
 import { t, hasKey } from '../i18n.js';
-import { statusesFor, badgeNumber } from '../status.js';
+import { statusesFor, badgeNumber, statusInfo } from '../status.js';
 
 const SQRT3 = Math.sqrt(3);
 // Ramp endpoints for the elevation value shading (LocalMapView.paintTile).
@@ -61,6 +61,20 @@ const SHAPES = {
   star:         () => new THREE.OctahedronGeometry(0.34, 1).scale(1, 1.2, 1),
 };
 export const SHAPE_NAMES = Object.keys(SHAPES);
+
+// A party member's body: the capsule every character wears in the arena. One
+// function so the party view's 3D portraits (src/partyview.js) show the very
+// same body the arena does. `unit` is unused today; it is here for the day a
+// character gets a shape of its own.
+export function makePartyBody(config, unit = null) {
+  const c = config.colors;
+  const body = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.2, 0.3, 6, 12),
+    new THREE.MeshStandardMaterial({ color: c.player, roughness: 0.4, emissive: 0x332a10 })
+  );
+  body.geometry.translate(0, 0.4, 0);
+  return body;
+}
 function enemyGeometry(shape) {
   const make = SHAPES[shape] ?? SHAPES.octahedron;
   return make();
@@ -121,9 +135,7 @@ const SPRITE_MAT = (tex) => ({ map: tex, transparent: true, depthTest: false, fo
 // tables (status.<id>.name / .desc); `amount` fills the {n} of the ones that
 // have a magnitude, and a real duration adds a line of its own.
 function statusTipHtml(hs) {
-  const n = hs.amount == null ? '' : String(hs.amount);   // statuses are authored as magnitudes
-  const name = t(`status.${hs.id}.name`, { n });
-  const desc = t(`status.${hs.id}.desc`, { n });
+  const { name, desc } = statusInfo(hs);
   const turns = hs.turns > 0 && hasKey('status.turns') ? `<div class="st-turns">${t('status.turns', { n: hs.turns })}</div>` : '';
   return `<div class="st-name">${name}</div><div class="st-desc">${desc}</div>${turns}`;
 }
@@ -526,11 +538,7 @@ export class LocalMapView {
 
   addPartyToken(unit, index, tileKey) {
     const c = this.config.colors;
-    const body = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.2, 0.3, 6, 12),
-      new THREE.MeshStandardMaterial({ color: c.player, roughness: 0.4, emissive: 0x332a10 })
-    );
-    body.geometry.translate(0, 0.4, 0);
+    const body = makePartyBody(this.config, unit);
     body.userData.partyIndex = index;
     // The plaque over the head - portrait, HP numbers and health bar in one
     // billboard - so three identical capsules can be told apart at a glance and

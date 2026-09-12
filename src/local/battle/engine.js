@@ -29,7 +29,7 @@
 //  opens with an ambush enemy phase before round 1.
 // =====================================================================
 import { DIRS, K, PK, addK, hexDist, hexLine, rotOff, aimRot, abRotFor, rotDir, boardTiles } from './bhex.js';
-import { abilityById, statusOverridesFor } from '../../config/abilities.js';
+import { abilityById, statusOverridesFor, parsePassive } from '../../config/abilities.js';
 import { combatStatsFor, tagDefById } from '../../config/entities.js';
 
 export function createBattle({ config, radius, heights, party, enemies, partyKeys, enemyKeys, forced,
@@ -136,13 +136,15 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       maxHp: def.maxHp ?? def.hp, hp: def.hp,
       abilityIds: [...(def.abilityIds?.length ? def.abilityIds : cs.abilities)],
       abilityDefs: def.abilityDefs ?? null,
-      // PASSIVES the unit walked in with (passivesFor in src/upgrades.js, handed
-      // over by main.js). Fixed for this fight: none of the sources can change
-      // during one, and the set is worked out afresh when the next fight starts.
-      passives: [...(def.passives ?? [])],
-      // ...and the statuses it is owed at a MOMENT rather than for good
-      // (appliesFor; [{ status, when, x }]). Same three sources, same journey.
-      applies: [...(def.applies ?? [])],
+      // PASSIVES the unit walked in with, as [{ status, when, buffX }]: a party
+      // unit's from passivesFor in src/upgrades.js (already parsed), an enemy's
+      // straight off its bestiary row (still as written - parsed here, so the
+      // two arrive in one shape). Fixed for this fight: none of the sources can
+      // change during one, and the set is worked out afresh when the next fight
+      // starts. Each fires at its moment (fireMoment) and from then on the status
+      // sits in `status` below like any other - nothing reads this list for a
+      // rule, only for the moments.
+      passives: (def.passives ?? []).map(parsePassive).filter(Boolean),
       pos, isEnemy, idx: i, partyIndex: def.partyIndex ?? null,
       startPos: pos, moveLocked: false, done: false, tagTicked: false,
       // Movement points already spent on ABILITY COSTS this round. Walking is
@@ -193,9 +195,23 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   const curP = () => sb.units.find((u) => u.uid === sb.activeUid && !u.isEnemy && u.hp > 0);
   const speedFloor = (u) => Math.min(u.speed, CFG.minSpeed);
   const effSpeed = (u) => Math.max(speedFloor(u), u.speed + statusSum(u, 'speed'), 0);
-  // How far this unit may still walk: its speed for the round, less whatever
-  // ability costs have already eaten.
+  // How far this unit may walk this round: its speed, less whatever ability
+  // costs have already eaten. The walk itself is NOT taken off here - a walk is
+  // re-measured from startPos every time and can be taken back (see clickTile).
   const moveBudget = (u) => Math.max(0, effSpeed(u) - (u.movePaid || 0));
+  // What the walk so far HAS cost: the path price from the tile the unit started
+  // its activation on to where it stands now. Measured with no budget cap, so a
+  // unit that walked its whole speed and then paid a move cost still reads right.
+  // (Until 2026-09-12 a move cost only looked at moveBudget, which ignores the
+  // walk - so a unit that had walked every point it had could still cast a
+  // move-cost ability. That was the bug.)
+  const walked = (u) => {
+    if (!u || !u.startPos || u.pos === u.startPos) return 0;
+    const d = reach(u, u.startPos, Infinity).d[u.pos];
+    return d === undefined ? effSpeed(u) : d;
+  };
+  // Movement points actually left right now: the budget, less the walk.
+  const moveLeft = (u) => Math.max(0, moveBudget(u) - walked(u));
 
   // ----- what an ability costs to cast ------------------------------------
   // `ab.cost` is { hp, supplies, move }, any of them optional and any of them
@@ -210,7 +226,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     // hp can never be spent down to death: strictly MORE than the cost is
     // needed, so the ability greys out at exactly the cost.
     if (c.hp > 0 && u.hp <= c.hp) return 'hp';
-    if (c.move > 0 && moveBudget(u) < c.move) return 'move';
+    if (c.move > 0 && moveLeft(u) < c.move) return 'move';
     // Supplies are the RUN's, and only the party has them. An enemy written
     // with a supply cost casts it for free rather than standing mute.
     if (c.supplies > 0 && !u.isEnemy) {
@@ -251,30 +267,17 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // knobs it actually named. Every other field is read from the table.
   const statusDef = (id) => (config.statuses ?? {})[id] ?? null;
   const carried = (u) => (u && u.status) || null;
-  // PASSIVES: rows from the very same table that the unit walked in with rather
-  // than had applied to it (an ability upgrade's `grants`, a relic, a world-map
-  // aura - worked out by passivesFor in src/upgrades.js and handed to the fight).
-  // The engine does not care where they came from; it only has to look in two
-  // places instead of one, which is what this pair of helpers is for. Everything
-  // below - speed, the damage multipliers, the ticks, the switches - then reads a
-  // passive and an applied status through the identical lookup.
-  const passivesOf = (u) => (u && u.passives) || [];
-  // Every row this unit is under, applied and granted alike, each named once.
-  function carriedIds(u) {
-    const out = [];
-    for (const id in (carried(u) || {})) out.push(id);
-    for (const id of passivesOf(u)) if (!out.includes(id)) out.push(id);
-    return out;
-  }
+  // Every row this unit is under. A PASSIVE is in here too: it was put on by
+  // fireMoment through the same applyStatus a cast uses, so nothing below has to
+  // know it came from an upgrade node or a bestiary row rather than a cast.
+  const carriedIds = (u) => Object.keys(carried(u) || {});
   // One field of one row this unit is under, with the ability's own overrides
-  // folded in. A passive has no overrides - nobody handed it a buffX - so it
-  // simply reads the table.
+  // (buffX) folded in.
   function statusField(u, id, field) {
     const def = statusDef(id);
-    if (!def) return undefined;
     const slot = carried(u) && u.status[id];
-    if (!slot && !passivesOf(u).includes(id)) return undefined;
-    const over = slot && slot.over;
+    if (!def || !slot) return undefined;
+    const over = slot.over;
     return over && over[field] !== undefined ? over[field] : def[field];
   }
   // Additive fields (speed), multiplicative ones (damageDealt / damageTaken) and
@@ -349,6 +352,26 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     if (st.sim) (st.rec.applied[u.uid] ??= {})[id] = 1;
     else { const v = statusView(u, id); floater(u.pos, v.icon, v.color); }
   }
+  // A MOMENT for one unit: every passive of its that names `when` puts its status
+  // on now, through the very same applyStatus a cast uses. This is the whole of
+  // what a passive is to the engine (see PASSIVES in config/abilities.js). The
+  // moments that exist are the places this is called from:
+  //   'battleStart'  start(), once, before either side moves - FRESH, so a
+  //                  one-turn row survives the first round's opening tick
+  //   'hit'          sHit(), after hp was actually lost
+  // A new moment is one more call at the place it happens, nothing else. Runs in
+  // the AI's simulations too (applyStatus records it in st.rec), so a creature
+  // weighs the Enraged its hit would trigger.
+  function fireMoment(st, u, when) {
+    if (!u || u.hp <= 0) return;
+    for (const p of u.passives ?? []) {
+      if (p.when !== when) continue;
+      // Crashes and falls stun through sStun for its "loses this turn" rule; a
+      // passive that stuns its own carrier goes the same way.
+      if (p.status === 'stun') { sStun(st, u); continue; }
+      applyStatus(st, u, p.status, p.buffX, when === 'battleStart');
+    }
+  }
   function dropStatus(st, u, id, stripped) {
     if (!carried(u) || !u.status[id]) return;
     delete u.status[id];
@@ -374,8 +397,8 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   function tickStatuses(u) {
     if (u.hp <= 0) return;
     const st = liveSt();
-    // The ticks run over everything held, so a PASSIVE that heals every turn
-    // (regeneration) works through the very same line a timed regen does.
+    // The ticks run over everything held, so a passive that heals every turn
+    // (regeneration, no clock) works through the very same line a timed regen does.
     for (const id of carriedIds(u)) {
       const dmg = statusField(u, id, 'tickDamage') || 0;
       const heal = statusField(u, id, 'tickHeal') || 0;
@@ -384,9 +407,9 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     }
     flushDeaths(st);
     if (u.hp <= 0) return;
-    // Only APPLIED statuses have a clock to run down. A passive has no slot, and
-    // nothing takes it off.
-    for (const id of Object.keys(carried(u) || {})) {
+    // Then the clocks. A row with no clock (turns 0) is simply skipped, which is
+    // all "permanent" means here.
+    for (const id of carriedIds(u)) {
       const slot = u.status[id];
       // A status applied at battle setup gets its first tick for free - see
       // applyStatus. One tick, once: the flag is cleared as it is honoured.
@@ -448,7 +471,11 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       units: sb.units.map((u) => ({ uid: u.uid, isEnemy: u.isEnemy, flying: u.flying, hp: u.hp, maxHp: u.maxHp, pos: u.pos,
         // the whole status bag, copied one level deep - forgetting this is what used
         // to make the AI simulate a board it could not actually see
-        status: Object.fromEntries(Object.entries(u.status || {}).map(([id, v]) => [id, { ...v }])) })),
+        status: Object.fromEntries(Object.entries(u.status || {}).map(([id, v]) => [id, { ...v }])),
+        // the passives too (shared, never written), so a 'hit' moment fires in the
+        // simulation exactly as it would on the real board and the AI sees the
+        // status its hit would trigger
+        passives: u.passives })),
       tags: Object.fromEntries(Object.entries(sb.tags).map(([k, t]) => [k, { ...t }])),
       heights: { ...sb.heights }, deathQueue: [],
       rec: { dmg: {}, moved: {}, killed: {}, applied: {}, stripped: {}, voided: {}, tmoved: {}, tkilled: {} } };
@@ -488,6 +515,9 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
         blog(atk + v.name + ': -' + amt + (label ? ' ' + label : ''));
         if (v.hp <= 0) { blog(v.name + ' is down'); noteDeath(st, v, v.pos, label || 'damage'); }
       }
+      // The 'hit' moment: hp was actually lost (a blocked hit returned above).
+      // A unit that just died gets nothing - applyStatus refuses the dead.
+      fireMoment(st, v, 'hit');
     } else {
       if (v.hp <= 0) return;
       v.hp = Math.max(0, v.hp - amt);
@@ -755,11 +785,12 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // ----- movement (hex-box 12) -------------------------------------------
   // `fromK` lets the player phase measure range from the tile a unit STARTED
   // the round on (free repositioning); enemies always measure from where they are.
-  function reach(u, fromK = u.pos) {
+  // `cap` overrides the budget (Infinity = every reachable tile, used by walked()).
+  function reach(u, fromK = u.pos, cap) {
     const hard = new Set(), soft = new Set();
     for (const o of sb.units) { if (o.hp <= 0 || o === u) continue; ((!u.flying && o.isEnemy !== u.isEnemy) ? hard : soft).add(o.pos); }
     for (const k in sb.tags) { if (sb.tags[k].hp > 0) (u.flying ? soft : hard).add(k); }
-    const spd = moveBudget(u);
+    const spd = cap !== undefined ? cap : moveBudget(u);
     const d = { [fromK]: 0 }, prev = {};
     const pq = [[0, fromK]];
     while (pq.length) {
@@ -1066,8 +1097,11 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     sb.inspectUid = null; sb.inspectReach = null;
     sb.enemyQ = sb.units.filter((u) => u.isEnemy && u.hp > 0).sort((a, b) => b.init - a.init || a.idx - b.idx);
     // An enemy's movement budget is its own each activation, exactly as a party
-    // member's is each round (startPlayerPhase).
-    for (const u of sb.enemyQ) u.movePaid = 0;
+    // member's is each round (startPlayerPhase). `startPos` is where the walk is
+    // measured from (walked / moveLeft), so it is reset here too - the enemy AI
+    // walks and casts within one activation, and an ability's move cost has to
+    // see the walk that just happened.
+    for (const u of sb.enemyQ) { u.movePaid = 0; u.startPos = u.pos; }
     sb.eqi = -1; emit();
     stepEnemy();
   }
@@ -1255,8 +1289,12 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       // Nor one it cannot pay for - otherwise the enemy picks it, and the cast
       // is refused at the last moment leaving the creature standing there.
       if (!canAfford(e, ab)) continue;
+      // A move cost is paid out of the same points the walk uses, so a tile that
+      // takes the whole budget to reach leaves nothing to cast with.
+      const moveCost = costOf(ab).move;
       for (const startK of Object.keys(res.d)) {
         if (startK !== e.pos && !canStop(res, startK)) continue;
+        if (moveCost > 0 && (res.d[startK] || 0) + moveCost > moveBudget(e)) continue;
         if (ab.castAny && startK !== e.pos) continue;
         const tlist = ab.castAny ? activeTiles() : ab.castZone.map((off) => addK(startK, off));
         for (const t of tlist) {
@@ -1475,25 +1513,12 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // enemy phase back until start() is called. A normal fight opens with
   // startPlayerPhase(), which animates nothing, so it never needs deferring.
   let opened = false;
-  // The 'battleStart' moment. It fires once, here, before either side has moved,
-  // so it lands the same way whether the fight opens normally or with an ambush -
-  // and the statuses go on FRESH, which is what buys their carrier a real first
-  // turn with them (see applyStatus).
-  function fireBattleStart() {
-    const st = liveSt();
-    for (const u of sb.units) {
-      if (u.hp <= 0) continue;
-      for (const e of u.applies ?? []) {
-        if (e.when !== 'battleStart') continue;
-        if (e.status === 'stun') { sStun(st, u); continue; }
-        if (statusDef(e.status)) applyStatus(st, u, e.status, e.x, true);
-      }
-    }
-  }
+  // The 'battleStart' moment fires once, here, before either side has moved, so
+  // it lands the same way whether the fight opens normally or with an ambush.
   function start() {
     if (opened) return;
     opened = true;
-    fireBattleStart();
+    { const st = liveSt(); for (const u of sb.units) fireMoment(st, u, 'battleStart'); }
     if (sb.ambush) { blog('AMBUSH - the enemy strikes first'); startEnemyPhase(); }
     else startPlayerPhase();
   }
@@ -1513,6 +1538,8 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     costOf,
     shortOf,
     moveBudget,
+    moveLeft,            // movement points still unspent this activation (walk included)
+    supplies: () => (supplies ? supplies.get() : null),   // the run's supplies, for the battle bar
     curPlayer: curP,
     reachFor: () => sb.reach,
     debugResolve,

@@ -1072,7 +1072,91 @@ stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }
   from this session (no file-delete access to the owner's computer), so it was
   left in place as an empty, unimported stub explaining the move - safe to
   delete by hand.
+* 2026-09-12 (d) **PASSIVES MERGED WITH MOMENTS: one list, one bag.** The 09-11 (h)
+  and 09-12 (b) entries above built two parallel deliveries - `grants` (a row kept
+  in a separate `unit.passives` list the engine had to look up beside the status
+  bag) and `applies` (a row put on at a moment) - and declared "starts each
+  combat enraged" not a passive. The owner disagreed, and was right: from the
+  player's side Raging Entry IS a passive, and whether its effect lasts one turn or
+  the whole fight is already written in the status row (`enraged` has `turns: 1`,
+  `collisionImmune` has none). So the two became one:
+  * **A passive is a status the unit puts on ITSELF at a moment, without a cast.**
+    It names a table row; the engine applies it with the same `applyStatus` a cast
+    uses (`fireMoment(st, u, when)`); from then on it is in the status bag like
+    anything else. The row decides the rest: no clock and nothing to spend it =
+    stays for the fight; a clock = wears off; charges = spent by use ("starts each
+    fight with a Shield" is `passives: ['shield']`, which `grantCheck` used to
+    refuse - it is gone, along with the `passive: true` row flag nothing read).
+  * **One field, three written forms.** `passives` on an upgrade node, a bestiary
+    row (new - "this creature is always Padded" is bestiary config, with a
+    `passives` column in the Settings units tab), a relic, an aura:
+    `'regeneration'` (at battle start), `'enraged@hit'` (at that moment), or
+    `{ status, when, buffX }` when the row's knobs need overriding (file-only:
+    the Settings list editor round-trips the two string forms and drops buffX).
+    `parsePassive` / `passiveToString` in config/abilities.js are the one reader
+    and writer; `passivesFor` (upgrades.js) gathers a party unit's from its three
+    sources, `appliesFor` is gone, and an enemy's come straight off its row.
+  * **Moments** (`PASSIVE_MOMENTS`): `battleStart` (default; the status goes on
+    FRESH, see (b) above - that part is unchanged) and, new, `hit` - fired in
+    `sHit` after hp was actually lost (an ability, an impact, a tile tag, a poison
+    tick; a blocked hit is not a hit). A new moment is one `fireMoment` call at
+    the place it happens. Moments fire inside the AI's simulations too, so a
+    creature weighs what its hit would trigger; `simSt` now carries `passives` -
+    it never did before, so the AI planned against Padded and Regenerating units
+    as if they had neither (the (h) entry claimed otherwise; it was wrong).
+  * **Permanence is inferred, never declared** (`isPermanent(def, slot)`): no
+    clock and an empty `spentOn`. A row with no clock and `spentOn: 'cleanse'`
+    is the other case this buys - an endless status that only a cleanse removes,
+    and a cleanse is one `spendStatus(st, u, 'cleanse')` on the day it exists.
+  * **The unit card hides permanent rows** from its status slots (`statusesFor`
+    leaves them out unless asked with `{ permanent: true }`): a slot is for
+    something the player has to watch, and a thing that can never change is not
+    that. The coming party view lists them in full. A ticking status still shows
+    on the card wherever it came from, so Raging Entry's Enraged is visible.
+  * Engine: `passivesOf`, the two-place `carriedIds`, and `statusField`'s
+    slot-less branch are gone - every rule reads the bag and only the bag.
+  * Noted, not changed: a `turns: 1` status applied by a CAST to a unit that has
+    not acted yet this round ticks away at the start of that unit's activation,
+    before it acts (only the battle-start `fresh` flag escapes this). So Rage
+    Bite's `enraged` on an ally that acts later is gone before it swings. Worth a
+    decision: either statuses tick at the END of the carrier's activation, or
+    `turns` should be read as "activations the carrier gets with it".
 
+
+* 2026-09-12 (e) **Ability costs really gate; the party view (TAB).**
+  * **The move cost ignored the walk.** `moveBudget` is measured from the tile
+    the unit started on (a walk can be taken back, so it is never "spent"), and
+    the cost gate read only that - so a unit that had walked every point it had
+    could still cast Ember Burst. `walked(u)` (the path price from startPos to
+    where the unit stands, measured with no cap) and `moveLeft(u)` = budget -
+    walked are the fix; `shortOf` gates on moveLeft. Enemies get `startPos`
+    reset at the top of each activation (startEnemyPhase) so the same rule reads
+    their walk, and the AI reserves the cost when it plans a walk-then-cast
+    (a tile that takes the whole budget to reach is not a casting tile).
+  * **Mend DID spend a supply.** The engine was right; the world-map supplies
+    counter is hidden during a fight (body.local-mode hides #fatigue-bar) and the
+    victory salvage (+5) then covers the -1, so it looked free. The battle bar
+    now shows the two pools an ability cost draws on beside the active unit's HP:
+    movement left this round (walk included) and the run's supplies.
+  * **A status's `name` and `desc` live on its row** (`S()` in config/abilities.js,
+    with {n} for the amount), read through `statusInfo(hs)` in src/status.js -
+    locale keys status.<id>.name / .desc still override, English has no entry.
+    The unit card, the overhead plaque and the party view all go through it, so
+    a raw key like "status.enraged.name" can no longer reach the screen.
+  * **The party view** (src/partyview.js, `#party-view` in index.html): TAB toggles
+    it, Esc or Close or a click outside closes it, in and out of a fight. One
+    column per member: header with HP / speed / flying, the party panel's health
+    bar, a live 3D portrait, one section per ability (its sentence, its numbers
+    with the unit's upgrades folded in, its cost, and each unlocked node with the
+    node's own sentence), the relic slot, the passives with WHEN each fires and
+    WHERE it came from (node / relic / aura), and in a fight every status on the
+    unit including the permanent ones the card hides.
+    The portraits are one extra WebGL renderer on a transparent canvas over the
+    whole modal, drawing each column's box through a scissor rectangle (three.js
+    "multiple elements"); the body is `makePartyBody` from localview.js, the very
+    capsule the arena builds, so the portrait is the unit and not a picture of it.
+    The columns rebuild only when what they show changed (a signature of hp,
+    statuses, upgrades), so scrolling one is not reset by a redraw.
 
 ## Open questions
 

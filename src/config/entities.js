@@ -181,9 +181,15 @@ export const ENTITIES = {
     //    speed      move points per turn (an uphill step costs 2)
     //    flying     ignores height and glides over anything
     //    abilities  ids from config/abilities.js ABILITIES
-    //  Leave the last four off and the creature falls back to party.defaultCombat (by
-    //  name) and then to its `default` row, so old hand-authored content and
-    //  the party keep working unchanged.
+    //    passives   optional - statuses the creature puts on ITSELF at a moment,
+    //               written exactly as on an upgrade node (see PASSIVES in
+    //               config/abilities.js): 'regeneration' (at battle start),
+    //               'enraged@hit' (whenever it loses hp), or an object with buffX.
+    //               A Hammerhead that is "always Padded" is passives: ['collisionImmune'].
+    //  Leave the combat fields (init / speed / flying / abilities) off and the
+    //  creature falls back to party.defaultCombat (by name) and then to its
+    //  `default` row, so old hand-authored content and the party keep working
+    //  unchanged.
     // =================================================================
     enemyTypes: {
       // `intellect` is the creature's INTELLECT CLASS (S / A / B / C): which facts

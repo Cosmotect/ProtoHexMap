@@ -15,9 +15,10 @@
 // =====================================================================
 const base = new URL('../src/', import.meta.url).href;
 const { CONFIG } = await import(base + 'config.js');
-const { COMBAT_TAGS, ABILITIES, STATUSES, statusKnobs, statusOverridesFor, grantCheck } = await import(base + 'config/abilities.js');
-const { passivesFor, appliesFor } = await import(base + 'upgrades.js');
-const { INTELLECT } = await import(base + 'config/units.js');
+const { ABILITIES, STATUSES, statusKnobs, statusOverridesFor, parsePassive, passiveToString, isPermanent } = await import(base + 'config/abilities.js');
+const { passivesFor } = await import(base + 'upgrades.js');
+const { INTELLECT, COMBAT_TAGS } = await import(base + 'config/entities.js');
+const { statusesFor } = await import(base + 'status.js');
 const { createBattle } = await import(base + 'local/battle/engine.js');
 const { K, hexDist, lineOffsets, hexLine } = await import(base + 'local/battle/bhex.js');
 
@@ -124,9 +125,9 @@ function round(b) {
 
 // ----- 5. the config moves stayed wired -------------------------------------
 {
-  check(CONFIG.intellect === INTELLECT, 'config.intellect is not the table in config/units.js');
+  check(CONFIG.intellect === INTELLECT, 'config.intellect is not the table in config/entities.js');
   check(Object.keys(CONFIG.intellect).join(',') === 'S,A,B,C', 'the intellect classes changed: ' + Object.keys(CONFIG.intellect));
-  check(CONFIG.tags === COMBAT_TAGS, 'config.tags is not the table in config/abilities.js');
+  check(CONFIG.tags === COMBAT_TAGS, 'config.tags is not the table in config/entities.js');
   check(!!CONFIG.tags.fire, 'the fire tag is missing from the config');
 }
 
@@ -255,18 +256,19 @@ function round(b) {
 }
 
 // ----- 9. passives ----------------------------------------------------------
-// A passive is a row of the SAME table as a status, carried a different way:
-// something grants it and nothing takes it off. Every rule the engine reads off a
-// status reads off a passive through the identical lookup.
+// A passive is a status the unit puts on ITSELF at a moment, without a cast. It
+// names a row of the SAME table a cast would, goes on through the same
+// applyStatus, and sits in the same status bag; whether it stays for the fight
+// or wears off is the ROW's business (its clock / charges), never the passive's.
 {
   ABILITIES.__testRamPush = { ...ABILITIES.shove, name: 'Ram', damage: 0, heal: 0, buff: '', buffX: null,
     pushZone: [[0, 0, 0]], rotatable: true, tagId: null, tagZone: [], hZone: [] };
 
-  const fight = ({ passives = [], foes, wall = [], heights = {} }) => {
+  const fight = ({ passives = [], foes, wall = [], heights = {}, foePassives = passives }) => {
     const b = createBattle({
       config: CONFIG, radius: 4, heights,
-      party: [{ name: 'Gorm', hp: 40, maxHp: 40, abilityIds: ['__testRamPush'], partyIndex: 0, passives }],
-      enemies: foes.map((k, i) => ({ name: 'H' + i, hp: 40, maxHp: 40, power: 0, abilityIds: ['__none'], init: 1, speed: 0, intellect: 'C', passives })),
+      party: [{ name: 'Gorm', hp: 40, maxHp: 40, abilityIds: ['__testRamPush', 'strike'], partyIndex: 0, passives }],
+      enemies: foes.map((k, i) => ({ name: 'H' + i, hp: 40, maxHp: 40, power: 0, abilityIds: ['__none'], init: 1, speed: 0, intellect: 'C', passives: foePassives })),
       partyKeys: [K(0, 0)], enemyKeys: foes, wallKeys: wall,
       instant: true, rng: () => 0.5,
       onChange() {}, onFloater() {}, onLog() {}, onEnd() {},
@@ -301,54 +303,81 @@ function round(b) {
   });
   check(healed[0] === 20 && healed[1] === 22, `regeneration: plain ${healed[0]}, regenerating ${healed[1]} (want 20 / 22)`);
 
-  // Nothing takes a passive off: it is still there after the turn that ticked it.
+  // A row with no clock and nothing to spend it is still there after the turn
+  // that ticked it - that is all "permanent" means.
   {
     const b = fight({ passives: ['regeneration'], foes: [K(3, 0)] });
     const sb = b.state, me = sb.units.find((u) => !u.isEnemy);
     for (const u of sb.units) if (!u.isEnemy) u.done = true;
     b.endTurn();
-    check(me.passives.includes('regeneration'), 'a passive was lost when its turn ticked');
+    check(!!me.status.regeneration, 'a permanent passive was lost when its turn ticked');
+    check(isPermanent(STATUSES.regeneration, me.status.regeneration) && !isPermanent(STATUSES.enraged) && !isPermanent(STATUSES.shield),
+      'isPermanent: regeneration should be, enraged (clock) and shield (spent) should not');
+    // The unit card leaves permanent rows out of its slots; the party view asks for them.
+    check(!statusesFor(me).some((s) => s.id === 'regeneration'), 'a permanent passive took a status slot on the card');
+    check(statusesFor(me, { permanent: true }).some((s) => s.id === 'regeneration' && s.permanent), 'the full status list left a permanent passive out');
   }
 
-  // The AI's copy of the board must carry them, or it plans against the wrong unit.
+  // A row that is SPENT is a fine passive too: "starts every fight with a
+  // Shield" blocks the first hit and is then gone, like any shield.
+  {
+    const b = fight({ passives: [], foes: [K(1, 0)], foePassives: ['shield'] });
+    const sb = b.state, me = sb.units.find((u) => !u.isEnemy), foe = sb.units.find((u) => u.isEnemy);
+    check(!!foe.status.shield, 'a shield passive was not put on at battle start');
+    b.activate(me.uid); b.selectAbility('strike'); b.clickTile(K(1, 0));
+    check(foe.hp === 40 && !foe.status.shield, `a shield passive did not block the first hit and go: hp ${foe.hp}, shield ${!!foe.status.shield}`);
+  }
+
+  // The AI's board copy carries the passives too, so a moment fires in its
+  // simulations. Checked the cheap way: the arena units have them.
   {
     const b = fight({ passives: ['collisionImmune'], foes: [K(2, 0)] });
     const sb = b.state;
-    check(sb.units.every((u) => Array.isArray(u.passives) && u.passives.includes('collisionImmune')),
-      'passives did not reach the arena units');
+    check(sb.units.every((u) => Array.isArray(u.passives) && u.passives.some((p) => p.status === 'collisionImmune' && p.when === 'battleStart')),
+      'passives did not reach the arena units parsed');
+    check(sb.units.every((u) => !!u.status.collisionImmune), 'a battle-start passive is not in the status bag');
   }
 
-  // Derivation: an unlocked node grants; a row that is spent by use is refused.
+  // The three written forms, and what is refused.
+  const P = (e) => parsePassive(e, true);
+  check(P('regeneration')?.when === 'battleStart', "a bare id does not mean 'at battle start'");
+  check(P('enraged@hit')?.when === 'hit' && P('enraged@hit').status === 'enraged', "'id@moment' did not parse");
+  check(P({ status: 'enraged', when: 'hit', buffX: [null, 3] })?.buffX?.[1] === 3, 'the object form lost its buffX');
+  check(P('nosuchrow') === null && P('enraged@nosuchmoment') === null && P(null) === null, 'a bad passive was accepted');
+  check(passiveToString(P('enraged@hit')) === 'enraged@hit' && passiveToString(P('regeneration')) === 'regeneration', 'passiveToString does not round-trip');
+
+  // Derivation from what a character IS: node, relic, aura - one list.
   check(passivesFor({ name: 'Gorm', upgrades: [] }).length === 0, 'a character with no upgrades has passives');
-  check(passivesFor({ name: 'Gorm', upgrades: ['chargeHeadbutt:collisionImmune'] }).includes('collisionImmune'),
-    'an unlocked node did not grant its passive');
-  check(passivesFor({ name: 'Gorm', upgrades: [], relic: { passives: ['regeneration'] } }).includes('regeneration'),
-    'a relic did not grant its passive');
-  check(passivesFor({ name: 'Gorm', upgrades: [], auraPassives: ['collisionImmune'] }).includes('collisionImmune'),
-    'a world-map aura did not grant its passive');
-  check(passivesFor({ name: 'Gorm', upgrades: [], relic: { passives: ['shield'] } }).length === 0,
-    'a charge-spent row was accepted as a passive');
-  check(grantCheck('shield') !== null && grantCheck('regeneration') === null, 'grantCheck disagrees with itself');
-  // And every row marked passive really is un-spendable.
-  for (const [id, def] of Object.entries(STATUSES)) {
-    if (def.passive) check(grantCheck(id) === null, `row "${id}" is marked passive but ${grantCheck(id)}`);
-  }
+  const has = (list, id, when = 'battleStart') => list.some((p) => p.status === id && p.when === when);
+  check(has(passivesFor({ name: 'Gorm', upgrades: ['chargeHeadbutt:collisionImmune'] }), 'collisionImmune'),
+    'an unlocked node did not give its passive');
+  check(has(passivesFor({ name: 'Gorm', upgrades: ['chargeHeadbutt:beginEnraged'] }), 'enraged'),
+    'the Raging Entry node did not give its passive');
+  check(has(passivesFor({ name: 'Gorm', upgrades: [], relic: { passives: ['regeneration'] } }), 'regeneration'),
+    'a relic did not give its passive');
+  check(has(passivesFor({ name: 'Gorm', upgrades: [], auraPassives: ['collisionImmune'] }), 'collisionImmune'),
+    'a world-map aura did not give its passive');
+  check(has(passivesFor({ name: 'Gorm', upgrades: [], relic: { passives: ['enraged@hit'] } }), 'enraged', 'hit'),
+    "a relic's 'id@moment' passive was lost");
+  check(passivesFor({ name: 'Gorm', upgrades: [], relic: { passives: ['nosuchrow'] } }).length === 0,
+    'a status row that does not exist was accepted');
+  check(passivesFor({ name: 'Gorm', upgrades: [], relic: { passives: ['regeneration', 'regeneration'] } }).length === 1,
+    'the same passive twice was not folded into one');
 }
 
-// ----- 10. battle-start statuses --------------------------------------------
-// The other half of `grants`: a status applied at a MOMENT rather than carried
-// forever. The moment fires before either side moves, and the status goes on
-// FRESH - it skips its carrier's next tick instead of counting down - because
+// ----- 10. moments ----------------------------------------------------------
+// 'battleStart' fires before either side moves, and the status goes on FRESH -
+// it skips its carrier's next tick instead of counting down - because
 // startPlayerPhase ticks every party unit at the top of the first round too, and
-// a one-turn buff granted at setup would otherwise be gone before it was ever
+// a one-turn buff put on at setup would otherwise be gone before it was ever
 // usable. The rule holds whether the fight opens normally or with an ambush.
+// 'hit' fires every time the carrier actually loses hp.
 {
-  const enrage = [{ status: 'enraged', when: 'battleStart', x: null }];
-  const run = ({ ambush = false, onParty = true }) => {
+  const run = ({ ambush = false, onParty = true, passive = 'enraged' }) => {
     const b = createBattle({
       config: CONFIG, radius: 4, heights: {},
-      party: [{ name: 'Gorm', hp: 40, maxHp: 40, abilityIds: ['strike'], partyIndex: 0, applies: onParty ? enrage : [] }],
-      enemies: [{ name: 'H', hp: 40, maxHp: 40, power: 0, abilityIds: ['strike'], init: 1, speed: 0, intellect: 'C', applies: onParty ? [] : enrage }],
+      party: [{ name: 'Gorm', hp: 40, maxHp: 40, abilityIds: ['strike'], partyIndex: 0, passives: onParty ? [passive] : [] }],
+      enemies: [{ name: 'H', hp: 40, maxHp: 40, power: 0, abilityIds: ['strike'], init: 1, speed: 0, intellect: 'C', passives: onParty ? [] : [passive] }],
       partyKeys: [K(0, 0)], enemyKeys: [K(3, 0)], forced: ambush,
       instant: true, rng: () => 0.5,
       onChange() {}, onFloater() {}, onLog() {}, onEnd() {},
@@ -357,7 +386,7 @@ function round(b) {
     const sb = b.state;
     const who = () => sb.units.find((u) => u.isEnemy !== onParty);
     const pass = () => { for (const u of sb.units) if (!u.isEnemy) u.done = true; b.endTurn(); };
-    return { on1: !!who().status.enraged, pass, after: () => { pass(); return !!who().status.enraged; } };
+    return { b, sb, who, on1: !!who().status.enraged, pass, after: () => { pass(); return !!who().status.enraged; } };
   };
   for (const ambush of [false, true]) {
     const r = run({ ambush });
@@ -369,15 +398,72 @@ function round(b) {
     const r = run({ ambush: true, onParty: false });
     check(r.on1, 'an ambushing enemy lost its battle-start status before it acted');
   }
-  // Gathered from the same three sources as passives, and refuses a bad row.
-  check(appliesFor({ name: 'Gorm', upgrades: [] }).length === 0, 'a character with no upgrades has battle-start statuses');
-  const fromNode = appliesFor({ name: 'Gorm', upgrades: ['chargeHeadbutt:beginEnraged'] });
-  check(fromNode.length === 1 && fromNode[0].status === 'enraged' && fromNode[0].when === 'battleStart',
-    'the Raging Entry node did not ask for its status: ' + JSON.stringify(fromNode));
-  check(appliesFor({ name: 'Gorm', upgrades: [], relic: { applies: [{ status: 'haste', when: 'battleStart' }] } }).length === 1,
-    'a relic could not ask for a battle-start status');
-  check(appliesFor({ name: 'Gorm', upgrades: [], relic: { applies: [{ status: 'nosuchrow', when: 'battleStart' }] } }).length === 0,
-    'a status row that does not exist was accepted');
+  // 'hit': not there at the start, there the moment hp is lost, not for a
+  // blocked hit. (A three-turn row, so the tick that follows the cast - the
+  // player's cast ends the phase, and the enemy's activation ticks it - does not
+  // take it off again before the check; a one-turn row would be gone by then,
+  // exactly as a one-turn status from a cast is.)
+  {
+    const b = createBattle({
+      config: CONFIG, radius: 4, heights: {},
+      party: [{ name: 'Gorm', hp: 40, maxHp: 40, abilityIds: ['strike', 'guard'], partyIndex: 0 }],
+      enemies: [{ name: 'H', hp: 40, maxHp: 40, power: 0, abilityIds: ['__none'], init: 1, speed: 0, intellect: 'C', passives: ['poison@hit'] }],
+      partyKeys: [K(0, 0)], enemyKeys: [K(1, 0)],
+      instant: true, rng: () => 0.5,
+      onChange() {}, onFloater() {}, onLog() {}, onEnd() {},
+    });
+    b.start && b.start();
+    const sb = b.state, me = sb.units.find((u) => !u.isEnemy), foe = sb.units.find((u) => u.isEnemy);
+    check(!foe.status.poison, "a 'poison@hit' passive was on before any hit");
+    // A blocked hit is not a hit.
+    foe.status.shield = { turns: 0, charges: 1, over: {} };
+    b.activate(me.uid); b.selectAbility('strike'); b.clickTile(K(1, 0));
+    check(foe.hp === 40 && !foe.status.poison, `a blocked hit fired the 'hit' moment (hp ${foe.hp}, poison ${!!foe.status.poison})`);
+    // A real one is.
+    me.done = false; sb.phase = 'player';
+    b.activate(me.uid); b.selectAbility('strike'); b.clickTile(K(1, 0));
+    check(foe.hp < 40 && !!foe.status.poison, `losing hp did not fire the 'hit' moment (hp ${foe.hp}, poison ${!!foe.status.poison})`);
+    // ...and it is a status like any other from here: the poison it put on bit
+    // at the enemy's own activation and its clock ran.
+    check(foe.status.poison && foe.status.poison.turns === 2 && foe.hp === 40 - 3 - 2,
+      `the passive's status did not tick like a cast one: ${JSON.stringify(foe.status.poison)} hp ${foe.hp}`);
+  }
+}
+
+// ----- 11. ability costs ------------------------------------------------------
+// A move cost is paid out of the same points the walk uses. Until 2026-09-12 the
+// gate ignored the walk (moveBudget is measured from startPos so a walk can be
+// taken back), and a unit that had walked its whole speed could still cast a
+// move-cost ability. A supply cost comes off the run's supplies handle.
+{
+  let sup = 10;
+  const mk = (enemyAt) => createBattle({
+    config: CONFIG, radius: 4, heights: {},
+    party: [{ name: 'Mystic', hp: 22, maxHp: 22, abilityIds: ['burst', 'mend'], partyIndex: 0 }],
+    enemies: [{ name: 'H', hp: 40, maxHp: 40, power: 0, abilityIds: ['__none'], init: 1, speed: 0, intellect: 'C' }],
+    partyKeys: [K(0, 0)], enemyKeys: [enemyAt],
+    supplies: { get: () => sup, add: (n) => { const b = sup; sup = Math.max(0, Math.min(60, sup + n)); return sup - b; } },
+    instant: true, rng: () => 0.5, onChange() {}, onFloater() {}, onLog() {}, onEnd() {},
+  });
+  const b = mk(K(-3, 0));
+  b.start && b.start();
+  const sb = b.state, me = sb.units.find((u) => !u.isEnemy);
+  const burst = b.abilityFor(me, 'burst');
+  check(burst.cost.move === 1 && b.abilityFor(me, 'mend').cost.supplies === 1, 'the sample costs on Ember Burst / Mend changed - this test assumes move 1 / supplies 1');
+  check(b.moveLeft(me) === me.speed && b.shortOf(me, burst) === '', 'a unit that has not walked cannot afford a move-1 ability');
+  b.activate(me.uid); b.clickTile(K(me.speed, 0));
+  check(me.pos === K(me.speed, 0), 'the walk did not happen');
+  check(b.moveLeft(me) === 0 && b.shortOf(me, burst) === 'move', `a unit that walked every point still had movement for a cast: left ${b.moveLeft(me)}, short "${b.shortOf(me, burst)}"`);
+  // Taking the walk back (clicking a nearer tile) gives the points back.
+  b.clickTile(K(1, 0));
+  check(me.pos === K(1, 0) && b.moveLeft(me) === me.speed - 1 && b.shortOf(me, burst) === '', `a shorter walk did not free movement: left ${b.moveLeft(me)}`);
+  // Supplies: paid once, at the cast.
+  const b2 = mk(K(3, 0));
+  b2.start && b2.start();
+  const me2 = b2.state.units.find((u) => !u.isEnemy);
+  me2.hp = 10;
+  b2.activate(me2.uid); b2.selectAbility('mend'); b2.clickTile(K(0, 0));
+  check(me2.hp === 14 && sup === 9, `Mend should have cost exactly one supply: hp ${me2.hp}, supplies ${sup}`);
 }
 
 console.log(problems.length ? 'PROBLEMS:\n- ' + problems.join('\n- ') : 'OK: engine tests passed.');
