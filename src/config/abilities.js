@@ -108,6 +108,9 @@ const A = (o) => Object.assign({
 }, o);
 // -------------------------------------TABLE-------------------------------------
 export const ABILITIES = {
+  //Tag Abilities
+  nerveAgentCloud: A({ name: "Nerve Agent", icon: '🎆', color: '#ff9950', statusEffect: 'nerveAgent', castZone: [[0, 0]], dmgZone: [[0, 0]], }),
+
   //Enemy Abilities
   softeningBite: A({ name: 'Softening Bite', icon: '⚔️', color: '#e0b25f', statusEffect: 'vulnerable', castZone: ringOffsets(1, 1), dmgZone: [[0, 0]] }),
   rageBite: A({ name: 'Enraging Bite', icon: '🤬', color: '#E84A27', statusEffect: 'enraged', castZone: ringOffsets(1, 1), dmgZone: [[0, 0]] }),
@@ -115,7 +118,7 @@ export const ABILITIES = {
   weakeningBite: A({ name: 'Weakening Bite', icon: '🩼', color: '#38D1AC', statusEffect: 'weaken', castZone: ringOffsets(1, 1), dmgZone: [[0, 0]] }),
 
   lobbedShrapnelBurst: A({ name: 'Lobbed ShrapnelBurst', icon: '💥', color: '#ff9950', damage: 3, castZone: ringOffsets(1, 3), dmgZone: ringOffsets(0, 1) }),
-  lobbedNerveAgentBurst: A({ name: 'Lobbed Nerve Agent Burst', icon: '🎆', color: '#ff9950', damage: 1, castZone: ringOffsets(1, 4), dmgZone: ringOffsets(0, 1), tagId: 'nerveAgent', tagZone: ringOffsets(0, 1) }),
+  lobbedNerveAgentBurst: A({ name: 'Lobbed Nerve Agent Burst', icon: '🎆', color: '#ff9950', damage: 1, castZone: ringOffsets(1, 4), dmgZone: ringOffsets(0, 1), tagId: 'nerveAgentCloud', tagZone: ringOffsets(0, 1) }),
 
   swipe: A({ name: 'Swipe', icon: '💫', color: '#5fc7e0', damage: 5, castZone: ringOffsets(1, 1), dmgZone: [[0, 0], [-1, -1], [0, 1]], rotatable: true }),
   //strike

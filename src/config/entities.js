@@ -252,6 +252,7 @@ export const ENTITIES = {
       wardenGuard: { title: 'Warden guard', units: ['brute', 'warden', 'warden', 'raider', 'husk'] },
       stripedBombardierMatingGrounds: { title: 'Striped Bombardier Mating Grounds', units: ['stripedBombardier', 'stripedBombardier', 'stripedBombardier'] },
 
+
       // --- regular groups, outer rings ---
       warband: { title: 'Warband', units: ['ravager', 'ravager', 'brute', 'brute', 'warden', 'warden', 'stalker', 'stalker'] },
       huskTide: { title: 'Husk tide', units: ['ravager', 'brute', 'husk', 'husk', 'husk', 'husk', 'husk', 'husk', 'stalker', 'stalker', 'stalker', 'stalker'] },
@@ -429,7 +430,7 @@ const T = (o) => Object.assign({
 // -------------------------------------TABLE-------------------------------------
 export const COMBAT_TAGS = {
   fire: T({ name: 'Fire', icon: '🔥', color: '#ff9950', desc: 'Burns anything standing here.', dmg: 1, life: 2 }),
-  nerveAgent: T({ name: 'Nerve Agent', icon: '🦠', color: '#33bd78', desc: 'Applies a stacking damage over time effect.', life: 3, onPeriodic: 'nerveAgent', everyX: 1 }),
+  nerveAgentCloud: T({ name: 'Nerve Agent', icon: '🦠', color: '#33bd78', desc: 'Applies a stacking damage over time effect.', life: 3, onPeriodic: 'nerveAgentCloud', everyX: 1, everyOff: 2 }),
 };
 export const tagDefById = (id) => COMBAT_TAGS[id] ?? null;
 // The bestiary's tile tags, as part of the config object (see the note in
