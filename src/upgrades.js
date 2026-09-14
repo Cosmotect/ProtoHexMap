@@ -11,7 +11,7 @@
 //  No game state lives here - pure functions over the config tables, so the
 //  same code serves the world map, the combat engine and the UI.
 // =====================================================================
-import { ABILITIES, ABILITY_UPGRADES, parsePassive } from './config/abilities.js';
+import { ABILITIES, ABILITY_UPGRADES, STATUSES, checkTrigger } from './config/abilities.js';
 import { combatStatsFor } from './config/entities.js';
 import { t, hasKey } from './i18n.js';
 import { tc } from './text.js';
@@ -55,6 +55,9 @@ export function upgradeInfo(abilityId, nodeId) {
   return {
     name: hasKey(`${key}.name`) ? t(`${key}.name`) : (node?.name || nodeId),
     desc: hasKey(`${key}.desc`) ? t(`${key}.desc`) : (node?.desc || ''),
+    // The few-word line the party view's tree cards show (`short` on the node;
+    // a locale may override it too). Empty = the card falls back to `desc`.
+    short: hasKey(`${key}.short`) ? t(`${key}.short`) : (node?.short || ''),
     icon: node?.icon || '⭐',
   };
 }
@@ -77,23 +80,8 @@ export function resolveAbility(abilityId, unlocked = []) {
     // zones do - without one, an upgraded ability would write its cost into the
     // config table that every other unit reads.
     cost: { ...(base.cost ?? {}) },
-    // buffX is a LIST (one entry per knob of the status this ability applies), so
-    // it needs a copy of its own - otherwise an upgraded ability would write into
-    // the config table every unit reads.
-    buffX: Array.isArray(base.buffX) ? [...base.buffX] : base.buffX,
-  };
-  // A numeric bump. Plain numbers add; a LIST (buffX, one entry per status knob)
-  // adds slot by slot, and a slot the bump does not name is left as it was.
-  const addUp = (cur, v) => {
-    if (!Array.isArray(cur) && !Array.isArray(v)) return (cur ?? 0) + v;
-    const base = Array.isArray(cur) ? cur : [cur];
-    const bump = Array.isArray(v) ? v : [v];
-    const out = [];
-    for (let i = 0; i < Math.max(base.length, bump.length); i++) {
-      const b = Number(bump[i]);
-      out.push(Number.isFinite(b) ? Number(base[i] ?? 0) + b : (base[i] ?? null));
-    }
-    return out;
+    // ...and so does statusEffectOverride, the numbers of the status the ability applies.
+    statusEffectOverride: base.statusEffectOverride ? { ...base.statusEffectOverride } : null,
   };
   const addZone = (zone, offs) => {
     const seen = new Set(zone.map((o) => `${o[0]},${o[1]}`));
@@ -101,7 +89,19 @@ export function resolveAbility(abilityId, unlocked = []) {
   };
   for (const [nodeId, node] of Object.entries(tree)) {
     if (!have.has(nodeId)) continue;
-    for (const [k, v] of Object.entries(node.add ?? {})) def[k] = addUp(def[k], v);
+    // `add: { damage, heal }` - plain numbers summed onto the ability's own.
+    for (const [k, v] of Object.entries(node.add ?? {})) def[k] = (Number(def[k]) || 0) + v;
+    // `statusEffectAdd: { field: n }` - summed onto the numbers of the status the
+    // ability applies: on top of its own statusEffectOverride where it has one
+    // for that field, otherwise on top of the table's value for the row.
+    if (node.statusEffectAdd && Object.keys(node.statusEffectAdd).length && def.statusEffect) {
+      const row = STATUSES[def.statusEffect] ?? {};
+      def.statusEffectOverride = def.statusEffectOverride ?? {};
+      for (const [k, v] of Object.entries(node.statusEffectAdd)) {
+        const cur = def.statusEffectOverride[k] !== undefined ? def.statusEffectOverride[k] : (Number(row[k]) || 0);
+        def.statusEffectOverride[k] = cur + v;
+      }
+    }
     // `costAdd: { hp, supplies, move }` - each entry is SUMMED onto the base
     // cost, so a node can make an ability cheaper (negative) or dearer, and two
     // nodes touching the same resource stack. It is its own field rather than
@@ -128,7 +128,7 @@ function auditUpgrades() {
     && ['castZone', 'dmgZone', 'tagZone'].every((k) => a[k].length === b[k].length)
     && JSON.stringify(a.pushZone) === JSON.stringify(b.pushZone)
     && JSON.stringify(a.cost) === JSON.stringify(b.cost)
-    && JSON.stringify(a.buffX) === JSON.stringify(b.buffX);
+    && JSON.stringify(a.statusEffectOverride) === JSON.stringify(b.statusEffectOverride);
   const dead = [];
   for (const [abilityId, tree] of Object.entries(ABILITY_UPGRADES)) {
     if (!ABILITIES[abilityId]) { dead.push(`${abilityId}:* (no such ability)`); continue; }
@@ -148,26 +148,26 @@ function auditUpgrades() {
 }
 try { if (import.meta.env?.DEV) auditUpgrades(); } catch { /* not a Vite build */ }
 
-// The PASSIVES a unit is under, as [{ status, when, buffX }] (see PASSIVES in
+// The TRIGGERS a unit is under, as [{ statusEffect, when, statusEffectOverride }] (see TRIGGERS in
 // config/abilities.js). Derived, never stored: recomputed from what the unit is
 // right now, so nothing has to remember to take one away. Today that is the
-// `passives` of its unlocked upgrade nodes; a relic it carries and a world-map
+// `triggers` of its unlocked upgrade nodes; a relic it carries and a world-map
 // aura it stands in are the next two sources and slot in here, with no change to
-// anything downstream. (An ENEMY's passives come straight off its bestiary row -
+// anything downstream. (An ENEMY's triggers come straight off its bestiary row -
 // see makeEnemyOfType in src/battle.js - and the engine parses them the same way.)
 //
 // Worked out when a FIGHT STARTS (main.js hands the list to createBattle) and
 // fixed for its duration - none of the three sources can change mid-fight, and
 // recomputing per fight is exactly what makes walking out of an aura's radius
-// drop the passive by itself.
-export function passivesFor(unit) {
+// drop the trigger by itself.
+export function triggersFor(unit) {
   const out = [];
   const add = (e) => {
-    const p = parsePassive(e);
+    const p = checkTrigger(e);
     if (!p) return;
-    // The same row at the same moment twice is one passive: a second copy would
+    // The same row at the same moment twice is one trigger: a second copy would
     // only re-apply what the first already did.
-    if (out.some((q) => q.status === p.status && q.when === p.when)) return;
+    if (out.some((q) => q.statusEffect === p.statusEffect && q.when === p.when)) return;
     out.push(p);
   };
   const unlocked = new Set(unit?.upgrades ?? []);
@@ -176,14 +176,14 @@ export function passivesFor(unit) {
     if (!tree) continue;
     for (const [nodeId, node] of Object.entries(tree)) {
       if (!unlocked.has(upgradeRef(abilityId, nodeId))) continue;
-      for (const e of node.passives ?? []) add(e);
+      for (const e of node.triggers ?? []) add(e);
     }
   }
   // A carried relic brings its own while it is carried (relics are not items yet;
   // when they are, this is the whole hook).
-  for (const e of unit?.relic?.passives ?? []) add(e);
+  for (const e of unit?.relic?.triggers ?? []) add(e);
   // Standing inside a world-map aura, decided by the world map before the fight.
-  for (const e of unit?.auraPassives ?? []) add(e);
+  for (const e of unit?.auraTriggers ?? []) add(e);
   return out;
 }
 

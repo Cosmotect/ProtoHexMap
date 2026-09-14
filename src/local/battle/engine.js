@@ -29,7 +29,7 @@
 //  opens with an ambush enemy phase before round 1.
 // =====================================================================
 import { DIRS, K, PK, addK, hexDist, hexLine, rotOff, aimRot, abRotFor, rotDir, boardTiles } from './bhex.js';
-import { abilityById, statusOverridesFor, parsePassive } from '../../config/abilities.js';
+import { abilityById, statusOverridesFor, checkTrigger } from '../../config/abilities.js';
 import { combatStatsFor, tagDefById } from '../../config/entities.js';
 
 export function createBattle({ config, radius, heights, party, enemies, partyKeys, enemyKeys, forced,
@@ -136,15 +136,15 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       maxHp: def.maxHp ?? def.hp, hp: def.hp,
       abilityIds: [...(def.abilityIds?.length ? def.abilityIds : cs.abilities)],
       abilityDefs: def.abilityDefs ?? null,
-      // PASSIVES the unit walked in with, as [{ status, when, buffX }]: a party
-      // unit's from passivesFor in src/upgrades.js (already parsed), an enemy's
+      // TRIGGERS the unit walked in with, as [{ statusEffect, when, statusEffectOverride }]: a party
+      // unit's from triggersFor in src/upgrades.js (already parsed), an enemy's
       // straight off its bestiary row (still as written - parsed here, so the
       // two arrive in one shape). Fixed for this fight: none of the sources can
       // change during one, and the set is worked out afresh when the next fight
       // starts. Each fires at its moment (fireMoment) and from then on the status
       // sits in `status` below like any other - nothing reads this list for a
       // rule, only for the moments.
-      passives: (def.passives ?? []).map(parsePassive).filter(Boolean),
+      triggers: (def.triggers ?? []).map((e) => checkTrigger(e)).filter(Boolean),
       pos, isEnemy, idx: i, partyIndex: def.partyIndex ?? null,
       startPos: pos, moveLocked: false, done: false, tagTicked: false,
       // Movement points already spent on ABILITY COSTS this round. Walking is
@@ -223,6 +223,9 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // resource that is short - which is what the HUD shows on the greyed button.
   function shortOf(u, ab) {
     const c = costOf(ab);
+    // A DISARMED unit can pay for nothing: every ability greys out, and the enemy
+    // AI (which asks the same question) walks instead of casting.
+    if (agencyLost(u, 'disarmed')) return 'disarmed';
     // hp can never be spent down to death: strictly MORE than the cost is
     // needed, so the ability greys out at exactly the cost.
     if (c.hp > 0 && u.hp <= c.hp) return 'hp';
@@ -262,17 +265,17 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // Everything about a status lives in the table (config.statuses, written out in
   // src/config/abilities.js); the code below only knows the SHAPE of a row, never
   // a particular status. A unit carries a bag:
-  //     u.status = { poison: { turns: 3, charges: 0, over: { tickDamage: 4 } } }
-  // `over` is what the ability changed about this status through buffX - only the
+  //     u.status = { poison: { turns: 3, charges: 0, over: { tickHP: -4 } } }
+  // `over` is what the ability changed about this status through statusEffectOverride - only the
   // knobs it actually named. Every other field is read from the table.
   const statusDef = (id) => (config.statuses ?? {})[id] ?? null;
   const carried = (u) => (u && u.status) || null;
-  // Every row this unit is under. A PASSIVE is in here too: it was put on by
+  // Every row this unit is under. A trigger's status is in here too: it was put on by
   // fireMoment through the same applyStatus a cast uses, so nothing below has to
   // know it came from an upgrade node or a bestiary row rather than a cast.
   const carriedIds = (u) => Object.keys(carried(u) || {});
   // One field of one row this unit is under, with the ability's own overrides
-  // (buffX) folded in.
+  // (statusEffectOverride) folded in.
   function statusField(u, id, field) {
     const def = statusDef(id);
     const slot = carried(u) && u.status[id];
@@ -281,7 +284,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     return over && over[field] !== undefined ? over[field] : def[field];
   }
   // Additive fields (speed), multiplicative ones (damageDealt / damageTaken) and
-  // plain switches (blocks, skipsTurn), summed / multiplied over everything held.
+  // plain switches (blocks), summed / multiplied over everything held.
   function statusSum(u, field) {
     let n = 0;
     for (const id of carriedIds(u)) { const v = statusField(u, id, field); if (typeof v === 'number') n += v; }
@@ -295,6 +298,16 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // The id of the first held row with this switch on (null = none).
   function statusWith(u, field) {
     for (const id of carriedIds(u)) { if (statusField(u, id, field)) return id; }
+    return null;
+  }
+  // AGENCY: the id of the first held row that takes this right away from the
+  // carrier ('stunned' = the whole activation, 'disarmed' = abilities only), or
+  // null when it may still do that. A list on the row, like ignoresImpact.
+  function agencyLost(u, kind) {
+    for (const id of carriedIds(u)) {
+      const list = statusField(u, id, 'agency');
+      if (Array.isArray(list) && list.includes(kind)) return id;
+    }
     return null;
   }
   // IMPACT damage - a crash into a wall or a body, a fall off a ledge, being
@@ -324,52 +337,46 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     return { icon: def.icon, color: def.color };
   }
   // Puts a status on a unit (re-applying refreshes it rather than stacking).
-  // buffX is the ability's number; what it MEANS is the table's business.
-  // `fresh` marks a status that was put on OUTSIDE anybody's turn - at battle
-  // setup. Without it a one-turn buff granted at setup is dead before it is ever
-  // used: startPlayerPhase ticks every party unit at the top of the FIRST round
-  // too, so `turns: 1` would count down to nothing before the player could act
-  // (and the same on an ambush, where the enemies move first). A fresh slot skips
-  // its carrier's next tick instead of counting down, so "starts each fight
-  // enraged, one turn" means exactly one usable turn - for either side, ambush or
-  // not, with no phase-specific special case anywhere.
-  function applyStatus(st, u, id, buffX, fresh = false) {
+  // `override` is the ability's statusEffectOverride; what a field MEANS is the
+  // table's business. WHEN the status went on does not matter here: its clock
+  // only starts counting from the first activation it is present at the START
+  // of (see tickStatuses / endActivation), so a status put on at battle setup,
+  // during the enemy's turn or by a hit all mean the same thing - `turns: 1` is
+  // one full activation with it.
+  function applyStatus(st, u, id, override) {
     const def = statusDef(id);
     if (!def || !u || u.uid === undefined || u.hp <= 0) return;
-    // buffX lines up, in order, with the knobs this status uses (config/abilities.js).
-    // Whatever it does not name keeps the number the table wrote - which is what
-    // you almost always want, and what keeps a multiplier status applied by an
-    // ability that never thought about buffX from landing as a meaningless x1.
-    const over = statusOverridesFor(def, buffX);
+    // Only the fields the override names change; everything else keeps the
+    // number the table wrote (config/abilities.js, statusOverridesFor).
+    const over = statusOverridesFor(def, override);
     // The two counters are knobs like any other, so an ability can say how long
     // its poison lasts; they just also happen to be what ticks down from here.
     if (!u.status) u.status = {};
     u.status[id] = {
       turns: over.turns !== undefined ? over.turns : (def.turns || 0),
       charges: over.charges !== undefined ? over.charges : (def.charges || 0),
-      over, fresh: !!fresh,
+      over,
     };
     if (st.sim) (st.rec.applied[u.uid] ??= {})[id] = 1;
     else { const v = statusView(u, id); floater(u.pos, v.icon, v.color); }
   }
-  // A MOMENT for one unit: every passive of its that names `when` puts its status
+  // A MOMENT for one unit: every trigger of its that names `when` puts its status
   // on now, through the very same applyStatus a cast uses. This is the whole of
-  // what a passive is to the engine (see PASSIVES in config/abilities.js). The
+  // what a trigger is to the engine (see TRIGGERS in config/abilities.js). The
   // moments that exist are the places this is called from:
-  //   'battleStart'  start(), once, before either side moves - FRESH, so a
-  //                  one-turn row survives the first round's opening tick
+  //   'battleStart'  start(), once, before either side moves
   //   'hit'          sHit(), after hp was actually lost
   // A new moment is one more call at the place it happens, nothing else. Runs in
   // the AI's simulations too (applyStatus records it in st.rec), so a creature
   // weighs the Enraged its hit would trigger.
   function fireMoment(st, u, when) {
     if (!u || u.hp <= 0) return;
-    for (const p of u.passives ?? []) {
+    for (const p of u.triggers ?? []) {
       if (p.when !== when) continue;
       // Crashes and falls stun through sStun for its "loses this turn" rule; a
-      // passive that stuns its own carrier goes the same way.
-      if (p.status === 'stun') { sStun(st, u); continue; }
-      applyStatus(st, u, p.status, p.buffX, when === 'battleStart');
+      // trigger that stuns its own carrier goes the same way.
+      if (p.statusEffect === 'stun') { sStun(st, u); continue; }
+      applyStatus(st, u, p.statusEffect, p.statusEffectOverride);
     }
   }
   function dropStatus(st, u, id, stripped) {
@@ -391,29 +398,43 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       if (slot.charges <= 0) dropStatus(st, u, id, true);
     }
   }
-  // The start of a unit's own activation: statuses bite, then their clock runs
-  // down. Damage first, so "3 turns of poison" really deals its damage 3 times.
-  // This happens even on a turn the unit is about to lose to a stun.
+  // The START of a unit's own activation: statuses bite. This happens even on a
+  // turn the unit is about to lose to a stun, and before it can step off a
+  // burning tile. The clocks do NOT run down here - that is endActivation's job
+  // - but every status present now is marked, so that only those count down when
+  // the activation ends. (Until 2026-09-13 the countdown happened here too, so a
+  // one-turn status put on during the enemy's turn was gone before its carrier
+  // ever acted with it, and battle-start statuses needed a special "first tick
+  // free" flag to survive. Both are gone.)
   function tickStatuses(u) {
     if (u.hp <= 0) return;
     const st = liveSt();
-    // The ticks run over everything held, so a passive that heals every turn
-    // (regeneration, no clock) works through the very same line a timed regen does.
+    // The ticks run over everything held, so a permanent status that heals every turn
+    // (regen with its clock switched off) works through the very same line a timed one does.
     for (const id of carriedIds(u)) {
-      const dmg = statusField(u, id, 'tickDamage') || 0;
-      const heal = statusField(u, id, 'tickHeal') || 0;
-      if (dmg > 0) { st.atk = null; sHit(st, u, dmg, statusDef(id).name); }
-      if (heal > 0 && u.hp > 0) sHeal(st, u, heal);
+      // tickHP: signed - below zero it bites (a poison), above it heals.
+      const hp = statusField(u, id, 'tickHP') || 0;
+      if (hp < 0) { st.atk = null; sHit(st, u, -hp, statusDef(id).name); }
+      if (hp > 0 && u.hp > 0) sHeal(st, u, hp);
     }
     flushDeaths(st);
     if (u.hp <= 0) return;
-    // Then the clocks. A row with no clock (turns 0) is simply skipped, which is
-    // all "permanent" means here.
+    for (const id of carriedIds(u)) u.status[id].seen = true;
+  }
+  // The END of a unit's own activation: what the activation used up is spent
+  // ('activation' statuses - a stun spent itself earlier, the moment it skipped
+  // the activation), and every clock that was running at the activation's start
+  // counts down one. A status put on DURING the activation (a self-cast, a
+  // trigger fired by a hit taken mid-walk) is not charged for it. A row with no
+  // clock (turns 0) is simply skipped, which is all "permanent" means here.
+  function endActivation(u) {
+    if (!u || u.hp <= 0) return;
+    const st = liveSt();
+    spendStatus(st, u, 'activation');
     for (const id of carriedIds(u)) {
       const slot = u.status[id];
-      // A status applied at battle setup gets its first tick for free - see
-      // applyStatus. One tick, once: the flag is cleared as it is honoured.
-      if (slot.fresh) { slot.fresh = false; continue; }
+      if (!slot || !slot.seen) continue;
+      slot.seen = false;
       if (!(slot.turns > 0)) continue;
       slot.turns -= 1;
       if (slot.turns <= 0) {
@@ -452,11 +473,13 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     return 0.5 + hpFrac;
   }
 
-  // What the AI thinks a status is worth on a unit. Straight from the table: each
-  // status states its own worth, so nothing has to be guessed from a sign.
-  function statusValue(id) {
+  // How much carrying a status HURTS, in the AI's units - the table's aiValue
+  // with the sign turned round (the table says how GOOD a status is to carry,
+  // positive = a blessing; the scoring below counts harm, positive = worse off).
+  // One sign flip, here, and nothing else in the planner had to change.
+  function statusHarm(id) {
     const def = statusDef(id);
-    return def ? (def.aiValue || 0) : 0;
+    return def ? -(def.aiValue || 0) : 0;
   }
   // partyDamageMod is a flat penalty applied to party casts only (the Stasis
   // "damage" debuff) - there is no equivalent enemy-side bonus any more
@@ -472,10 +495,10 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
         // the whole status bag, copied one level deep - forgetting this is what used
         // to make the AI simulate a board it could not actually see
         status: Object.fromEntries(Object.entries(u.status || {}).map(([id, v]) => [id, { ...v }])),
-        // the passives too (shared, never written), so a 'hit' moment fires in the
+        // the triggers too (shared, never written), so a 'hit' moment fires in the
         // simulation exactly as it would on the real board and the AI sees the
         // status its hit would trigger
-        passives: u.passives })),
+        triggers: u.triggers })),
       tags: Object.fromEntries(Object.entries(sb.tags).map(([k, t]) => [k, { ...t }])),
       heights: { ...sb.heights }, deathQueue: [],
       rec: { dmg: {}, moved: {}, killed: {}, applied: {}, stripped: {}, voided: {}, tmoved: {}, tkilled: {} } };
@@ -537,7 +560,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     if (st.sim) st.rec.dmg[v.uid] = (st.rec.dmg[v.uid] || 0) - g;
     else if (g > 0) { floater(v.pos, '+' + g, '#a8e05f'); blog((st.atk ? st.atk + ' -> ' : '') + v.name + ': +' + g); }
   }
-  // Crashes and falls stun; so does any ability with buff: 'stun'. All of them come
+  // Crashes and falls stun; so does any ability with statusEffect: 'stun'. All of them come
   // through here, and what "stunned" DOES is the table's business, not this line's.
   function sStun(st, v) {
     if (!v || v.uid === undefined || v.hp <= 0) return;
@@ -691,9 +714,9 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       if (u && u.hp > 0) {
         if (ab.heal > 0) sHeal(st, u, ab.heal);
         // ONE line for every status there is or ever will be: the ability names one
-        // (buff) and hands over a number (buffX), and the table decides the rest.
-        if (ab.buff === 'stun') sStun(st, u);
-        else if (ab.buff && statusDef(ab.buff)) applyStatus(st, u, ab.buff, ab.buffX);
+        // (statusEffect) and its overrides (statusEffectOverride), and the table decides the rest.
+        if (ab.statusEffect === 'stun') sStun(st, u);
+        else if (ab.statusEffect && statusDef(ab.statusEffect)) applyStatus(st, u, ab.statusEffect, ab.statusEffectOverride);
       }
     }
     flushDeaths(st, depth);
@@ -841,7 +864,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     if (!t || !t.collectible || !t.passPickup || t.hp > 0) return false;
     const st = liveSt(); sArrive(st, u); flushDeaths(st);
     emit();
-    return u.hp <= 0 || !!statusWith(u, 'skipsTurn') || u.pos !== k;
+    return u.hp <= 0 || !!agencyLost(u, 'stunned') || u.pos !== k;
   }
   // Hands the walk to the view: it animates and reports each tile entered.
   function animateMove(u, path, done) {
@@ -985,7 +1008,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     }
     // What the hit tiles MEAN, so the view can colour them by consequence rather
     // than by which ability happens to be selected.
-    const kind = ab.damage > 0 ? 'damage' : ab.heal > 0 ? 'heal' : ab.buff ? 'buff' : 'none';
+    const kind = ab.damage > 0 ? 'damage' : ab.heal > 0 ? 'heal' : ab.statusEffect ? 'buff' : 'none';
     return {
       anchor, kind,
       hit: zone(ab.dmgZone),
@@ -1017,7 +1040,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     // Anything that makes a unit skip its turn spends itself doing exactly that.
     for (const u of sb.units) {
       if (u.isEnemy || u.hp <= 0) continue;
-      const id = statusWith(u, 'skipsTurn');
+      const id = agencyLost(u, 'stunned');
       if (!id) continue;
       const view = statusView(u, id);
       spendStatus(liveSt(), u, 'activation', id);
@@ -1084,7 +1107,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   }
   // A unit that can no longer act (killed or stunned by a trap mid-walk).
   function retireUnit(u) {
-    const skipId = statusWith(u, 'skipsTurn');
+    const skipId = agencyLost(u, 'stunned');
     if (skipId) dropStatus(liveSt(), u, skipId, false);
     u.done = true;
     if (sb.over) return;
@@ -1093,6 +1116,9 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     else { sb.activeUid = null; emit(); startEnemyPhase(); }
   }
   function startEnemyPhase() {
+    // The party's activations are over: clocks count down, activation-spent
+    // statuses go (see endActivation).
+    for (const u of sb.units) if (!u.isEnemy && u.hp > 0) endActivation(u);
     sb.phase = 'enemy'; sb.activeUid = null; sb.selAb = null; sb.aimMap = null; sb.reach = null;
     sb.inspectUid = null; sb.inspectReach = null;
     sb.enemyQ = sb.units.filter((u) => u.isEnemy && u.hp > 0).sort((a, b) => b.init - a.init || a.idx - b.idx);
@@ -1107,6 +1133,8 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   }
   function stepEnemy() {
     if (sb.over) return;
+    // The enemy before this one has finished its activation (see endActivation).
+    if (sb.eqi >= 0 && sb.enemyQ[sb.eqi]) endActivation(sb.enemyQ[sb.eqi]);
     sb.eqi++;
     if (sb.eqi >= sb.enemyQ.length) { endRound(); return; }
     const e = sb.enemyQ[sb.eqi];
@@ -1117,7 +1145,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     tickStatuses(e);
     if (checkEnd()) return;
     if (e.hp <= 0) { emit(); wait(stepEnemy, 500); return; }
-    const skipId = statusWith(e, 'skipsTurn');
+    const skipId = agencyLost(e, 'stunned');
     if (skipId) {
       const view = statusView(e, skipId);
       spendStatus(liveSt(), e, 'activation', skipId);
@@ -1271,21 +1299,21 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
         const ab = t[hook] ? abById(t[hook]) : null;
         if (!ab) continue;
         n += (ab.damage || 0) - (ab.heal || 0);
-        // Positive aiValue = bad to carry = one more reason to keep off this tile,
-        // which is the same sign the tick damage already has. A boon tile comes out
+        // Harm (a status that is bad to carry) is one more reason to keep off this
+        // tile, the same sign the tick damage already has. A boon tile comes out
         // negative and the minds that can read tiles will step onto it.
-        if (ab.buff) n += statusValue(ab.buff) / 10;
+        if (ab.statusEffect) n += statusHarm(ab.statusEffect) / 10;
       }
       return n;
     };
     let best = null;
     for (const abId of e.abilityIds) {
       const ab = abFor(e, abId); if (!ab) continue;
-      // What counts as an ability worth thinking about. `ab.buff` is on this list
+      // What counts as an ability worth thinking about. `ab.statusEffect` is on this list
       // since 2026-09-05: without it a pure status ability (Guard, or anything a
       // designer invents in the status table) was thrown away before it was ever
       // scored, so enemies carrying Guard never once used it.
-      if (!(ab.damage > 0 || ab.heal > 0 || ab.buff || ab.pushZone.length || ab.tagId || ab.hZone.length)) continue;
+      if (!(ab.damage > 0 || ab.heal > 0 || ab.statusEffect || ab.pushZone.length || ab.tagId || ab.hZone.length)) continue;
       // Nor one it cannot pay for - otherwise the enemy picks it, and the cast
       // is refused at the last moment leaving the creature standing there.
       if (!canAfford(e, ab)) continue;
@@ -1313,7 +1341,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
             const d = st.rec.dmg[u.uid] || 0;
             const was = live.get(u.uid);
             // ----- statuses -------------------------------------------------
-            // A mind that READS statuses uses the table's own aiValue and weighs
+            // A mind that READS statuses uses the table's own aiValue (as harm) and weighs
             // the target: a blessing is worth most on the ally that is about to
             // need it, a curse is wasted on someone already carrying it or already
             // nearly dead. A mind that cannot read them still knows friend from
@@ -1323,7 +1351,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
             // so one number covers curses, blessings, friend and foe.
             let sv = 0;
             for (const [id, amt] of Object.entries(st.rec.applied[u.uid] || {})) {
-              const v = statusValue(id);          // <0 = a good thing to carry
+              const v = statusHarm(id);           // <0 = a good thing to carry
               if (!mind.statuses) { sv += (v < 0 ? -1 : 1) * flat; continue; }
               const already = was && was.status && was.status[id] ? 0.15 : 1;
               sv += v * already * statusNeed(u, was, v);
@@ -1333,7 +1361,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
             // dimmer than S would refuse to attack a shielded unit at all - the very
             // deadlock this AI was fixed for.
             for (const [id, amt] of Object.entries(st.rec.stripped[u.uid] || {})) {
-              const v = statusValue(id);
+              const v = statusHarm(id);
               sv += mind.statuses ? -v : (v < 0 ? 1 : -1) * flat;
             }
             // ----- injuries: finishing the wounded rather than spreading damage --
@@ -1359,7 +1387,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
         wait(() => {
           if (sb.over) { sb.busy = false; return; }
           // A trap on the way may have killed it, stopped it short or stunned it.
-          const hitId = statusWith(e, 'skipsTurn');
+          const hitId = agencyLost(e, 'stunned');
           if (e.hp <= 0 || hitId || e.pos !== best.startK) {
             if (e.hp > 0 && hitId) { const v = statusView(e, hitId); floater(e.pos, v.icon, v.color); }
             emit();
@@ -1462,7 +1490,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
           sb.busy = false;
           sArrive(liveSt(), c); flushDeaths(liveSt());
           if (checkEnd()) return;
-          if (c.hp <= 0 || statusWith(c, 'skipsTurn')) { retireUnit(c); return; }
+          if (c.hp <= 0 || agencyLost(c, 'stunned')) { retireUnit(c); return; }
           refreshReach();
           emit();
         });

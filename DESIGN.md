@@ -1158,6 +1158,146 @@ stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }
     The columns rebuild only when what they show changed (a signature of hp,
     statuses, upgrades), so scrolling one is not reset by a redraw.
 
+* 2026-09-13 **One way to write a passive, and `buffX` becomes `buffOverride`.**
+  * `buffX` was a LIST lined up, by position, with whichever numeric fields a
+    status happened to use - so writing one meant looking up the row's knob order
+    first, and a row edited in Settings could shift every ability's list under it.
+    It is now `buffOverride: { field: number }` on an ability (`buff: 'poison',
+    buffOverride: { turns: 5 }`), naming the fields it changes; nothing else moves.
+    `statusOverridesFor` reads the object; a leftover list is refused with a
+    console warning rather than misread. An upgrade node bumps those numbers with
+    `buffAdd: { field: n }` (summed onto the table's value, or onto the ability's
+    own override for that field); `add` is now documented as `{ damage, heal }`
+    and nothing else - the old list-aware `addUp` is gone.
+  * A passive is written ONE way: `{ status, when }`, both required, plus an
+    optional `buffOverride`. The bare-string and `'id@moment'` forms are gone,
+    and with them the Settings bestiary's passives column (a passive is an
+    object; that table edits lists of ids) and `passiveToString`. `parsePassive`
+    is renamed `checkPassive` to say what it does: the one place a written
+    passive is validated and normalised, used by the engine, `passivesFor` and
+    the party view alike, so a mistake in a config list is reported once, on the
+    console, with the entry that caused it.
+  * The Angry Beetle node (chargeHeadbutt) is `{ status: 'haste', when: 'hit',
+    buffOverride: { turns: 2 } }` - two turns, not one, because a clock counts
+    down at the start of the carrier's activation and a one-turn status put on
+    during the enemy's turn is gone before its carrier moves (see the open note in
+    the (d) entry above; this is the second time it has bitten).
+  * The party view's Close button and a click outside now lift the scene blur
+    (they close from inside the module; `onClose` tells main.js).
+
+* 2026-09-13 (b) **Status vocabulary pass.** Four renames the owner asked for,
+  all mechanical, plus one clarification that is not:
+  * `buff` -> `statusEffect` on an ability, `buffOverride` -> `statusEffectOverride`
+    (ability and passive alike), a node's `buffAdd` -> `statusEffectAdd`, and a
+    passive is `{ statusEffect, when, statusEffectOverride? }`. One word, one
+    meaning, everywhere it appears.
+  * `tickDamage` + `tickHeal` -> one signed `tickHP`: below zero it bites (poison
+    is -2), above it heals. `tickStatuses` reads the sign; the badge amount is
+    the size, as it always was.
+  * `skipsTurn: true` -> `agency: [...]`, a list like `ignoresImpact`:
+    `'stunned'` skips the whole activation (the old behaviour), `'disarmed'` (new
+    row `disarm`) leaves the walk and takes the abilities - `shortOf` answers
+    'disarmed' for every ability, which greys the HUD and makes the enemy AI walk
+    instead of casting. `agencyLost(u, kind)` is the one lookup.
+    Statuses spent `'activation'` are now spent when the activation is OVER
+    (startEnemyPhase for the party, the top of stepEnemy for the enemy that just
+    acted); a stun still spends itself the moment it skips one. Disarmed needed
+    this - spending it at the start would have lifted it before any ability was
+    ever refused.
+  * `aiValue` sign turned round: positive = GOOD to carry (a shield is +14, poison
+    -20). The planner counts harm, so one function - `statusHarm(id)`, formerly
+    `statusValue` - returns the negated table value and nothing else in the AI
+    changed. Test 13 checks the AI still shields itself and not the party.
+  * `collisionImmune` and `regeneration` moved INTO the status table (they were
+    tacked on after it under a "PASSIVES" heading, which made them look like a
+    different kind of row). They are not: a passive may name any row, and the
+    Angry Beetle node names `haste`. Nothing in the engine has ever treated those
+    two rows specially.
+
+* 2026-09-13 (c) **Triggers, one regeneration, the countdown at the end of the
+  activation, and the party view redrawn.**
+  * **`passives` -> `triggers`** in the config (an upgrade node's, a bestiary
+    row's, a relic's, an aura's `auraTriggers`), `triggersFor` / `checkTrigger` /
+    `TRIGGER_MOMENTS` in the code. The word "passive" now belongs to the player:
+    the party window's PASSIVES section lists what the unit's triggers give it.
+    A trigger is "at this moment, this status" and nothing more.
+  * **No second regeneration row.** The owner asked why `regen` (3 turns) and
+    `regeneration` (forever) both existed when a trigger can switch a clock off.
+    It can: `statusEffectOverride: { turns: 0 }` (0 is the table's own "no clock";
+    null means "leave it alone", which is why null did not work). `regeneration`
+    is gone; the commented-out node reads
+    `{ statusEffect: 'regen', when: 'battleStart', statusEffectOverride: { turns: 0 } }`.
+  * **Ability descriptions live on the ability rows** (`desc` in ABILITIES),
+    the same arrangement as upgrade nodes and statuses; the English
+    `ability.<id>.name/desc` locale keys are removed, Russian still overrides.
+  * **The clock counts down at the END of the carrier's activation** (the
+    owner's dilemma: end-of-turn ticking would let a wounded enemy step out of a
+    fire before it burned). Split the two events: statuses BITE at the start of
+    the activation, as before, and their clocks run at its end - `endActivation`,
+    called from startEnemyPhase for the party and the top of stepEnemy for the
+    enemy that just acted, the same place 'activation'-spent statuses go. Only a
+    status present at the activation's START counts down at its end (`seen` on
+    the slot), so a self-cast or a hit-trigger mid-activation is not charged for
+    that activation. Consequences: `turns: 1` is one full activation with the
+    status however it arrived; the battle-start `fresh` flag is gone; Angry
+    Beetle is back to `turns: 1`; a 3-turn poison still bites three times. Test
+    10 covers the ambush, hit and mid-activation cases.
+  * **Party view:** each ability's upgrades are the tree itself in miniature
+    (src/upgradetree.js, now shared with the roster window - the drawing moved
+    out of ui.js), cards with the node name over its new `short` line (falls
+    back to `desc`); "Active effects" is "Status effects" and leaves permanent
+    rows out (they are the passives); abilities and relic tinted blue, passives
+    gold, status effects green; a separator above and below the passives.
+
+* 2026-09-13 **Windows and scale: six tweaks the owner asked for.**
+  * **The Settings window is now above everything a player can have open.** It
+    sat at z-index 55, under the roster (58) and beside the party view (54), so
+    opening it over one of those drew it BEHIND that window and under that
+    window's own dark backdrop. It is at 70 now - over the roster, the party
+    view and the menu, under only the layer wipe (90) and the splash (200).
+  * **"100%" now means the old 75%.** The HUD was drawn too large at zoom 1 and
+    everyone used the 75% step, so 0.75 is the BASE (`UI_SCALE_BASE` in main.js)
+    and every option in Settings > General is a percentage OF IT: 50, 75, 100,
+    125, 150, 175, 200 (raw 0.375 to 1.5, which is why the clamp reaches down to
+    0.3). The stored value is still the raw zoom, so an older save needs no
+    migration - someone who had chosen 0.75 just finds the box reading 100%. The
+    list lives in main.js and is handed to the Settings window
+    (`getUiScaleOptions`), so what 100% means is written in one place.
+  * **A character's body wears its icon's colour.** `iconTint(glyph)` in
+    local/localview.js draws the glyph onto a 48px offscreen canvas once and
+    averages every pixel that is not transparent, weighted by alpha; the result
+    is pushed back out to a readable saturation and lightness, and cached per
+    glyph. `makePartyBody` uses it, so the arena AND the party view's 3D
+    portraits change together. Two honest limits, both handled rather than
+    hidden: an average of a many-coloured glyph drifts towards grey, and a build
+    with no colour-emoji font draws the glyph flat - in both cases the saturation
+    check falls back to the party colour rather than painting the body mud.
+  * **Upgrade cards are buttons.** Every card in a tree (src/upgradetree.js)
+    carries `data-ref="<abilityId>:<nodeId>"` and only an `open` one is enabled,
+    so the browser itself refuses a click on an owned or gated node. Pressing one
+    takes the upgrade on the spot - in the roster's detail pane (only when the
+    character shown is actually IN the party; a previewed stranger has nobody to
+    grant to) and in the party view's mini trees (outside a fight only: a combat
+    unit is built from its abilities when the fight starts, so a node taken
+    mid-battle would change the card and not the creature). `unlockUpgrade`
+    re-checks the prerequisites either way, so no path can hand out a gated node.
+  * **The "choose a companion" window is a fixed box.** It used to grow and
+    shrink with whatever character the cursor was over - a window that jumped
+    about while you read it. Now: a settled width and height, SEVEN cards a row
+    (five under 1180px, three under 720px), head and buttons at their natural
+    height, and the detail pane taking whatever is left and scrolling inside
+    itself; a tree wider than its column scrolls sideways on its own
+    (`.ud-tree-scroll`). Its background is solider too (0.97 rather than the
+    shared 0.78 panel wash), because the arena behind it was showing through the
+    trees.
+  * **Clicking outside that window closes it the way "Lock in" does**: the
+    pending pick is committed if there is one, and the party is left exactly as
+    it was if there is not. Both the button and the backdrop call one
+    `commitRoster()`, so there is only one rule. It listens for pointerdown on
+    the backdrop itself, so a drag that starts inside the window and ends outside
+    it is not mistaken for a click outside.
+
+
 ## Open questions
 
 1. Should fog ever re-cover tiles (line of sight), or stay permanent? Currently permanent.

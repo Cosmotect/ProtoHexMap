@@ -6,13 +6,15 @@
 //    health bar  the party panel's bar, so it reads the same everywhere
 //    portrait    the unit's arena body, live in 3D, turning on a gradient
 //    abilities   one section per ability: what it does, its numbers as this
-//                unit has them (upgrades folded in), the cost, and every
-//                upgrade node unlocked on it with the node's own sentence
+//                unit has them (upgrades folded in), the cost, and its upgrade
+//                tree in miniature (src/upgradetree.js) - owned, open and
+//                locked nodes in their parent-child layout
 //    relic       the relic slot (empty until relics exist)
-//    passives    everything the unit carries as a passive, with WHERE it came
-//                from (an upgrade node, a relic, an aura) and WHEN it fires
-//    effects     in a fight only: every status on the unit right now, the
-//                permanent ones included - the unit card hides those
+//    passives    everything the unit's TRIGGERS give it (config/abilities.js),
+//                with WHERE each came from (a node, a relic, an aura) and WHEN
+//                it fires - "passives" is the player's word for them
+//    effects     in a fight only: the statuses on the unit right now that can
+//                still change - the permanent ones are the passives above
 //
 //  Reads the same sources as everything else (the config tables, upgrades.js,
 //  status.js) and writes nothing. In a fight the HP and the effects come off
@@ -27,16 +29,17 @@
 // =====================================================================
 import * as THREE from 'three';
 import { t, tn } from './i18n.js';
-import { ABILITIES, ABILITY_UPGRADES, STATUSES, parsePassive } from './config/abilities.js';
+import { ABILITIES, ABILITY_UPGRADES, STATUSES, checkTrigger } from './config/abilities.js';
 import { combatStatsFor } from './config/entities.js';
-import { unitAbilityIds, upgradeRef, upgradeInfo, abilityDesc, resolveAbility, passivesFor } from './upgrades.js';
+import { unitAbilityIds, upgradeRef, upgradeInfo, abilityDesc, resolveAbility, triggersFor, unlockUpgrade } from './upgrades.js';
+import { abilityTreeHtml } from './upgradetree.js';
 import { statusesFor, statusInfo, badgeNumber } from './status.js';
 import { makePartyBody } from './local/localview.js';
 
 const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 const COST_ICON = { hp: '❤️', supplies: '📦', move: '👣' };
 
-export function createPartyView({ config, getGame, getBattle }) {
+export function createPartyView({ config, getGame, getBattle, onClose, onUnitChanged }) {
   const root = document.getElementById('party-view');
   const membersEl = document.getElementById('pv-members');
   const canvas = document.getElementById('pv-canvas');
@@ -59,15 +62,15 @@ export function createPartyView({ config, getGame, getBattle }) {
     }));
   }
 
-  // Every passive this unit is under and where each came from. passivesFor
+  // Every trigger this unit is under and where each came from. triggersFor
   // (upgrades.js) is what the fight uses and merges the sources; this walks
   // the same three sources again only to be able to NAME them.
   function passiveRows(unit) {
     const out = [];
     const add = (e, source) => {
-      const p = parsePassive(e, true);
+      const p = checkTrigger(e, true);
       if (!p) return;
-      const dup = out.find((q) => q.status === p.status && q.when === p.when);
+      const dup = out.find((q) => q.statusEffect === p.statusEffect && q.when === p.when);
       if (dup) { if (!dup.sources.includes(source)) dup.sources.push(source); return; }
       out.push({ ...p, sources: [source] });
     };
@@ -77,14 +80,14 @@ export function createPartyView({ config, getGame, getBattle }) {
       if (!tree) continue;
       for (const [nodeId, node] of Object.entries(tree)) {
         if (!unlocked.has(upgradeRef(abilityId, nodeId))) continue;
-        for (const e of node.passives ?? []) add(e, upgradeInfo(abilityId, nodeId).name);
+        for (const e of node.triggers ?? []) add(e, upgradeInfo(abilityId, nodeId).name);
       }
     }
-    for (const e of unit?.relic?.passives ?? []) add(e, unit.relic.name ? tn(unit.relic.name) : t('partyview.source.relic'));
-    for (const e of unit?.auraPassives ?? []) add(e, t('partyview.source.aura'));
-    // Anything passivesFor knows that the walk above did not (a source added
+    for (const e of unit?.relic?.triggers ?? []) add(e, unit.relic.name ? tn(unit.relic.name) : t('partyview.source.relic'));
+    for (const e of unit?.auraTriggers ?? []) add(e, t('partyview.source.aura'));
+    // Anything triggersFor knows that the walk above did not (a source added
     // later) still shows, unattributed, rather than silently missing.
-    for (const p of passivesFor(unit)) if (!out.some((q) => q.status === p.status && q.when === p.when)) out.push({ ...p, sources: [] });
+    for (const p of triggersFor(unit)) if (!out.some((q) => q.statusEffect === p.statusEffect && q.when === p.when)) out.push({ ...p, sources: [] });
     return out;
   }
 
@@ -92,7 +95,7 @@ export function createPartyView({ config, getGame, getBattle }) {
     const parts = [];
     if (ab.damage > 0) parts.push(t('battle.ui.dmg', { n: ab.damage }));
     if (ab.heal > 0) parts.push(t('battle.ui.heal', { n: ab.heal }));
-    if (ab.buff && STATUSES[ab.buff]) parts.push(statusInfo(ab.buff).name);
+    if (ab.statusEffect && STATUSES[ab.statusEffect]) parts.push(statusInfo(ab.statusEffect).name);
     for (const res of ['hp', 'supplies', 'move']) {
       const n = ab.cost?.[res] || 0;
       if (n) parts.push(`${COST_ICON[res]} ${t(n < 0 ? `battle.cost.gain.${res}` : `battle.cost.${res}`, { n: Math.abs(n) })}`);
@@ -104,18 +107,16 @@ export function createPartyView({ config, getGame, getBattle }) {
     const base = ABILITIES[id];
     if (!base) return `<div class="pv-section pv-ability empty">${escapeHtml(t('slot.ability.empty'))}</div>`;
     const ab = resolveAbility(id, unit.upgrades ?? []) ?? base;
-    const owned = (unit.upgrades ?? []).filter((r) => r.startsWith(`${id}:`)).map((r) => r.slice(id.length + 1));
-    const nodes = owned.map((n) => {
-      const info = upgradeInfo(id, n);
-      return `<li><span class="pv-up-icon">${info.icon}</span><b>${escapeHtml(info.name)}</b><span class="pv-up-desc">${escapeHtml(info.desc)}</span></li>`;
-    }).join('');
     const nums = abilityNumbers(ab);
+    // The whole tree in miniature, the unit's unlocked nodes lit - the same
+    // drawing the roster window uses, so the shape reads the same everywhere.
+    const tree = abilityTreeHtml(id, new Set(unit.upgrades ?? []), 'mini');
     return `<div class="pv-section pv-ability">
       <div class="pv-sec-head"><span class="pv-sec-icon">${ab.icon}</span><b>${escapeHtml(ab.name)}</b></div>
       <div class="pv-sec-desc">${escapeHtml(abilityDesc(id, config))}</div>
       ${nums ? `<div class="pv-sec-nums">${escapeHtml(nums)}</div>` : ''}
       <div class="pv-sub">${escapeHtml(t('partyview.upgrades'))}</div>
-      ${nodes ? `<ul class="pv-ups">${nodes}</ul>` : `<div class="pv-none">${escapeHtml(t('partyview.upgrades.none'))}</div>`}
+      ${tree ? `<div class="pv-tree-scroll">${tree}</div>` : `<div class="pv-none">${escapeHtml(t('partyview.upgrades.none'))}</div>`}
     </div>`;
   }
 
@@ -129,7 +130,7 @@ export function createPartyView({ config, getGame, getBattle }) {
 
   function passivesSection(unit) {
     const rows = passiveRows(unit).map((p) => {
-      const info = statusInfo(p.status);
+      const info = statusInfo(p.statusEffect);
       const when = t(`partyview.moment.${p.when}`);
       const from = p.sources.length ? t('partyview.source', { list: p.sources.join(', ') }) : '';
       return `<li><span class="pv-st-icon" style="color:${escapeHtml(info.color)}">${info.icon}</span>
@@ -143,13 +144,14 @@ export function createPartyView({ config, getGame, getBattle }) {
     </div>`;
   }
 
-  // In a fight: every status on the unit right now, permanent ones included.
+  // In a fight: the statuses on the unit right now that can still change. The
+  // permanent ones are left out - they are the passives, listed above.
   function effectsSection(live) {
     if (!live) return '';
-    const rows = statusesFor(live, { permanent: true }).map((hs) => {
+    const rows = statusesFor(live).map((hs) => {
       const info = statusInfo(hs);
       const num = badgeNumber(hs);
-      const tail = hs.turns > 0 ? t('status.turns', { n: hs.turns }) : hs.charges > 1 ? t('partyview.charges', { n: hs.charges }) : hs.permanent ? t('partyview.permanent') : '';
+      const tail = hs.turns > 0 ? t('status.turns', { n: hs.turns }) : hs.charges > 1 ? t('partyview.charges', { n: hs.charges }) : '';
       return `<li><span class="pv-st-icon" style="color:${escapeHtml(info.color)}">${info.icon}${num ? `<i>${num}</i>` : ''}</span>
         <div><b>${escapeHtml(info.name)}</b> ${tail ? `<span class="pv-when">${escapeHtml(tail)}</span>` : ''}
         <div class="pv-up-desc">${escapeHtml(info.desc)}</div></div></li>`;
@@ -180,7 +182,9 @@ export function createPartyView({ config, getGame, getBattle }) {
       <div class="pv-scroll">
         ${abs.map((id) => abilitySection(unit, id)).join('')}
         ${relicSection(unit)}
+        <div class="pv-sep"></div>
         ${passivesSection(unit)}
+        <div class="pv-sep"></div>
         ${effectsSection(live)}
       </div>
     </div>`;
@@ -277,11 +281,14 @@ export function createPartyView({ config, getGame, getBattle }) {
     lastT = 0;
     raf = requestAnimationFrame(frame);
   }
+  // Every way out - Esc, TAB, the Close button, a click outside - lands here, and
+  // whoever opened the window hears about it (main.js lifts the scene blur).
   function close() {
     if (!open) return;
     open = false;
     cancelAnimationFrame(raf);
     root.classList.add('hidden');
+    if (onClose) onClose();
   }
   function toggle() { if (open) close(); else show(); }
   // Called by whoever changed the party or the fight; cheap when nothing did.
@@ -289,6 +296,23 @@ export function createPartyView({ config, getGame, getBattle }) {
 
   root.addEventListener('pointerdown', (e) => { if (e.target === root) close(); });
   document.getElementById('pv-close')?.addEventListener('click', close);
+
+  // Pressing an available (gold) card in a mini tree takes that upgrade for the
+  // column's own unit. Only `open` cards are enabled buttons and unlockUpgrade
+  // re-checks the prerequisites, so nothing gated can be handed out here.
+  // NOT during a fight: a combat unit is built from its abilities when the
+  // fight starts, so a node taken mid-battle would change the card and not the
+  // creature - better to refuse it than to lie about it.
+  membersEl.addEventListener('click', (e) => {
+    const card = e.target.closest('.ut-card');
+    if (!card || card.disabled) return;
+    if (getBattle()) return;
+    const col = card.closest('.pv-member');
+    const unit = getGame()?.state?.party?.[Number(col?.dataset.i)];
+    if (!unit || !unlockUpgrade(unit, card.dataset.ref)) return;
+    render(true);
+    if (onUnitChanged) onUnitChanged(unit);
+  });
 
   return { open: show, close, toggle, refresh, isOpen: () => open };
 }

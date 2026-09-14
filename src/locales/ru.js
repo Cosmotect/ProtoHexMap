@@ -62,7 +62,7 @@ export const ru = {
   'partyview.upgrades.none': 'Улучшений пока нет',
   'partyview.passives': 'Пассивные',
   'partyview.passives.none': 'Нет',
-  'partyview.effects': 'Действующие эффекты',
+  'partyview.effects': 'Статусные эффекты',
   'partyview.effects.none': 'Нет',
   'partyview.moment.battleStart': 'в начале боя',
   'partyview.moment.hit': 'при каждом попадании',
@@ -70,7 +70,6 @@ export const ru = {
   'partyview.source.relic': 'реликвия',
   'partyview.source.aura': 'аура на карте мира',
   'partyview.charges': 'осталось {n} {n:заряд|заряда|зарядов}',
-  'partyview.permanent': 'постоянно',
   'roster.title': 'Выберите спутника',
   'roster.replace': 'Займёт место бойца {name}',
   'roster.inParty': 'В отряде',
@@ -116,8 +115,6 @@ export const ru = {
   'status.enraged.desc': 'Один ход бьёт в полтора раза сильнее и проходит на 2 гекса дальше.',
   'status.collisionImmune.name': 'Толстокожий',
   'status.collisionImmune.desc': 'Не получает урона от столкновений, падений и сдавливания.',
-  'status.regeneration.name': 'Регенерация',
-  'status.regeneration.desc': 'Восстанавливает {n} HP в начале каждого своего хода, весь бой.',
   'status.turns': 'осталось {n} {n:ход|хода|ходов}',
 
   'party.title': 'Отряд',
@@ -409,6 +406,7 @@ export const ru = {
   'battle.cost.short.hp': 'не хватает HP - это было бы смертельно',
   'battle.cost.short.supplies': 'не хватает припасов',
   'battle.cost.short.move': 'не хватает очков движения в этом раунде',
+  'battle.cost.short.disarmed': 'обезоружен - в эту активацию способности недоступны',
   // Расстановка отряда перед боем, в который зашли сами.
   'deploy.step': 'Ставим {n} из {total}',
   'deploy.hint': 'Нажмите на клетку, чтобы поставить бойца.',

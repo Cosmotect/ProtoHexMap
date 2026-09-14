@@ -185,7 +185,7 @@ radius: 3
       0: [],
       1: [],
       2: [],
-      3: ['raidParty', 'stalkerPack', 'wardenGuard'],
+      3: ['stripedBombardierMatingGrounds'],
       4: ['raidParty', 'stalkerPack', 'wardenGuard'],
       5: ['raidParty', 'stalkerPack', 'wardenGuard'],
       6: ['raidParty', 'stalkerPack', 'wardenGuard'],

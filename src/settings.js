@@ -9,7 +9,7 @@
 
 import { t, LANGUAGES, getLanguage, setLanguage } from './i18n.js';
 import { SHAPE_NAMES } from './local/localview.js';
-import { ABILITIES, statusKnobs, parsePassive, passiveToString } from './config/abilities.js';
+import { ABILITIES, statusKnobs } from './config/abilities.js';
 // The intellect classes moved next to the bestiary that hands one to every row
 // (config/entities.js, 2026-09-10; that file itself renamed from units.js on
 // 2026-09-12).
@@ -40,18 +40,13 @@ const BESTIARY_COLS = [
   // The creature's INTELLECT CLASS: which facts it can weigh on its turn.
   { key: 'intellect', kind: 'select', w: 56, options: () => Object.keys(INTELLECT) },
   { key: 'abilities', kind: 'idlist', w: 130, valid: () => Object.keys(ABILITIES) },
-  // The creature's PASSIVES, in their string form: 'regeneration' (at battle
-  // start) or 'enraged@hit' (see PASSIVES in config/abilities.js). An entry the
-  // file wrote as an object with buffX shows as its string form and, if this
-  // cell is edited, is saved back as that string - the override is lost. Red
-  // when an entry names no status row or no known moment.
-  { key: 'passives', kind: 'idlist', w: 130,
-    show: (v) => { const p = parsePassive(v, true); return p ? passiveToString(p) : (typeof v === 'string' ? v : '?'); },
-    check: (v) => !!parsePassive(v, true) },
+  // No `triggers` column: a trigger is an object ({ statusEffect, when, ... }, see
+  // TRIGGERS in config/abilities.js) and this table only edits plain lists of
+  // ids. A bestiary row's triggers are written in the file.
 ];
 // A brand new creature: deliberately weak and plain, so an unfinished row that
 // finds its way into a fight cannot wreck a run.
-const NEW_ENEMY = () => ({ name: 'New enemy', shape: 'octahedron', color: 0xe2474b, hp: 10, init: 5, speed: 4, flying: false, intellect: 'C', abilities: ['strike'], passives: [] });
+const NEW_ENEMY = () => ({ name: 'New enemy', shape: 'octahedron', color: 0xe2474b, hp: 10, init: 5, speed: 4, flying: false, intellect: 'C', abilities: ['strike'], triggers: [] });
 const NEW_GROUP = () => ({ title: 'New group', units: [] });
 
 // Colours are written two ways in the config: as CSS strings ('#a1254a', what the
@@ -111,7 +106,7 @@ const MATRIX_SECTIONS = new Set(['tileTypes', 'biomes', 'statuses', 'intellect',
 // turn a hook off (config/entities.js, COMBAT_TAGS).
 const TAG_HOOKS = new Set(['onPeriodic', 'onPickup', 'onExpire', 'onDestroy']);
 
-export function createSettings({ config, defaults, onChange, getUiScale, onSetUiScale, getShowLog, onSetShowLog, onClose }) {
+export function createSettings({ config, defaults, onChange, getUiScale, getUiScaleOptions, onSetUiScale, getShowLog, onSetShowLog, onClose }) {
   const $ = (id) => document.getElementById(id);
   const win = $('settings');
   const tabsEl = $('settings-tabs');
@@ -220,9 +215,11 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
         <div class="settings-row"><span class="settings-label">${t('settings.language')}</span>
         <select id="settings-language">${options}</select><span class="settings-reset"></span></div></div>`);
       // UI scale: a browser preference (like the language), not part of CONFIG.
-      const scales = [0.75, 0.9, 1, 1.1, 1.25, 1.5];
+      // The list and its labels come from main.js, which owns what 100% means -
+      // it is a percentage of a BASE zoom, not the raw zoom itself.
+      const opts = getUiScaleOptions ? getUiScaleOptions() : [{ value: 1, label: '100%' }];
       const current = getUiScale ? getUiScale() : 1;
-      const scaleOptions = scales.map((s) => `<option value="${s}" ${Math.abs(s - current) < 0.01 ? 'selected' : ''}>${Math.round(s * 100)}%</option>`).join('');
+      const scaleOptions = opts.map((o) => `<option value="${o.value}" ${Math.abs(o.value - current) < 0.005 ? 'selected' : ''}>${o.label}</option>`).join('');
       parts.push(`<div class="settings-group"><div class="settings-group-title">${t('settings.uiscale.group')}</div>
         <div class="settings-row"><span class="settings-label">${t('settings.uiscale')}</span>
         <select id="settings-uiscale">${scaleOptions}</select><span class="settings-reset"></span></div>
@@ -384,9 +381,9 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
       // A comma-separated list of ids, marked red the moment one of them is not
       // a real id - a typo here would otherwise show up as a silently missing
       // creature much later, in a fight.
-      // `valid` lists the ids that exist; a column whose entries are not plain
-      // ids (the passives, 'enraged@hit') gives `check` (is this entry fine?)
-      // and `show` (its text form) instead.
+      // `valid` lists the ids that exist; a column whose entries need their own
+      // test may give `check` (is this entry fine?) and `show` (its text form)
+      // instead. Nothing uses them today.
       const valid = col.valid ? col.valid() : null;
       const arr = Array.isArray(value) ? value : [];
       const show = col.show || ((v) => v);
@@ -688,11 +685,11 @@ export function createSettings({ config, defaults, onChange, getUiScale, onSetUi
       for (const k of Object.keys(obj[rn])) if (!SKIP_KEYS.has(k) && !cols.includes(k)) cols.push(k);
     }
     const head = `<tr><th></th>${cols.map((c) => `<th>${c}</th>`).join('')}</tr>`;
-    // Hovering a status names its KNOBS in order - the list an ability's buffX
+    // Hovering a status names the numeric fields it uses - the ones a statusEffectOverride
     // lines up with (config/abilities.js). Editing the row can change that list,
     // so it is worked out here rather than written down anywhere.
     const rowTip = (rn) => (path === 'statuses'
-      ? `${path}.${rn}  |  buffX: [${statusKnobs(obj[rn]).join(', ') || 'nothing to set'}]`
+      ? `${path}.${rn}  |  statusEffectOverride fields: ${statusKnobs(obj[rn]).join(', ') || 'none in use'}`
       : `${path}.${rn}`);
     const body = rowNames.map((rn) => {
       const cells = cols.map((c) => {

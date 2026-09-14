@@ -1,5 +1,4 @@
-// =====================================================================
-//  ABILITIES, ABILITY UPGRADES AND STATUSES.
+// ===================ABILITIES, ABILITY UPGRADES AND STATUSES====================
 
 import { ringOffsets, lineOffsets, DIRS } from '../local/battle/bhex.js';
 
@@ -8,11 +7,13 @@ import { ringOffsets, lineOffsets, DIRS } from '../local/battle/bhex.js';
 //  (`resolveCast` in local/battle/engine.js) reads the fields below and performs
 //  them, always in this order, and the enemy AI judges a new ability by playing
 //  that same executor out on a copy of the board. So anything expressible here
-//  works in the game AND is understood by the AI the moment you write it.
+//  works in the game AND is understood by the AIs.
 //
 //    name       Ability name as it shows up in-game.
-//    desc       info about the ability that roster window and the ability
-//               tooltips show.
+//    desc       what it does, in the player's words - the roster window, the
+//               ability tooltips and the party window show it. Written HERE,
+//               the one place; a translation may override it with the locale
+//               key ability.<id>.desc (English has no such keys any more).
 //
 //  ----- 1. WHERE IT CAN BE POINTED ------------------------------------
 //    castZone   a LIST OF OFFSETS from the caster's tile: [[q, r], ...]. Any
@@ -32,14 +33,21 @@ import { ringOffsets, lineOffsets, DIRS } from '../local/battle/bhex.js';
 //
 //  ----- 2. WHAT IT DOES, in the order it happens ----------------------
 //    dmgZone    offsets FROM THE AIM POINT that take the damage / heal / status.
-//    damage     flat damage to every unit in dmgZone - a creature's whole
-//               strength is this number now (no more enemy-only power bonus,
-//               removed 2026-09-10). Height matters: 2+ levels above adds
-//               combat.highBonus, 2+ below removes combat.lowPenalty.
+//    damage     flat damage to every unit in dmgZone. Height matters: 2+ levels
+//               above adds combat.highBonus, 2+ below removes combat.lowPenalty.
 //    heal       flat healing to every unit in dmgZone (applied after damage).
-//    buff       the id of a status from STATUSES below, applied to every unit in
-//               dmgZone; buffX is the list of numbers for that status's knobs
-//               (see WHAT buffX MEANS, further down this file).
+//    statusEffect  the id of a status from STATUSES below, applied to every unit
+//               in dmgZone. As the table wrote it, unless...
+//    statusEffectOverride  { field: number } - the numbers of that status THIS
+//               ability wants different from the table. Only the fields you
+//               name change:
+//                 statusEffect: 'nerveAgent'                                       the table's nerveAgent
+//                 statusEffect: 'nerveAgent', statusEffectOverride: { turns: 5 }  same bite, 5 turns
+//                 statusEffect: 'nerveAgent', statusEffectOverride: { tickHP: -4, turns: 5 }
+//               Fields you may name: speed, damageDealt, damageTaken, tickHP,
+//               turns, charges (the status's numeric fields). Written AS THE
+//               TABLE WRITES THEM, sign and all: `slow` is speed -1, so a harder
+//               slow is statusEffectOverride: { speed: -2 }.
 //    pushZone   [q, r, dirIndex, dist] - shove whoever stands on the offset [q, r]
 //               from the aim point.
 //                 dirIndex  which way, as an index into DIRS: 0 east, 1 north-east,
@@ -56,7 +64,7 @@ import { ringOffsets, lineOffsets, DIRS } from '../local/battle/bhex.js';
 //    hMode      'rel' = add `amount` to the height there, 'abs' = set it to
 //               `amount`. Clamped to 0..combat.elevationLevels. Units standing
 //               on the tile are not moved.
-//    tagId      a tile tag from COMBAT_TAGS (config/entities.js) to leave behind...
+//    tagId      a tile tag from COMBAT_TAGS (config/entities.js) to spawn...
 //    tagZone    ...on these offsets from the aim point.
 //    moveToTarget  the caster charges towards the aim point, LAST of all - after
 //               its own damage, shoves and terrain changes have resolved. It
@@ -92,9 +100,8 @@ import { ringOffsets, lineOffsets, DIRS } from '../local/battle/bhex.js';
 //
 // ----------------------------------DEFINITION-----------------------------------
 const A = (o) => Object.assign({
-
   name: 'Ability', icon: '💥', color: '#5fc7e0', desc: '',
-  damage: 0, heal: 0, buff: '', buffX: null,   // buffX null = "use the status's own values"
+  damage: 0, heal: 0, statusEffect: '', statusEffectOverride: null,   // null = the status exactly as the table wrote it
   castZone: [], castAny: false, dmgZone: [], tagZone: [], tagId: null,
   hZone: [], hMode: 'rel', pushZone: [], rotatable: false, moveToTarget: false,
   cost: { hp: 0, supplies: 0, move: 0 },
@@ -102,30 +109,35 @@ const A = (o) => Object.assign({
 // -------------------------------------TABLE-------------------------------------
 export const ABILITIES = {
   //Enemy Abilities
-  softeningBite: A({ name: 'Softening Bite', icon: '⚔️', color: '#e0b25f', buff: 'vulnerable', castZone: ringOffsets(1, 1), dmgZone: [[0, 0]] }),
-  rageBite: A({ name: 'Enraging Bite', icon: '🤬', color: '#E84A27', buff: 'enraged', castZone: ringOffsets(1, 1), dmgZone: [[0, 0]] }),
+  softeningBite: A({ name: 'Softening Bite', icon: '⚔️', color: '#e0b25f', statusEffect: 'vulnerable', castZone: ringOffsets(1, 1), dmgZone: [[0, 0]] }),
+  rageBite: A({ name: 'Enraging Bite', icon: '🤬', color: '#E84A27', statusEffect: 'enraged', castZone: ringOffsets(1, 1), dmgZone: [[0, 0]] }),
   headbutt: A({ name: 'Headbutt', icon: '🐏', color: '#e0b25f', damage: 0, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], pushZone: [[0, 0, 0]], rotatable: true }),
-  weakeningBite: A({ name: 'Weakening Bite', icon: '🩼', color: '#38D1AC', buff: 'weaken', castZone: ringOffsets(1, 1), dmgZone: [[0, 0]] }),
+  weakeningBite: A({ name: 'Weakening Bite', icon: '🩼', color: '#38D1AC', statusEffect: 'weaken', castZone: ringOffsets(1, 1), dmgZone: [[0, 0]] }),
+
   lobbedShrapnelBurst: A({ name: 'Lobbed ShrapnelBurst', icon: '💥', color: '#ff9950', damage: 3, castZone: ringOffsets(1, 3), dmgZone: ringOffsets(0, 1) }),
+  lobbedNerveAgentBurst: A({ name: 'Lobbed Nerve Agent Burst', icon: '🎆', color: '#ff9950', damage: 1, castZone: ringOffsets(1, 4), dmgZone: ringOffsets(0, 1), tagId: 'nerveAgent', tagZone: ringOffsets(0, 1) }),
+
   swipe: A({ name: 'Swipe', icon: '💫', color: '#5fc7e0', damage: 5, castZone: ringOffsets(1, 1), dmgZone: [[0, 0], [-1, -1], [0, 1]], rotatable: true }),
   //strike
   //heavy strike
   //thundering strike
-  lobbedNagentBurst: A({ name: 'Lobbed Nerve Agent', icon: '💥', color: '#ff9950', damage: 1, castZone: ringOffsets(1, 3), dmgZone: ringOffsets(0, 1) }),
   //Razeing Antler Swipe
   chargeHeadbutt: A({ name: 'Charge Headbutt', icon: '🐏💨', color: '#e0b25f', damage: 2, castZone: lineOffsets(1, 3), dmgZone: [[0, 0]], pushZone: [[0, 0, 0]], rotatable: true, moveToTarget: true }),
   //Web
 
+
   //Player Abilities
-  strike: A({ name: 'Strike', icon: '⚔️', color: '#e0b25f', damage: 3, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]] }),
-  shove: A({ name: 'Shove', icon: '🌀', color: '#ffd75f', damage: 1, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], pushZone: [[0, 0, 0]], rotatable: true }),
-  volley: A({ name: 'Volley', icon: '🎯', color: '#a8e05f', damage: 2, castZone: ringOffsets(2, 4), dmgZone: [[0, 0]] }),
-  lance: A({ name: 'Lance', icon: '⚡', color: '#5fc7e0', damage: 3, castZone: ringOffsets(1, 1), dmgZone: [[0, 0], [1, 0], [2, 0]], rotatable: true }),
-  burst: A({ name: 'Ember Burst', icon: '🔥', color: '#ff9950', damage: 2, castZone: ringOffsets(1, 3), dmgZone: ringOffsets(0, 1), tagZone: [[0, 0]], tagId: 'fire', cost: { move: 1 } }),
-  bolt: A({ name: 'Bolt', icon: '☄️', color: '#c66dff', damage: 4, castZone: ringOffsets(1, 2), dmgZone: [[0, 0]], cost: { hp: 1 } }),
-  mend: A({ name: 'Mend', icon: '🏥', color: '#a8e05f', heal: 4, castZone: ringOffsets(0, 1), dmgZone: [[0, 0]], cost: { supplies: 1 } }),
-  guard: A({ name: 'Guard', icon: '🛡️', color: '#5fc7e0', buff: 'shield', castZone: ringOffsets(0, 1), dmgZone: [[0, 0]], cost: { hp: -1 } }),
-  clawSwipe: A({ name: 'Claw Swipe', icon: '🔪', color: '#5fc7e0', damage: 3, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], rotatable: true })
+  strike: A({ name: 'Strike', icon: '⚔️', color: '#e0b25f', desc: 'A close blow against one adjacent enemy.', damage: 3, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]] }),
+  shove: A({ name: 'Shove', icon: '🌀', color: '#ffd75f', desc: 'A light hit that pushes the target away - off a ledge, into a wall, into its friends.', damage: 1, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], pushZone: [[0, 0, 0]], rotatable: true }),
+  volley: A({ name: 'Volley', icon: '🎯', color: '#a8e05f', desc: 'An arrow into a single target at medium range; too close and there is no shot.', damage: 2, castZone: ringOffsets(2, 4), dmgZone: [[0, 0]] }),
+  lance: A({ name: 'Lance', icon: '⚡', color: '#5fc7e0', desc: 'A piercing thrust that strikes three tiles in a row, aimed by direction.', damage: 3, castZone: ringOffsets(1, 1), dmgZone: [[0, 0], [1, 0], [2, 0]], rotatable: true }),
+  burst: A({ name: 'Ember Burst', icon: '🔥', color: '#ff9950', desc: 'A thrown blast: damages the target and everything around it, and leaves fire burning where it lands.', damage: 2, castZone: ringOffsets(1, 3), dmgZone: ringOffsets(0, 1), tagZone: [[0, 0]], tagId: 'fire', cost: { move: 1 } }),
+  bolt: A({ name: 'Bolt', icon: '☄️', color: '#c66dff', desc: 'A heavy arcane hit on one nearby target.', damage: 4, castZone: ringOffsets(1, 2), dmgZone: [[0, 0]], cost: { hp: 1 } }),
+  mend: A({ name: 'Mend', icon: '🏥', color: '#a8e05f', desc: 'Heals one ally standing on or next to the caster.', heal: 4, castZone: ringOffsets(0, 1), dmgZone: [[0, 0]], cost: { supplies: 1 } }),
+  guard: A({ name: 'Guard', icon: '🛡️', color: '#5fc7e0', desc: 'Shields a nearby ally: the next hit or shove against them is blocked outright.', statusEffect: 'shield', castZone: ringOffsets(0, 1), dmgZone: [[0, 0]], cost: { hp: -1 } }),
+  clawSwipe: A({ name: 'Claw Swipe', icon: '🔪', color: '#5fc7e0', desc: 'Clawed slashes that tear through.', damage: 3, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], rotatable: true }),
+  glaive: A({ name: 'Glaive Strike', icon: '⚔️', color: '#e0b25f', desc: 'Downward jab with a sleek glaive.', damage: 4, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], rotatable: true }),
+  plasmaBolt: A({ name: 'Plasma Bolt', icon: '☄️', color: '#e0b25f', desc: 'A bolt of plasma, eerily calm, searing.', damage: 2, castZone: ringOffsets(1, 3), dmgZone: [[0, 0]] }),
 };
 
 
@@ -134,14 +146,22 @@ export const ABILITIES = {
 
 
 
-// ==============================STATUSES AND PASSIVES===============================
+// ==============================STATUSES AND TRIGGERS===============================
 //  A status is a certain termporary effect that modifies how aspects of combat
 //  interact with the unit carrying the status effect.
 //  Every status is built from one or more verbs which the engine knows how to
 //  perform. New verbs must be added in code, new statuses are config only.
 //
+//  A "passive" (what the party window calls them) is a status a unit puts on
+//  ITSELF through a TRIGGER - an upgrade node, a relic or an aura saying "at this
+//  moment, this status". It is gone when the source is no longer affecting the
+//  unit. See TRIGGERS below the table.
+//
 //  ----- what each building block does, exactly -----
 //  EFFECTS (all optional; a status may combine several):
+//    tickHP       hp the carrier gains (positive) or loses (negative) at the
+//                 start of its activation - the same moment a tile tag bites.
+//                 A nerveAgent is tickHP: -2, a regeneration tickHP: 2.
 //    speed        added to the carrier's move points, signed. Negative = a slow.
 //                 The floor at combat.minSpeed still applies, so a slow can never
 //                 pin a unit in place. Read in effSpeed().
@@ -154,18 +174,18 @@ export const ABILITIES = {
 //                 hostile push). One charge is spent per event blocked; within a
 //                 single cast one charge covers the whole cast, so a wide
 //                 ability cannot chew through a shield with its second tile.
-//    skipsTurn    true = the carrier does not act on its activation. One charge
-//                 is spent doing that.
-//    tickDamage   damage dealt to the carrier at the start of its activation.
-//    tickHeal     healing given to the carrier at the start of its activation.
-//                 Both tick at exactly the same moment as a tile tag does.
+//    agency       what the carrier LOSES the right to do, a list of:
+//                 'stunned'   does not act on its activation at all - no move,
+//                             no ability (the activation is skipped)
+//                 'disarmed'  may still move, but cannot use any ability
+//                 Empty = acts freely. A row may name both.
 //    ignoresImpactImpact kinds this row shrugs off:
 //                'crash'(shoved into a wall or a body),
 //                'fall' (shoved off a ledge),
 //                'crush'(squashed between two things).
 //                 Empty = takes them all like everyone else
 //
-//  LIFETIME (how the status ends - a status with neither is a non-expiring passive):
+//  LIFETIME (how the status ends - a status with neither never expires):
 //    turns        How many of the carrier's turns it lasts. Counted down at the
 //                 start of the turn, AFTER the tick damage / heal. 0 = no clock.
 //    charges      How many times it may be spent before it ends (see spentOn).
@@ -173,42 +193,33 @@ export const ABILITIES = {
 //                 'hit'(something was blocked / taken),
 //                 'attack' (the carrier cast a damaging ability),
 //                 'activation' (the carrier's turn came up).
-//                 '' = Permanent, aka a passive ability.
+//                 '' = nothing spends it.
 //
 //                 A status with NO clock and an EMPTY spentOn can never be taken
-//                 off - that is what makes it a permanent passive (Padded,
-//                 Regenerating). A status with no clock and spentOn: 'cleanse'
+//                 off - that is what makes it permanent (Padded). A trigger may
+//                 make ANY row permanent with statusEffectOverride: { turns: 0 }:
+//                 Regenerating is `regen` with its clock switched off, not a
+//                 second row. A status with no clock and spentOn: 'cleanse'
 //                 lasts until something cleanses it - an endless curse. Nothing
 //                 else has to be declared: permanence is read off these fields.
 //                 (No 'cleanse' event exists in the engine yet; when a cleansing
 //                 ability arrives it is one spendStatus(st, u, 'cleanse') call.)
 //
-//  WHAT buffX MEANS - an ability's buffX is a LIST, one entry per knob:
-//    A status's KNOBS are its numeric fields, always in this fixed order:
-//        speed, damageDealt, damageTaken, tickDamage, tickHeal, turns, charges
-//    ...narrowed to the ones THIS status actually uses - a knob counts as in use
-//    when the row moved it off its neutral value (0 for the additive ones and the
-//    counters, 1 for the two multipliers). statusKnobs(def) returns exactly that
-//    list, and the Settings window prints it beside the row so it is never a guess.
-//    An ability's `buffX` lines up with that list, in order:
-//        buff: 'poison', buffX: [4]        4 damage a turn, for the table's 3 turns
-//        buff: 'poison', buffX: [4, 5]     4 damage a turn, for 5 turns
-//        buff: 'poison', buffX: [null, 5]  the table's 2 damage, for 5 turns
-//        buff: 'poison'                    exactly what the table says
-//    A bare number is shorthand for a one-entry list (buffX: 4 is buffX: [4]), and
-//    null / an empty slot means "leave that knob as the table wrote it". Values
-//    are used AS WRITTEN, sign and all: `slow` is speed -1 in the table, and an
-//    ability that wants a harder slow says buffX: [-2].
-//    The numbers an ability actually applied are remembered per unit, so two
-//    sources of the same status do not have to agree.
+//  OVERRIDING A STATUS'S NUMBERS - `statusEffectOverride` on an ability or a trigger:
+//    A status row's NUMBERS (speed, damageDealt, damageTaken, tickHP, turns,
+//    charges) are what the table says. Whoever puts the status on may hand over
+//    `statusEffectOverride: { field: number }` naming the ones it wants different;
+//    everything it does not name stays as the table wrote it. The numbers that
+//    were actually applied are remembered on the unit, so two sources of the
+//    same status do not have to agree.
 //
 //  THE ENEMY AI:
-//    aiValue      how BAD carrying this status is, in the AI's own scoring units
-//                 (a point of damage is 10, a kill 45). Positive = bad for
-//                 whoever carries it, so the AI will try to inflict it on the
-//                 party and avoid inflicting it on its own side; negative = a
-//                 good thing to carry, so the AI hands it to allies and values
-//                 stripping it off a party unit. Nothing else has to be taught:
+//    aiValue      how GOOD carrying this status is, in the AI's own scoring units
+//                 (a point of damage is 10, a kill 45). Positive = good for
+//                 whoever carries it, so the AI hands it to allies and values
+//                 stripping it off a party unit; negative = bad to carry, so
+//                 the AI tries to inflict it on the party and keeps it off its
+//                 own side. Nothing else has to be taught:
 //                 the AI already plays every candidate cast out on a copy of the
 //                 board, so a status added here is scored from the next fight on.
 //                 A penalty and a bonus are two ROWS, never one row with a sign,
@@ -225,16 +236,174 @@ export const ABILITIES = {
 // ----------------------------------DEFINITION-----------------------------------
 const S = (o) => Object.assign({
   name: 'Status', desc: '', icon: '⭐', color: '#9aa7bd',
-  speed: 0, damageDealt: 1, damageTaken: 1, blocks: false, skipsTurn: false,
-  tickDamage: 0, tickHeal: 0,
-  ignoresImpact: [],
+  tickHP: 0, speed: 0, damageDealt: 1, damageTaken: 1, blocks: false, agency: [], ignoresImpact: [],
   turns: 0, charges: 0, spentOn: '',
   aiValue: 0,
 }, o);
+// -------------------------------------TABLE-------------------------------------
+export const STATUSES = {
+  shield: S({
+    name: 'Shield', icon: '🛡', color: '#5fc7e0',
+    desc: 'Blocks the next hit or push entirely, then breaks.',
+    blocks: true, charges: 1, spentOn: 'hit',
+    aiValue: 14,
+  }),
+  crit: S({
+    name: 'Charged', icon: '⚡', color: '#ffd75f',
+    desc: 'The next damaging ability this unit casts hits every target critically.',
+    damageDealt: 2, charges: 1, spentOn: 'attack',
+    aiValue: 10,
+  }),
+  stun: S({
+    name: 'Stunned', icon: '💫', color: '#c9a8ff',
+    desc: 'Loses its next activation: no move, no ability.',
+    agency: ['stunned'], charges: 1, spentOn: 'activation',
+    aiValue: -12,
+  }),
+  disarm: S({
+    name: 'Disarmed', icon: '🚫', color: '#c9a8ff',
+    desc: 'Can move, but cannot use any ability on its next activation.',
+    agency: ['disarmed'], charges: 1, spentOn: 'activation',
+    aiValue: -10,
+  }),
+  haste: S({
+    name: 'Hastened', icon: '💨', color: '#a8e05f',
+    desc: 'Moves {n} tiles further than usual.',
+    speed: 1, turns: 2,
+    aiValue: 6,
+  }),
+  slow: S({
+    name: 'Slowed', icon: '🐌', color: '#c9a8ff',
+    desc: 'Moves {n} tiles less than usual (never below the minimum speed).',
+    speed: -1, turns: 2,
+    aiValue: -9,
+  }),
+  nerveAgent: S({
+    name: 'Poisoned', icon: '🧪', color: '#8fd14f',
+    desc: 'Takes {n} damage at the start of each of its turns, then the nerveAgent fades.',
+    tickHP: -2, turns: 3,
+    aiValue: -20,
+  }),
+  regen: S({
+    name: 'Mending', icon: '🌿', color: '#a8e05f',
+    desc: 'Heals {n} at the start of each of its turns.',
+    tickHP: 2, turns: 3,
+    aiValue: 18,
+  }),
+  weaken: S({
+    name: 'Weakened', icon: '🩼', color: '#b58fd1',
+    desc: 'Deals half damage while it lasts.',
+    damageDealt: 0.5, turns: 2,
+    aiValue: -16,
+  }),
+  vulnerable: S({
+    name: 'Vulnerable', icon: '🎯', color: '#e2474b',
+    desc: 'Takes half again as much damage from everything while it lasts.',
+    damageTaken: 1.5, turns: 2,
+    aiValue: -18,
+  }),
+  enraged: S({
+    name: 'Enraged', icon: '🤬', color: '#e2474b',
+    desc: 'Hits half again as hard and moves 2 tiles further, for one turn.',
+    damageDealt: 1.5, speed: 2, turns: 1,
+    aiValue: 22,
+  }),
+  // A row with no clock and nothing to spend it stays for the whole fight once
+  // put on. Nothing else is special about it - a trigger may name ANY row (see
+  // TRIGGERS below), and switch a clock off with statusEffectOverride: { turns: 0 }.
+  collisionImmune: S({
+    name: 'Padded', icon: '🥊', color: '#b0714a', desc: 'Shrugs off crashes, falls and being crushed.',
+    ignoresImpact: ['crash', 'fall', 'crush'],
+    aiValue: 12,
+  }),
+};
+export const statusById = (id) => STATUSES[id] ?? null;
+
+// A status's numeric fields - the ones a statusEffectOverride may name - in the order
+// the badge and the Settings window list them.
+export const STATUS_KNOBS = ['speed', 'damageDealt', 'damageTaken', 'tickHP', 'turns', 'charges'];
+// The value each knob has when a status leaves it alone. The two multipliers rest
+// at 1 (x1 changes nothing); everything else rests at 0.
+const KNOB_NEUTRAL = { speed: 0, damageDealt: 1, damageTaken: 1, tickHP: 0, turns: 0, charges: 0 };
+// Which of those THIS status actually uses (moved off its neutral value), in
+// that order. The FIRST one is the status's "amount" - the {n} of its text and
+// the number on its badge (src/status.js). Editing a status in the Settings
+// window can change this list: give a status a tickHP and it grows one.
+export function statusKnobs(def) {
+  return def ? STATUS_KNOBS.filter((k) => Number(def[k] ?? KNOB_NEUTRAL[k]) !== KNOB_NEUTRAL[k]) : [];
+}
+// What a statusEffectOverride changes about a status: { field: number } for the numeric
+// fields it names with a real number. Anything else in it is ignored (and, for
+// a stray list left over from the old positional `buffX`, complained about).
+export function statusOverridesFor(def, override) {
+  const out = {};
+  if (!override || typeof override !== 'object') return out;
+  if (Array.isArray(override)) { console.warn('statusEffectOverride must be an object like { turns: 3 }, not a list:', override); return out; }
+  for (const k of STATUS_KNOBS) {
+    const n = Number(override[k]);
+    if (override[k] !== undefined && override[k] !== null && Number.isFinite(n)) out[k] = n;
+  }
+  return out;
+}
+
+
+// ----- TRIGGERS ---------------------------------------------------------
+//  A trigger is a status the unit puts on ITSELF at a moment, without a cast.
+//  That is the whole definition. There is no separate table for them and no
+//  such thing as a "passive row": a trigger names ANY row of the table above
+//  (Angry Beetle names `haste`, Padded names `collisionImmune`), the engine
+//  applies it with the very same applyStatus a cast uses, and from then on it
+//  sits in the unit's status bag like anything else. What happens next is the
+//  ROW's business:
+//    * a row with no clock and an empty spentOn stays for the whole fight
+//      (Padded) - what the party window lists as a PASSIVE;
+//    * a row with a clock wears off (Angry Beetle's `haste`, one activation);
+//    * a row with charges is spent by use ("starts every fight with a Shield"
+//      is just a trigger naming `shield`);
+//    * and a trigger may change the row's numbers on the way in, so
+//      `regen` with statusEffectOverride: { turns: 0 } is a permanent
+//      regeneration - no second row needed.
+//
+//  WHERE a trigger is written - all with the same list shape:
+//    an upgrade node's `triggers` (ABILITY_UPGRADES below), a bestiary row's
+//    `triggers` (config/entities.js), and later a relic's and a world-map aura's.
+//    The set a party unit is under is worked out when a FIGHT STARTS (triggersFor
+//    in src/upgrades.js) from what the unit IS right now, never stored on it, so
+//    walking out of an aura's radius needs nobody to remember to remove anything.
+//
+//  HOW one is written - ONE form, always an object with these two fields:
+//    { statusEffect: 'collisionImmune', when: 'battleStart' }
+//      statusEffect  a row of the STATUSES table (required)
+//      when          one of the moments below (required)
+//    ...and optionally the row's numbers changed, exactly as an ability does it:
+//    { statusEffect: 'regen', when: 'battleStart', statusEffectOverride: { turns: 0 } }
+//  Nothing else is accepted - a bare string, a missing `when`, a status or a
+//  moment the engine does not know - and a rejected entry says why on the
+//  console (checkTrigger below) rather than fighting silently without it.
+//  A worked example, an upgrade node that starts every fight three turns angry:
+//    angryBeetle: U({
+//      name: 'Angry Beetle', icon: '🐞', desc: 'Starts each fight enraged for 3 turns',
+//      triggers: [{ statusEffect: 'enraged', when: 'battleStart', statusEffectOverride: { turns: 3 } }],
+//    }),
+//
+//  THE MOMENTS (`when`) the engine knows - each is one line in the engine at the
+//  place the thing happens, so a new one is a new moment, not a new system:
+//    'battleStart'  once, before either side moves.
+//    'hit'          every time the carrier actually loses hp - an ability, a
+//                   crash / fall / crush, a tile tag, a nerveAgent tick. A hit that
+//                   a shield blocked is not a hit. Re-applying a row the unit
+//                   already carries refreshes it rather than stacking.
+//
+//  HOW LONG `turns` LASTS, whenever the status went on: a status bites at the
+//  START of its carrier's activation and its clock counts down at the END of
+//  it, and only an activation it was present at the start of counts. So
+//  `turns: 1` is one full activation with it - put on at battle start, during
+//  the enemy's turn, or by a hit taken mid-walk, all the same. A self-cast
+//  during the carrier's own activation is not charged for that activation.
 
 // Can nothing take this status off its unit? True when it has no clock and
 // nothing spends it. `slot` is the unit's own copy ({ turns, charges, over }) when
-// there is one - an ability may have given the row a clock through buffX. The
+// there is one - an ability may have given the row a clock through statusEffectOverride. The
 // unit card hides permanent rows from its status slots (the party view will list
 // them instead); everything else about a permanent row is ordinary.
 export function isPermanent(def, slot) {
@@ -243,183 +412,23 @@ export function isPermanent(def, slot) {
   return !(turns > 0) && !def.spentOn;
 }
 
+// The moments a trigger may name.
+export const TRIGGER_MOMENTS = ['battleStart', 'hit'];
 
-// A status's KNOBS: its numeric fields, in this fixed order. An ability's buffX
-// lines up with the ones a given status uses (see WHAT buffX MEANS above).
-export const STATUS_KNOBS = ['speed', 'damageDealt', 'damageTaken', 'tickDamage', 'tickHeal', 'turns', 'charges'];
-// The value each knob has when a status leaves it alone. The two multipliers rest
-// at 1 (x1 changes nothing); everything else rests at 0.
-const KNOB_NEUTRAL = { speed: 0, damageDealt: 1, damageTaken: 1, tickDamage: 0, tickHeal: 0, turns: 0, charges: 0 };
-// Which knobs THIS status uses, in that order - the list an ability's buffX lines
-// up with. Editing a status in the Settings window can change this list: give a
-// status a tickDamage and it grows a knob, on the spot.
-export function statusKnobs(def) {
-  return def ? STATUS_KNOBS.filter((k) => Number(def[k] ?? KNOB_NEUTRAL[k]) !== KNOB_NEUTRAL[k]) : [];
+// Checks one written trigger and returns it in the shape the engine carries -
+// { statusEffect, when, statusEffectOverride } - or null, saying why on the
+// console (unless `quiet`). This is the ONE reader of the trigger form: the
+// fight (engine.js), the party's trigger list (upgrades.js) and the party view
+// all go through it, so a mistake in a config list is caught in one place and
+// reads the same everywhere.
+export function checkTrigger(e, quiet = false) {
+  const bad = (why) => { if (!quiet) console.warn('trigger rejected:', why, e); return null; };
+  if (!e || typeof e !== 'object' || Array.isArray(e)) return bad('a trigger is written as { statusEffect, when }');
+  if (!e.statusEffect || !STATUSES[e.statusEffect]) return bad(`no status row named "${e.statusEffect}"`);
+  if (!e.when || !TRIGGER_MOMENTS.includes(e.when)) return bad(`"when" must be one of ${TRIGGER_MOMENTS.join(' / ')}`);
+  return { statusEffect: e.statusEffect, when: e.when, statusEffectOverride: e.statusEffectOverride ?? null };
 }
-// What an ability's buffX changes about a status: { field: value } for the knobs
-// it actually named. A bare number counts as a one-entry list; null / '' / a
-// non-number in a slot leaves that knob as the table wrote it; anything past the
-// end of the knob list is ignored rather than guessed at.
-export function statusOverridesFor(def, buffX) {
-  const list = buffX === undefined || buffX === null || buffX === '' ? []
-    : Array.isArray(buffX) ? buffX : [buffX];
-  const knobs = statusKnobs(def);
-  const out = {};
-  for (let i = 0; i < list.length && i < knobs.length; i++) {
-    const n = Number(list[i]);
-    if (list[i] === null || list[i] === '' || !Number.isFinite(n)) continue;
-    out[knobs[i]] = n;
-  }
-  return out;
-}
-// -------------------------------------TABLE-------------------------------------
-export const STATUSES = {
-  shield: S({
-    name: 'Shield', icon: '🛡', color: '#5fc7e0',
-    desc: 'Blocks the next hit or push entirely, then breaks.',
-    blocks: true, charges: 1, spentOn: 'hit',
-    aiValue: -14,
-  }),
-  crit: S({
-    name: 'Charged', icon: '⚡', color: '#ffd75f',
-    desc: 'The next damaging ability this unit casts hits every target critically.',
-    damageDealt: 2, charges: 1, spentOn: 'attack',
-    aiValue: -10,
-  }),
-  stun: S({
-    name: 'Stunned', icon: '💫', color: '#c9a8ff',
-    desc: 'Loses its next activation: no move, no ability.',
-    skipsTurn: true, charges: 1, spentOn: 'activation',
-    aiValue: 12,
-  }),
-  haste: S({
-    name: 'Hastened', icon: '💨', color: '#a8e05f',
-    desc: 'Moves {n} tiles further than usual.',
-    speed: 1, turns: 2,
-    aiValue: -6,
-  }),
-  slow: S({
-    name: 'Slowed', icon: '🐌', color: '#c9a8ff',
-    desc: 'Moves {n} tiles less than usual (never below the minimum speed).',
-    speed: -1, turns: 2,
-    aiValue: 9,
-  }),
-  poison: S({
-    name: 'Poisoned', icon: '🧪', color: '#8fd14f',
-    desc: 'Takes {n} damage at the start of each of its turns, then the poison fades.',
-    tickDamage: 2, turns: 3,
-    aiValue: 20,
-  }),
-  regen: S({
-    name: 'Mending', icon: '🌿', color: '#a8e05f',
-    desc: 'Heals {n} at the start of each of its turns.',
-    tickHeal: 2, turns: 3,
-    aiValue: -18,
-  }),
-  weaken: S({
-    name: 'Weakened', icon: '🩼', color: '#b58fd1',
-    desc: 'Deals half damage while it lasts.',
-    damageDealt: 0.5, turns: 2,
-    aiValue: 16,
-  }),
-  vulnerable: S({
-    name: 'Vulnerable', icon: '🎯', color: '#e2474b',
-    desc: 'Takes half again as much damage from everything while it lasts.',
-    damageTaken: 1.5, turns: 2,
-    aiValue: 18,
-  }),
-  enraged: S({
-    name: 'Enraged', icon: '🤬', color: '#e2474b',
-    desc: 'Hits half again as hard and moves 2 tiles further, for one turn.',
-    damageDealt: 1.5, speed: 2, turns: 1,
-    aiValue: -22,
-  }),
-};
 
-
-// ----- PASSIVES ---------------------------------------------------------
-//  A passive is a status the unit puts on ITSELF at a moment, without a cast.
-//  That is the whole definition. It is not a second system: a passive names a
-//  row of the table above, the engine applies that row with the very same
-//  applyStatus a cast uses, and from then on it sits in the unit's status bag
-//  like anything else. What happens next is the ROW's business:
-//    * a row with no clock and an empty spentOn stays for the whole fight
-//      (Padded, Regenerating) - the "always on" kind;
-//    * a row with a clock wears off (Raging Entry gives `enraged`, one turn);
-//    * a row with charges is spent by use ("starts every fight with a Shield"
-//      is just `passives: ['shield']`).
-//
-//  WHERE a passive is written - all with the same list shape:
-//    an upgrade node's `passives` (ABILITY_UPGRADES above), a bestiary row's
-//    `passives` (config/entities.js), and later a relic's and a world-map aura's.
-//    The set a party unit is under is worked out when a FIGHT STARTS (passivesFor
-//    in src/upgrades.js) from what the unit IS right now, never stored on it, so
-//    walking out of an aura's radius needs nobody to remember to remove anything.
-//
-//  HOW one is written - three forms, from the usual to the rare:
-//    'regeneration'                    the status, at battle start
-//    'enraged@hit'                     the status, at the moment after the @
-//    { status, when, buffX }           the same with the row's knobs overridden
-//                                      (buffX lines up with the row's knobs,
-//                                      exactly as an ability's buffX does)
-//  The two string forms are what the Settings window's list editor round-trips,
-//  so prefer them; the object is for when a node needs its own numbers.
-//
-//  THE MOMENTS (`when`) the engine knows - each is one line in the engine at the
-//  place the thing happens, so a new one is a new moment, not a new system:
-//    'battleStart'  (default) once, before either side moves. The status goes on
-//                   FRESH: its first tick is free, so a one-turn row is usable for
-//                   exactly one turn whether the fight opens normally or with an
-//                   ambush (see applyStatus in the engine).
-//    'hit'          every time the carrier actually loses hp - an ability, a
-//                   crash / fall / crush, a tile tag, a poison tick. A hit that
-//                   a shield blocked is not a hit. Re-applying a row the unit
-//                   already carries refreshes it rather than stacking.
-Object.assign(STATUSES, {
-  collisionImmune: S({
-    name: 'Padded', icon: '🥊', color: '#b0714a',
-    desc: 'Shrugs off crashes, falls and being crushed.',
-    // All three kinds: shoved into a wall, shoved off a ledge, squashed between
-    // two things. (Being crushed FLAT - shoved into something with nowhere left
-    // to go - is still lethal: that is not damage taken, it is no room to exist.)
-    ignoresImpact: ['crash', 'fall', 'crush'],
-    aiValue: -12,          // good to carry
-  }),
-  regeneration: S({
-    name: 'Regenerating', icon: '♻️', color: '#a8e05f',
-    desc: 'Heals {n} at the start of each of its turns, for the whole fight.',
-    tickHeal: 2,           // at the start of each of the carrier's own turns
-    aiValue: -20,          // good to carry, and it never runs out
-  }),
-});
-
-// The moments a passive may name. 'battleStart' is what a bare id means.
-export const PASSIVE_MOMENTS = ['battleStart', 'hit'];
-
-// One passive entry, whichever of the three forms it was written in, as
-// { status, when, buffX }. Returns null (and, unless `quiet`, says why on the
-// console) for an entry that names no row or no known moment - a typo in a
-// config list should be loud here rather than a silently missing passive in a
-// fight. The Settings window passes `quiet` while a cell is being typed in.
-export function parsePassive(e, quiet = false) {
-  let status, when, buffX = null;
-  if (typeof e === 'string') {
-    const at = e.indexOf('@');
-    status = (at < 0 ? e : e.slice(0, at)).trim();
-    when = at < 0 ? 'battleStart' : e.slice(at + 1).trim();
-  } else if (e && typeof e === 'object') {
-    status = e.status; when = e.when || 'battleStart'; buffX = e.buffX ?? null;
-  } else return null;
-  if (!STATUSES[status]) { if (!quiet) console.warn('passive: no status row named', status); return null; }
-  if (!PASSIVE_MOMENTS.includes(when)) { if (!quiet) console.warn('passive: no moment named', when, '(for', status + ')'); return null; }
-  return { status, when, buffX };
-}
-// The string form of a parsed passive, for the Settings window's list editor
-// ('enraged@hit'; a bare id at battle start). buffX has no string form and is
-// dropped, which is why the object form is file-only.
-export const passiveToString = (p) => (p.when === 'battleStart' ? p.status : `${p.status}@${p.when}`);
-
-export const statusById = (id) => STATUSES[id] ?? null;
 
 
 
@@ -434,19 +443,32 @@ export const statusById = (id) => STATUSES[id] ?? null;
 //  above plus every unlocked node, in the fixed order the nodes are listed.
 //
 //  Node format (all optional except the texts):
-//    name         what the node is called        REQUIRED
-//    icon         the glyph the roster window shows on its card
-//    desc         what it does, in the player's words - the ONE place this is
-//                 written. It used to live in the locale tables as
-//                 upgrade.<ability>.<node>.desc, which meant a node's effect
-//                 and the sentence describing it were edited in two files and
-//                 drifted apart. A translation may still override it: if a
-//                 locale defines that key, it wins (see upgradeInfo in
-//                 src/upgrades.js).
+//    name         What the node is called in-game.
+//    icon         The glyph the roster window shows on its card.
+//    desc         What it does, in more detail. 
+//    short        (optional) is the short version of the desciption the party
+//                 window's tree cards show under the name ("+1 damage",
+//                 "wider swipe"); without one the card shows `desc`.
+//  ----- 1. PRE-REQUISITES ---------------------------------------------
 //    requires     [nodeIds]  - ALL of them must be unlocked first (multi-parent
 //                              nodes are how two branches meet in a capstone);
 //                              [] / absent = a root, available from the start
-//    add          { damage, heal, buffX } - numeric bumps, summed onto the base
+//  ----- 2. WHAT THE NODE CHANGES --------------------------------------
+//    add          { damage, heal } - numbers SUMMED onto the ability's own:
+//                   add: { damage: 1 }         hits 1 harder
+//                   add: { heal: 2 }           heals 2 more
+//                   add: { damage: -1 }        hits 1 softer (a trade-off node)
+//                 Two nodes touching one number stack. Nothing else belongs in
+//                 `add`: zones have their own *Add fields below, the cost has
+//                 costAdd, and the numbers of the status an ability applies
+//                 have statusEffectAdd.
+//    statusEffectAdd  { field: number } - summed onto the numbers of the status
+//                 the ability applies (its `statusEffect`), field by field, on
+//                 top of the table's value or the ability's own override:
+//                   statusEffectAdd: { turns: 1 }     the nerveAgent lasts a turn longer
+//                   statusEffectAdd: { tickHP: -2 }   ...and bites 2 harder
+//                 Fields: speed, damageDealt, damageTaken, tickHP, turns,
+//                 charges. Does nothing on an ability with no `statusEffect`.
 //    castZoneAdd  [offsets]  - extra tiles the ability may be aimed at
 //    dmgZoneAdd   [offsets]  - extra tiles the effect covers (from the aim point)
 //    tagZoneAdd   [offsets]  - extra tiles that receive the ability's tile tag
@@ -457,71 +479,94 @@ export const statusById = (id) => STATUSES[id] ?? null;
 //                              two nodes touching one resource stack
 //    flags        { bool }   - switches for upgrade-specific ability logic; the
 //                              engine reads them off the resolved def
-//    passives     Apply a passive status effect to the unit.
+//    triggers     [{ statusEffect, when, statusEffectOverride? }] - triggers the node gives
+//                 the UNIT (not the ability). See TRIGGERS above for the form
+//                 and the moments.
 //
 // ----------------------------------DEFINITION-----------------------------------
 const U = (o) => Object.assign({
-  name: '', icon: '⭐', desc: '',
-  requires: [], add: {}, castZoneAdd: [], dmgZoneAdd: [], tagZoneAdd: [],
+  name: '', icon: '⭐', desc: '', short: '',
+  requires: [], add: {}, statusEffectAdd: {}, castZoneAdd: [], dmgZoneAdd: [], tagZoneAdd: [],
   pushDistAdd: 0, flags: {},
-  passives: [],
+  triggers: [],
 }, o);
 // -------------------------------------TABLE-------------------------------------
 export const ABILITY_UPGRADES = {
 
-  // clawSwipe: {//A Melee attack that reaches medium range and damage and is capable of being vampiric.
-  //   //Ability Range Upgrades
-  //   //level 1
-  //   cleave: U({
-  //     dmgZoneAdd: [[0, -1], [-1, 1]],
-  //     name: 'Cleave', icon: '✂️', desc: 'Wider swipe that also reaches the tiles next to target'
-  //   }),
-  //   //level 2
-  //   wideCleave: U({
-  //     requires: ['cleave'], dmgZoneAdd: [[-1, -1], [-2, 1]],
-  //     name: 'Wide Cleave', icon: '🌊', desc: 'The swipe covers almost all tiles around'
-  //   }),
-  //   spike: U({
-  //     requires: ['cleave'], dmgZoneAdd: [[1, 0]],
-  //     name: 'Spike', icon: '⚜️', desc: 'The cleave ends in a lunge that reaches for two tiles'
-  //   }),
+  clawSwipe: {//A Melee attack that reaches medium range and damage and is capable of being vampiric.
+    //Ability Range Upgrades
+    //level 1
+    cleave: U({
+      dmgZoneAdd: [[0, -1], [-1, 1]],
+      name: 'Cleave', icon: '✂️', desc: 'Wider swipe that also reaches the tiles next to target'
+    }),
+    //level 2
+    wideCleave: U({
+      requires: ['cleave'], dmgZoneAdd: [[-1, -1], [-2, 1]],
+      name: 'Wide Cleave', icon: '🌊', desc: 'The swipe covers almost all tiles around'
+    }),
+    spike: U({
+      requires: ['cleave'], dmgZoneAdd: [[1, 0]],
+      name: 'Spike', icon: '⚜️', desc: 'The cleave ends in a lunge that reaches for two tiles'
+    }),
 
-  //   //Ability Power Upgrades
-  //   //level 1
-  //   power: U({
-  //     add: { damage: 1 },
-  //     name: 'Strength', icon: '🦾', desc: 'With strengthened sinews, Gorm hits harder'
-  //   }),
-  //   //level 2
-  //   longclaw: U({
-  //     requires: ['power'], add: { damage: 2 },
-  //     name: 'Long Claws', icon: '🪓', desc: 'Large claws for big damage',
-  //   }),
-  //   leechclaw: U({
-  //     requires: ['power'], add: { damage: 1 }, costAdd: { hp: -2 },
-  //     name: 'Leech Claws', icon: '🖤', desc: 'Special channels in the claws siphon material from the target'
-  //   }),
-  // },
-
+    //Ability Power Upgrades
+    //level 1
+    power: U({
+      add: { damage: 1 },
+      name: 'Strength', icon: '🦾', desc: 'With strengthened sinews, Gorm hits harder'
+    }),
+    //level 2
+    longclaw: U({
+      requires: ['power'], add: { damage: 2 },
+      name: 'Long Claws', icon: '🪓', desc: 'Large claws for big damage',
+    }),
+    leechclaw: U({
+      requires: ['power'], add: { damage: 1 }, costAdd: { hp: -2 },
+      name: 'Leech Claws', icon: '🖤', desc: 'Special channels in the claws siphon material from the target'
+    }),
+  },
 
   chargeHeadbutt: {
     //Ability Utility Upgrades
     //level 1
     collisionImmune: U({
-      name: 'Padded', icon: '🥊', desc: 'Becomes immune to collisions',
-      passives: ['collisionImmune'],
+      name: 'Padded', icon: '🥊', desc: 'Becomes immune to collisions', short: 'immune to collisions',
+      triggers: [{ statusEffect: 'collisionImmune', when: 'battleStart' }],
     }),
     //level 2
     regenerate: U({
       requires: ['collisionImmune'],
-      name: 'Regenerating', icon: '♻️', desc: 'Regenerates each turn',
-      passives: ['regeneration'],
+      name: 'Regenerating', icon: '♻️', desc: 'Regenerates each turn', short: 'heals 2 every turn',
+      // `turns: 0` switches the clock off (0 is the table's own "no clock"; null
+      // would mean "leave it as the table wrote it", i.e. 3 turns).
+      triggers: [{ statusEffect: 'regen', when: 'battleStart', statusEffectOverride: { turns: 0 } }],
     }),
     beginEnraged: U({
       requires: ['collisionImmune'],
-      name: 'Raging Entry', icon: '😡', desc: 'Starts each combat enraged',
-      passives: ['enraged'],
+      name: 'Raging Entry', icon: '😡', desc: 'Starts each combat enraged', short: 'enraged on turn one',
+      triggers: [{ statusEffect: 'enraged', when: 'battleStart' }],
+    }),
+    //Ability Power upgrades
+    //level 1
+    heavyImpact: U({
+      name: 'Heavy Impact', icon: '🥊', desc: 'Gorm learns to put his full weight into the tackle.',
+      add: { damage: 1 },
+    }),
+    angryBeetle: U({
+      requires: ['heavyImpact'],
+      name: 'Angry Beetle', icon: '💢', desc: 'Gorm is driven into a frenzy when hit, picking up speed to reach his offenders.',
+      // Hastened (speed +1) for one activation, every time he loses hp.
+      triggers: [{ statusEffect: 'haste', when: 'hit', statusEffectOverride: { turns: 1 } }],
     })
+  },
+
+  glaive: {// A longer range melee attack
+    lunge: U({
+      dmgZoneAdd: [[1, 0]],
+      name: "Glaive Lunge", icon: '➡️➡️', desc: 'Can reach a tile further than directly in front.', short: '+1 range'
+    })
+
   },
 
 

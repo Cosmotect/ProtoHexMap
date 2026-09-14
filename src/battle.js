@@ -153,9 +153,9 @@ export function makeEnemyOfType(cfg, typeId) {
     shape: t.shape ?? 'octahedron',
     color: t.color ?? 0xe2474b,
     init: t.init, speed: t.speed, flying: t.flying, intellect: t.intellect,
-    // A creature may carry passives the same way an upgrade node does (see
-    // PASSIVES in config/abilities.js); absent on a row that names none.
-    passives: Array.isArray(t.passives) ? [...t.passives] : undefined,
+    // A creature may carry triggers the same way an upgrade node does (see
+    // TRIGGERS in config/abilities.js); absent on a row that names none.
+    triggers: Array.isArray(t.triggers) ? [...t.triggers] : undefined,
     abilityIds: Array.isArray(t.abilities) && t.abilities.length ? [...t.abilities] : undefined,
     alive: true,
   };

@@ -8,7 +8,7 @@
 // arena and another in the panel.
 //
 // A unit carries `unit.status = { <id>: { turns, charges, over } }`, where `over`
-// holds whatever the ability that applied it changed through buffX. The badge
+// holds whatever the ability that applied it changed through statusEffectOverride. The badge
 // needs ONE number for the {n} of the locale text, and that is the status's first
 // knob - its leading verb (config/abilities.js: statusKnobs). Shown as a SIZE, not
 // as the stored number: the table writes `slow` as speed -1, but every locale

@@ -13,7 +13,7 @@ import { createSettings, deepClone } from './settings.js';
 import { createCombatCinematic } from './local/transition.js';
 import { createBattle } from './local/battle/engine.js';
 import { COMBAT_CONFIG } from './config/localmap.js';
-import { resolvedAbilitiesFor, availableUpgrades, passivesFor } from './upgrades.js';
+import { resolvedAbilitiesFor, availableUpgrades, triggersFor } from './upgrades.js';
 import { recipeFromCode } from './local/mapcode.js';
 import { makeEnemyOfType } from './battle.js';
 import { t, tn, initLanguage, applyStaticTexts, onLanguageChange } from './i18n.js';
@@ -31,15 +31,28 @@ initAudio(CONFIG);
 // CSS variable that zooms the HUD (#hud in style.css). The inverse variable lets
 // the near-fullscreen settings window opt out.
 const UI_SCALE_KEY = 'hexmap-ui-scale';
+// WHAT "100%" MEANS. The HUD was drawn too large at zoom 1, and the setting
+// everyone actually used was the old 75%. So 0.75 is now the BASE - the zoom
+// the player sees as 100% - and every option in the Settings window is a
+// percentage OF THAT. The stored value is still the raw zoom, so a save made
+// before this change keeps working: someone who had chosen 0.75 simply finds
+// the box reading 100% now.
+const UI_SCALE_BASE = 0.75;
+// Offered in Settings > General, as percentages of the base above. 50% is the
+// new bottom step (0.375 raw), which is why the clamp below reaches to 0.3.
+const UI_SCALE_STEPS = [50, 75, 100, 125, 150, 175, 200];
+function uiScaleOptions() {
+  return UI_SCALE_STEPS.map((pct) => ({ value: +(UI_SCALE_BASE * pct / 100).toFixed(4), label: `${pct}%` }));
+}
 function applyUiScale(v) {
-  const scale = Math.min(2, Math.max(0.5, Number(v) || 1));
+  const scale = Math.min(2, Math.max(0.3, Number(v) || UI_SCALE_BASE));
   document.documentElement.style.setProperty('--ui-scale', String(scale));
   document.documentElement.style.setProperty('--ui-scale-inv', String(1 / scale));
   try { localStorage.setItem(UI_SCALE_KEY, String(scale)); } catch { /* private mode etc. */ }
   return scale;
 }
 function loadUiScale() {
-  try { return Number(localStorage.getItem(UI_SCALE_KEY)) || 1; } catch { return 1; }
+  try { return Number(localStorage.getItem(UI_SCALE_KEY)) || UI_SCALE_BASE; } catch { return UI_SCALE_BASE; }
 }
 applyUiScale(loadUiScale());
 
@@ -76,6 +89,9 @@ const settings = createSettings({
   config: CONFIG,
   defaults: DEFAULTS,
   getUiScale: loadUiScale,
+  // The Settings window shows whatever list this hands it, so what "100%" means
+  // is decided in ONE place (UI_SCALE_BASE above), not spelled twice.
+  getUiScaleOptions: uiScaleOptions,
   onSetUiScale: (v) => applyUiScale(v),
   getShowLog: loadShowLog,
   onSetShowLog: (v) => applyShowLog(v),
@@ -165,6 +181,9 @@ function openRosterFor(slotIndex) {
       game.setPartyUnit(slotIndex, def);
       cinematic.localView.refreshParty(game.state.party);
     },
+    // An upgrade taken straight off a card in the detail window: the party
+    // panel shows the "+n" count per ability, so it has to be redrawn.
+    onUnitChanged: () => { ui.update(game); partyView.refresh(); },
   });
 }
 
@@ -263,11 +282,11 @@ function beginInteractiveBattle(ctx, placementOverride = null) {
   // the end. A party unit fights with its RESOLVED abilities - the base defs
   // plus every upgrade tree node it has unlocked (src/upgrades.js).
   const partyDefs = game.state.party
-    // `passives` is worked out HERE, once per fight, from what the character is
+    // `triggers` is worked out HERE, once per fight, from what the character is
     // right now - unlocked upgrade nodes, a carried relic, a world-map aura it was
     // standing in. Deriving it per fight rather than storing it on the unit is what
-    // makes a passive go away by itself when its source does (src/upgrades.js).
-    .map((u, i) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.maxHp, partyIndex: i, alive: u.alive, abilityDefs: resolvedAbilitiesFor(u), passives: passivesFor(u) }))
+    // makes a trigger go away by itself when its source does (src/upgrades.js).
+    .map((u, i) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.maxHp, partyIndex: i, alive: u.alive, abilityDefs: resolvedAbilitiesFor(u), triggers: triggersFor(u) }))
     .filter((u) => u.alive && u.hp > 0);
   // shape and colour ride along from the bestiary entry (src/battle.js) so the
   // arena can build the right body for each enemy.
@@ -281,10 +300,10 @@ function beginInteractiveBattle(ctx, placementOverride = null) {
     shape: e.shape, color: e.color, typeId: e.typeId,
     intellect: e.intellect,   // its INTELLECT CLASS - how well it plays its turn
     abilityIds: e.abilityIds, init: e.init, speed: e.speed, flying: e.flying,
-    // A bestiary row may carry `passives` exactly as an upgrade node does, so
+    // A bestiary row may carry `triggers` exactly as an upgrade node does, so
     // "this creature is always armoured" and "this one enters raging" are
     // config, not code. Still in their written form here; the engine parses them.
-    passives: e.passives,
+    triggers: e.triggers,
   }));
   // The arena is holding the party back so the player can place them: park the
   // fight here and hand over to the deployment step. It runs when the camera
@@ -539,7 +558,12 @@ function endMapPreview() {
 
 // The party view (TAB). It reads the run and the fight through the two getters
 // and never holds either, so it is as current as the moment it is opened.
-const partyView = createPartyView({ config: CONFIG, getGame: () => game, getBattle: () => battle });
+const partyView = createPartyView({ config: CONFIG, getGame: () => game, getBattle: () => battle,
+  // The Close button and a click outside close it from inside the module; the
+  // scene blur is the caller's, so it is lifted here for every way out.
+  onClose: () => { if (ui) ui.updateBlur(); },
+  // An upgrade taken straight off a mini card: the party panel counts them.
+  onUnitChanged: () => { if (ui) ui.update(game); } });
 window.__partyView = partyView;   // for automated tests
 
 ui = createUI(CONFIG, {
@@ -547,7 +571,7 @@ ui = createUI(CONFIG, {
   isSubWindowOpen: () => settings.isOpen() || partyView.isOpen(),
   onTogglePartyView: () => {
     // Not over the start screen's roster or the settings window: one window at a time.
-    if (partyView.isOpen()) { partyView.close(); ui.updateBlur(); return; }
+    if (partyView.isOpen()) { partyView.close(); return; }
     if (settings.isOpen() || ui.rosterOpen() || !game) return;
     partyView.open(); ui.updateBlur();
   },
@@ -558,7 +582,7 @@ ui = createUI(CONFIG, {
   onMapCodePreview: () => openMapCodeDialog(),
   onEscape: () => {
     if (mapPreview) { endMapPreview(); return; }
-    if (partyView.isOpen()) { partyView.close(); ui.updateBlur(); return; }
+    if (partyView.isOpen()) { partyView.close(); return; }
     if (settings.isOpen()) { settings.close(); ui.updateBlur(); }
   },
   onDialogClosed: () => {

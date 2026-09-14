@@ -189,14 +189,14 @@ fs.mkdirSync(OUT, { recursive: true });
     const b = window.__battle;
     const u = b.state.units.find((x) => !x.isEnemy && x.hp > 0);
     // A slot is { turns, charges, over } - `over` holds only what the ability
-    // changed through buffX; everything else is read from the table.
+    // changed through statusEffectOverride; everything else is read from the table.
     u.status.shield = { turns: 0, charges: 1, over: {} };
     u.status.poison = { turns: 3, charges: 0, over: {} };
     return {
       ids: Object.keys(table),
       shieldBlocks: table.shield && table.shield.blocks === true,
-      stunSkips: table.stun && table.stun.skipsTurn === true,
-      poisonTicks: table.poison && table.poison.tickDamage > 0,
+      stunSkips: table.stun && Array.isArray(table.stun.agency) && table.stun.agency.includes('stunned'),
+      poisonTicks: table.poison && table.poison.tickHP < 0,
     };
   });
   for (const id of ['shield', 'crit', 'stun', 'haste']) {
@@ -219,8 +219,8 @@ fs.mkdirSync(OUT, { recursive: true });
     const u = window.__battle.state.units.find((x) => !x.isEnemy && x.hp > 0);
     delete u.status.shield; delete u.status.poison;
   });
-  // ----- buffX reaches the engine's own arithmetic ---------------------------
-  // An ability's buffX is a LIST lined up with the status's knobs, and what it
+  // ----- statusEffectOverride reaches the engine's own arithmetic ------------
+  // An ability's statusEffectOverride names the status fields it changes, and what it
   // sets is stored in the slot's `over`. The proof that `over` is really read (and
   // not just displayed) is that a bigger slow shrinks how far the unit can walk:
   // the reachable set is computed from effSpeed, which sums the speed field of
@@ -238,7 +238,7 @@ fs.mkdirSync(OUT, { recursive: true });
     const free = count();
     u.status.slow = { turns: 2, charges: 0, over: {} };          // the table's -1
     const table = count();
-    u.status.slow = { turns: 2, charges: 0, over: { speed: -3 } }; // buffX: [-3]
+    u.status.slow = { turns: 2, charges: 0, over: { speed: -3 } }; // statusEffectOverride: { speed: -3 }
     const harder = count();
     delete u.status.slow;
     const speed = u.speed;
@@ -247,7 +247,7 @@ fs.mkdirSync(OUT, { recursive: true });
     return { free, table, harder, speed };
   });
   if (!(slowReach.free > slowReach.table && slowReach.table > slowReach.harder)) {
-    problems.push('a status amount set through buffX did not reach the engine: ' + JSON.stringify(slowReach));
+    problems.push('a status amount set through statusEffectOverride did not reach the engine: ' + JSON.stringify(slowReach));
   }
   // And the table itself must no longer carry the two fields this replaced.
   const knobShape = await page.evaluate(() => {
@@ -307,13 +307,13 @@ fs.mkdirSync(OUT, { recursive: true });
     const count = () => card().querySelectorAll('.u-st:not(.empty)').length;
     await redraw();
     const before = count();
-    u.status = { ...(u.status || {}), collisionImmune: { turns: 0, charges: 0, over: {} }, regeneration: { turns: 0, charges: 0, over: {} } };
+    u.status = { ...(u.status || {}), collisionImmune: { turns: 0, charges: 0, over: {} }, regen: { turns: 0, charges: 0, over: { turns: 0 } } };
     await redraw();
     const withPermanent = count();
     u.status.haste = { turns: 2, charges: 0, over: {} };
     await redraw();
     const withClock = count();
-    delete u.status.collisionImmune; delete u.status.regeneration; delete u.status.haste;
+    delete u.status.collisionImmune; delete u.status.regen; delete u.status.haste;
     await redraw();
     const cleared = count();
     return { before, withPermanent, withClock, cleared };
@@ -347,6 +347,14 @@ fs.mkdirSync(OUT, { recursive: true });
   await page.waitForTimeout(200);
   const pvClosed = await page.evaluate(() => document.getElementById('party-view').classList.contains('hidden'));
   if (!pvClosed) problems.push('Escape did not close the party view');
+  // The Close button and a click outside must lift the scene blur too - they
+  // close from inside the module and used to leave the blur on (2026-09-13).
+  await page.keyboard.press('Tab');
+  await page.waitForTimeout(200);
+  await page.click('#pv-close');
+  await page.waitForTimeout(200);
+  const pvBtn = await page.evaluate(() => ({ hidden: document.getElementById('party-view').classList.contains('hidden'), blurred: document.getElementById('scene').classList.contains('blurred') }));
+  if (!pvBtn.hidden || pvBtn.blurred) problems.push('the Close button left the party view or the blur on: ' + JSON.stringify(pvBtn));
 
   // ----- tile tags are config now, and the AI can read what they do ---------
   // Tags were the one piece of arena content that could only be changed by
@@ -982,7 +990,7 @@ fs.mkdirSync(OUT, { recursive: true });
   const resetOk = await page.evaluate(() => window.game.config.rest.cost === 20);
   if (!resetOk) problems.push('reset did not restore the config value');
   // The statuses table on the Units tab: it renders, it no longer has the two
-  // columns that were removed, and hovering a row prints that status's buffX order.
+  // columns that were removed, and hovering a row names the fields a statusEffectOverride may set.
   await page.evaluate(() => document.querySelector('[data-tab="units"]').click());
   await page.waitForTimeout(150);
   const statusTable = await page.evaluate(() => {
@@ -997,7 +1005,7 @@ fs.mkdirSync(OUT, { recursive: true });
     for (const gone of ['amountIs', 'amountSign']) {
       if (statusTable.heads.includes(gone)) problems.push(`the statuses table still shows a "${gone}" column`);
     }
-    if (!/buffX:.*speed/.test(statusTable.slowTip || '')) problems.push('hovering a status does not name its buffX order: ' + statusTable.slowTip);
+    if (!/statusEffectOverride fields:.*speed/.test(statusTable.slowTip || '')) problems.push('hovering a status does not name its statusEffectOverride fields: ' + statusTable.slowTip);
   }
   await page.evaluate(() => document.querySelector('[data-tab="general"]').click());
   await page.waitForTimeout(100);

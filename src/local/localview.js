@@ -62,15 +62,68 @@ const SHAPES = {
 };
 export const SHAPE_NAMES = Object.keys(SHAPES);
 
+// THE COLOUR OF A CHARACTER comes from its own icon. The glyph is drawn once
+// onto a tiny offscreen canvas and every pixel that is not transparent is
+// averaged, so the body wears the emoji's own colour instead of one shared
+// gold for the whole party. Cached per glyph - three characters sharing an icon
+// share one measurement.
+//
+// Two honest limits, both handled rather than hidden:
+//   * the average of a colourful glyph drifts towards grey, so the result is
+//     pushed back out to a readable saturation and brightness;
+//   * a build with no colour-emoji font draws the glyph in flat text grey. That
+//     is indistinguishable from a genuinely grey icon, and both end up at the
+//     party's default colour, which is the sensible answer either way.
+const iconTintCache = new Map();
+export function iconTint(glyph, fallback = 0xffd166) {
+  const key = String(glyph ?? '');
+  if (!key) return fallback;
+  if (iconTintCache.has(key)) return iconTintCache.get(key);
+  let out = fallback;
+  try {
+    const S = 48;
+    const cv = document.createElement('canvas');
+    cv.width = S; cv.height = S;
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    ctx.clearRect(0, 0, S, S);
+    ctx.font = `${Math.round(S * 0.8)}px "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(key, S / 2, S / 2);
+    const d = ctx.getImageData(0, 0, S, S).data;
+    let r = 0, g = 0, b = 0, w = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      const a = d[i + 3] / 255;
+      if (a < 0.15) continue;              // ignore the antialiased fringe
+      r += d[i] * a; g += d[i + 1] * a; b += d[i + 2] * a; w += a;
+    }
+    if (w > 0) {
+      const col = new THREE.Color(r / w / 255, g / w / 255, b / w / 255);
+      const hsl = col.getHSL({ h: 0, s: 0, l: 0 });
+      // A near-grey average means the glyph had no colour of its own: keep the
+      // party default rather than painting the body mud.
+      if (hsl.s < 0.12) out = fallback;
+      else {
+        col.setHSL(hsl.h, Math.min(1, Math.max(0.45, hsl.s * 1.35)), Math.min(0.68, Math.max(0.42, hsl.l)));
+        out = col.getHex();
+      }
+    }
+  } catch { /* no DOM (headless rules tests): the default colour is fine */ }
+  iconTintCache.set(key, out);
+  return out;
+}
+
 // A party member's body: the capsule every character wears in the arena. One
 // function so the party view's 3D portraits (src/partyview.js) show the very
-// same body the arena does. `unit` is unused today; it is here for the day a
-// character gets a shape of its own.
+// same body the arena does. Its colour is the average colour of the unit's own
+// icon (iconTint above), falling back to the party colour when there is no icon
+// or the icon has no colour.
 export function makePartyBody(config, unit = null) {
   const c = config.colors;
+  const tint = unit?.icon ? iconTint(unit.icon, c.player) : c.player;
   const body = new THREE.Mesh(
     new THREE.CapsuleGeometry(0.2, 0.3, 6, 12),
-    new THREE.MeshStandardMaterial({ color: c.player, roughness: 0.4, emissive: 0x332a10 })
+    new THREE.MeshStandardMaterial({ color: tint, roughness: 0.4, emissive: 0x332a10 })
   );
   body.geometry.translate(0, 0.4, 0);
   return body;

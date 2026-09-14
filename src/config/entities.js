@@ -61,32 +61,16 @@ export const INTELLECT = {
 };
 
 // (What a status is worth to a mind that cannot read them lives in
-// `combat.blindStatusValue`, which is the copy the engine actually reads. There
-// used to be a second, unread BLIND_STATUS_VALUE export here; two spellings of
-// one number is how `enraged` ended up pointing at a field it did not have.)
+// `combat.blindStatusValue`, which is the copy the engine actually reads.
 
 export const intellectOf = (cls) => INTELLECT[cls] ?? INTELLECT.C;
 
-// ----- Tile tags -------------------------------------------------------
-// A tag is a mark left on a tile by an ability (fire from a burst, a wall from
-// a future ability, ...): closer in spirit to a unit or an object sitting on
-// the board than to the ability that placed it, which is why it lives here
-// rather than in config/abilities.js. `tagDefById` below is the lookup other
-// files use to read one; it moved here from config/abilities.js on
-// 2026-09-12 to sit next to the table it reads.
-const T = (o) => Object.assign({
-  name: 'Tag', icon: '⭐', color: '#ff9950', desc: '',
-  dmg: 0, heal: 0, life: 0, hp: 0,
-  pushable: false, collectible: false, passPickup: false,
-  onDestroy: null, onExpire: null, onPickup: null, onPeriodic: null,
-  everyX: 0, everyOff: 0,
-}, o);
 
-export const COMBAT_TAGS = {
-  fire: T({ name: 'Fire', icon: '🔥', color: '#ff9950', desc: 'Burns anything standing here.', dmg: 1, life: 2 }),
-};
 
-export const tagDefById = (id) => COMBAT_TAGS[id] ?? null;
+
+
+
+
 
 export const ENTITIES = {
   // ----- Party -------------------------------------------------------
@@ -119,7 +103,10 @@ export const ENTITIES = {
     //             drives its own upgrade tree (config/upgrades.js), and the roster
     //             window and the party panel are laid out for the pair.
     roster: [
-      { name: 'Gorm', icon: '🪲', hp: 40, speed: 3, flying: false, abilities: ['clawSwipe', 'chargeHeadbutt'], story: 'Gorm is as tough as he is not patient. His clawed swipes can lethal close up, and he knows how to get close up.' },
+      { name: 'Gorm', icon: '🪲', hp: 40, speed: 3, flying: false, abilities: ['clawSwipe', 'chargeHeadbutt'], story: 'Gorm is as tough as he is not patient. His clawed swipes can be lethal close up, and he knows how to get close up.' },
+      { name: 'Feren', icon: '🦋', hp: 30, speed: 5, flying: true, abilities: ['glaive', 'plasmaBolt'], story: 'Disappointed by the conduct of her brethren, she intends to use all of the help her new family can provide, to learn the truth about their world.' },
+      { name: 'Viridi', icon: '🦗', hp: 34, speed: 4, flying: false, abilities: ['glaive', 'plasmaBolt'], story: 'Disappointed by the conduct of her brethren, she intends to use all of the help her new family can provide, to learn the truth about their world.' },
+
       { name: 'Archer', icon: '🏹', hp: 28, speed: 4, flying: false, abilities: ['volley', 'lance'], story: 'Counts distance the way merchants count coin. Keeps one arrow set aside for an old debt and never says whose name is on it.' },
       { name: 'Mystic', icon: '🔮', hp: 22, speed: 3, flying: false, abilities: ['burst', 'mend'], story: 'Talks to the ember at the heart of things. What the fire answers is rarely comforting and has never yet been wrong.' },
       { name: 'Warden', icon: '⚔️', hp: 36, speed: 4, flying: false, abilities: ['strike', 'guard'], story: 'Held a border fort nobody else wanted, alone, for nine years. Still checks the horizon twice before sleeping.' },
@@ -181,11 +168,10 @@ export const ENTITIES = {
     //    speed      move points per turn (an uphill step costs 2)
     //    flying     ignores height and glides over anything
     //    abilities  ids from config/abilities.js ABILITIES
-    //    passives   optional - statuses the creature puts on ITSELF at a moment,
-    //               written exactly as on an upgrade node (see PASSIVES in
-    //               config/abilities.js): 'regeneration' (at battle start),
-    //               'enraged@hit' (whenever it loses hp), or an object with buffX.
-    //               A Hammerhead that is "always Padded" is passives: ['collisionImmune'].
+    //    triggers   optional - statuses the creature puts on ITSELF at a moment,
+    //               written exactly as on an upgrade node (see TRIGGERS in
+    //               config/abilities.js): [{ statusEffect: 'regen', when: 'battleStart', statusEffectOverride: { turns: 0 } }].
+    //               File-only: the Settings bestiary table does not show them.
     //  Leave the combat fields (init / speed / flying / abilities) off and the
     //  creature falls back to party.defaultCombat (by name) and then to its
     //  `default` row, so old hand-authored content and the party keep working
@@ -204,6 +190,10 @@ export const ENTITIES = {
       rushTick: { name: 'Rusher Tick', shape: 'spike', color: '#e2474b', hp: 4, init: 4, speed: 3, flying: false, intellect: 'C', abilities: ['headbutt'] },
 
       hammerhead: { name: 'Hammerhead', shape: 'box', color: '#b0714a', hp: 12, init: 6, speed: 2, flying: false, intellect: 'B', abilities: ['chargeHeadbutt'] },
+      stag: { name: 'Stag', shape: 'tetrahedron', color: '#b0714a', hp: 10, init: 4, speed: 4, flying: false, intellect: 'B', abilities: ['chargeHeadbutt'] },
+      bombardier: { name: 'Bombardier', shape: 'diamond', color: '#b0714a', hp: 9, init: 9, speed: 3, flying: false, intellect: 'B', abilities: ['lobbedShrapnelBurst'] },
+      stripedBombardier: { name: 'Striped Bombardier', shape: 'diamond', color: '#33bd78', hp: 7, init: 7, speed: 4, flying: false, intellect: 'B', abilities: ['lobbedNerveAgentBurst'] },
+
 
       husk: { name: 'Husk', shape: 'dodecahedron', color: '#9c5a4a', hp: 10, init: 4, speed: 3, flying: false, intellect: 'C', abilities: ['strike'] },
       drifter: { name: 'Drifter', shape: 'tetrahedron', color: '#d6803c', hp: 8, init: 5, speed: 4, flying: false, intellect: 'C', abilities: ['volley'] },
@@ -260,6 +250,7 @@ export const ENTITIES = {
       raidParty: { title: 'Raiding party', units: ['raider', 'raider', 'raider', 'stalker', 'stalker', 'warden'] },
       stalkerPack: { title: 'Stalker pack', units: ['stalker', 'stalker', 'stalker', 'stalker', 'drifter', 'drifter'] },
       wardenGuard: { title: 'Warden guard', units: ['brute', 'warden', 'warden', 'raider', 'husk'] },
+      stripedBombardierMatingGrounds: { title: 'Striped Bombardier Mating Grounds', units: ['stripedBombardier', 'stripedBombardier', 'stripedBombardier'] },
 
       // --- regular groups, outer rings ---
       warband: { title: 'Warband', units: ['ravager', 'ravager', 'brute', 'brute', 'warden', 'warden', 'stalker', 'stalker'] },
@@ -304,7 +295,9 @@ export const ENTITIES = {
 
   // Tile tags (defined above), part of the config object the same way `intellect`
   // is, so the Settings window's Tags table (config.tags) edits this same object.
-  tags: COMBAT_TAGS,
+  // `tags` is wired in at the bottom of this file, after COMBAT_TAGS is defined
+  // (the table sits below ENTITIES by the owner's choice, and a `const` cannot be
+  // read before its line runs).
 
 };
 
@@ -319,9 +312,126 @@ export function combatStatsFor(name) {
   // A row can be INCOMPLETE: one invented in the Settings window, or one restored
   // from settings saved by an older build, before the roster carried init / speed /
   // flying / abilities at all. Fill whatever is missing from defaultCombat rather
-  // than hand back a character with no abilities - which used to throw on the first
-  // draw of the party panel and take the whole page with it.
+  // than hand back a character with no abilities.
   const out = { ...p.defaultCombat };
   for (const [k, v] of Object.entries(row)) if (v !== undefined) out[k] = v;
   return out;
 }
+
+
+
+
+
+
+
+// ----- Tile tags ---------------------------------------------------------
+//  A tag is a mark left ON A TILE, not on a unit: fire spat out by a burst, a
+//  wall a future ability drops, a chest a hand-authored map hides in a
+//  corner. It lives in `sb.tags`, keyed by tile, the SAME board `sb.units`
+//  lives on - which is why a tag can be stood on, walked into, pushed, or
+//  battered down exactly like a unit can (local/battle/engine.js).
+//
+//  Think of a tag as AN ENTITY WITHOUT AGENCY. It sits on the board and can
+//  be acted upon like anything else there, but it never gets a turn, never
+//  gets an intellect class, and never decides a single thing. Everything a
+//  tag "does" is really an ordinary ABILITY (the ABILITIES table in
+//  config/abilities.js) being cast automatically, through the very same
+//  executor a unit's own cast goes through (resolveCast), the instant a
+//  moment named below happens to it. A tag is the board remembering to
+//  press a button on its own behalf - it is never the one choosing to press it.
+//
+//    name / icon / color  the badge shown on the tile and its tooltip - the
+//               same idea as a unit or a status, except a tag carries NO
+//               locale entry: unlike ability.<id>.desc / status.<id>.desc,
+//               `name` and `desc` here are English-only, written once.
+//    desc       what it does, in the player's words.
+//
+//  ----- HAZARD or BARRIER - decided by `hp` alone -----------------------
+//    hp         0 (the default) makes it a HAZARD: it does not block the
+//               tile, and `dmg` / `heal` below tick on whoever is standing
+//               there each time that unit's own activation comes up
+//               (tagTick). Above 0 makes it a BARRIER: a wall with that many
+//               hit points. It blocks ground movement outright for anyone
+//               who isn't flying (a flier just glides over it), can be
+//               shoved into a wall, an edge or a body exactly like a unit
+//               (sPush - crash / fall / crush all apply), and is worn down
+//               by ordinary damage (sHit) - an ability's hit, a shove's
+//               crash - the same way a unit's hp is. Reach 0 and it is
+//               destroyed. A hazard's `dmg` never touches a barrier's hp;
+//               only real damage does that.
+//    dmg        damage dealt each activation to whoever stands on a HAZARD
+//               tag (hp: 0). Never ticks while the tag is a barrier.
+//    heal       healing dealt each activation to whoever stands on a HAZARD
+//               tag, the same condition as `dmg`.
+//    life       how many ROUNDS the tag lasts before it fades away by
+//               itself, counted down at the end of each round. 0 = it never
+//               fades on its own - only destruction (a barrier beaten to 0
+//               hp) or a pickup removes it. A tag hand-placed on a map
+//               (a scenario's `startTags` - braziers and the like) is
+//               always forced permanent no matter what its row says here:
+//               an authored hazard is part of the arena, not a cast that is
+//               expected to gutter out after a couple of rounds.
+//
+//  ----- MOVEMENT, only meaningful on a barrier (hp > 0) ------------------
+//    pushable   true = a shove ability may take this barrier as a target and
+//               push it around the board the same way it pushes a unit.
+//               false = a shove simply cannot reach it.
+//
+//  ----- PICKUP -------------------------------------------------------------
+//    collectible  true = once the tag's hp is at or below 0 (a hazard, or a
+//               barrier that has just been broken), a unit that ARRIVES on
+//               its tile picks it up: the tag vanishes, a floater shows, and
+//               `onPickup` fires if the row names one.
+//    passPickup   true = a collectible tag also fires for a WALKING (non-
+//               flying) unit that merely passes THROUGH its tile mid-move,
+//               not only one that stops there. A flying unit never triggers
+//               this, or a barrier's block, or a hazard's tick - it glides
+//               over every tag there is.
+//
+//  ----- THE FOUR HOOKS - each names an id from ABILITIES (config/abilities.js),
+//  cast automatically AT THE TAG'S OWN TILE the instant the named moment
+//  happens. In the Settings window each hook gets a dropdown of ability ids
+//  rather than a text box, so a typo cannot quietly turn one off. --------
+//    onPeriodic  fires on a timer whether or not anyone is standing there -
+//               see `everyX` / `everyOff` just below.
+//    onPickup   fires the moment the tag is collected (see `collectible` /
+//               `passPickup` above).
+//    onExpire   fires the moment `life` counts down to 0 and the tag fades.
+//    onDestroy  fires the moment a barrier (hp > 0) is beaten down to 0 hp.
+//               (A hazard, hp: 0, has no hp to beat down - only `life`,
+//               a pickup, or its own onExpire/onPickup ever removes one.)
+//  A tag that only ticks `dmg` and names no hook is a plain damage-over-
+//  time puddle; one that ticks nothing and only names a hook is a pure
+//  trigger - a pressure plate, a rigged chest, a barrel that pops on death.
+//  The two are not exclusive: a tag may tick AND hook at once.
+//
+//  ----- THE TIMER, only meaningful together with `onPeriodic` ------------
+//    everyX     rounds between one firing and the next, repeating for as
+//               long as the tag exists.
+//    everyOff   a one-off delay before the FIRST firing only, counted the
+//               same way; 0 = the first firing waits the usual `everyX`
+//               rounds too, same as every firing after it.
+//
+//  Nothing above has to be taught to a mind by hand: an S/A-class intellect
+//  (`tags: true` in INTELLECT above) already weighs a tile's `dmg` / `heal`
+//  tick together with whatever its hooks would cast if triggered - see
+//  `tagHarm` in local/battle/engine.js's enemy AI - so a newly invented tag
+//  is understood the moment it is added here, the same promise a new
+//  ability or status already makes.
+// ----------------------------------DEFINITION-----------------------------------
+const T = (o) => Object.assign({
+  name: 'Tag', icon: '⭐', color: '#ff9950', desc: '',
+  dmg: 0, heal: 0, life: 0, hp: 0,
+  pushable: false, collectible: false, passPickup: false,
+  onDestroy: null, onExpire: null, onPickup: null, onPeriodic: null,
+  everyX: 0, everyOff: 0,
+}, o);
+// -------------------------------------TABLE-------------------------------------
+export const COMBAT_TAGS = {
+  fire: T({ name: 'Fire', icon: '🔥', color: '#ff9950', desc: 'Burns anything standing here.', dmg: 1, life: 2 }),
+  nerveAgent: T({ name: 'Nerve Agent', icon: '🦠', color: '#33bd78', desc: 'Applies a stacking damage over time effect.', life: 3, onPeriodic: 'nerveAgent', everyX: 1 }),
+};
+export const tagDefById = (id) => COMBAT_TAGS[id] ?? null;
+// The bestiary's tile tags, as part of the config object (see the note in
+// ENTITIES above).
+ENTITIES.tags = COMBAT_TAGS;

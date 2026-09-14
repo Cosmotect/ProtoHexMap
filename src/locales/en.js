@@ -64,7 +64,7 @@ export const en = {
   'partyview.upgrades.none': 'No upgrades yet',
   'partyview.passives': 'Passives',
   'partyview.passives.none': 'None',
-  'partyview.effects': 'Active effects',
+  'partyview.effects': 'Status effects',
   'partyview.effects.none': 'None',
   'partyview.moment.battleStart': 'at battle start',
   'partyview.moment.hit': 'whenever hit',
@@ -72,7 +72,6 @@ export const en = {
   'partyview.source.relic': 'relic',
   'partyview.source.aura': 'world-map aura',
   'partyview.charges': '{n} {n:use|uses} left',
-  'partyview.permanent': 'permanent',
   'roster.title': 'Choose a companion',
   'roster.replace': 'Takes the place of {name}',
   'roster.inParty': 'In party',
@@ -413,22 +412,9 @@ export const en = {
   'debuff.extraEnemies.desc': '+{debuffExtraEnemies} enemies join the fight',
 
   // ----- abilities (names + descriptions for the detail window and chips) --------
-  'ability.strike.name': 'Strike',
-  'ability.strike.desc': 'A close blow against one adjacent enemy.',
-  'ability.shove.name': 'Shove',
-  'ability.shove.desc': 'A light hit that pushes the target away - off a ledge, into a wall, into its friends.',
-  'ability.volley.name': 'Volley',
-  'ability.volley.desc': 'An arrow into a single target at medium range; too close and there is no shot.',
-  'ability.lance.name': 'Lance',
-  'ability.lance.desc': 'A piercing thrust that strikes three tiles in a row, aimed by direction.',
-  'ability.burst.name': 'Ember Burst',
-  'ability.burst.desc': 'A thrown blast: damages the target and everything around it, and leaves fire burning where it lands.',
-  'ability.bolt.name': 'Bolt',
-  'ability.bolt.desc': 'A heavy arcane hit on one nearby target.',
-  'ability.mend.name': 'Mend',
-  'ability.mend.desc': 'Heals one ally standing on or next to the caster.',
-  'ability.guard.name': 'Guard',
-  'ability.guard.desc': 'Shields a nearby ally: the next hit or shove against them is blocked outright.',
+  // Ability names and descriptions live on the ability rows (config/abilities.js,
+  // `name` / `desc`) since 2026-09-13. A translation overrides them with
+  // ability.<id>.name / ability.<id>.desc; English needs no entry.
 
   // ----- ability upgrade trees --------------------------------------------
   // No keys here on purpose. Since 2026-09-11 a node's name and description are
@@ -519,6 +505,7 @@ export const en = {
   'battle.cost.short.hp': 'not enough HP - it would be fatal',
   'battle.cost.short.supplies': 'not enough supplies',
   'battle.cost.short.move': 'not enough movement left this round',
+  'battle.cost.short.disarmed': 'disarmed - no abilities this activation',
   'battle.ui.heal': 'heals {n}',
   'battle.hit': '{attacker} hits {defender} for {dmg}',
   'battle.hitDown': '{attacker} hits {defender} for {dmg} - {defender} is down',

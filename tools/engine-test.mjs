@@ -15,8 +15,8 @@
 // =====================================================================
 const base = new URL('../src/', import.meta.url).href;
 const { CONFIG } = await import(base + 'config.js');
-const { ABILITIES, STATUSES, statusKnobs, statusOverridesFor, parsePassive, passiveToString, isPermanent } = await import(base + 'config/abilities.js');
-const { passivesFor } = await import(base + 'upgrades.js');
+const { ABILITIES, STATUSES, statusKnobs, statusOverridesFor, checkTrigger, isPermanent } = await import(base + 'config/abilities.js');
+const { triggersFor } = await import(base + 'upgrades.js');
 const { INTELLECT, COMBAT_TAGS } = await import(base + 'config/entities.js');
 const { statusesFor } = await import(base + 'status.js');
 const { createBattle } = await import(base + 'local/battle/engine.js');
@@ -29,7 +29,7 @@ const check = (ok, msg) => { if (!ok) problems.push(msg); };
 // Two tags and one ability, written only for these tests. Nothing here needs an
 // engine change: a tag's hook names an ordinary ability, and an ability carries
 // a status the same way any other does.
-ABILITIES.__testVenom = { ...ABILITIES.guard, name: 'Venom Seep', buff: 'poison', buffX: [5, 6], damage: 0, heal: 0 };
+ABILITIES.__testVenom = { ...ABILITIES.guard, name: 'Venom Seep', statusEffect: 'poison', statusEffectOverride: { tickHP: -5, turns: 6 }, damage: 0, heal: 0 };
 const TAG = (o) => Object.assign({
   name: 'Test', icon: '⭐', color: '#ffffff', desc: '',
   dmg: 0, heal: 0, life: 0, hp: 0, pushable: false, collectible: false, passPickup: false,
@@ -78,16 +78,16 @@ function round(b) {
   check(Object.keys(me2.status || {}).length === 0, 'a plain damage tag applied a status it never names');
 }
 
-// ----- 2. buffX carries through a tag --------------------------------------
-// The hook's ability is read like any other, so its buffX list lands intact.
+// ----- 2. statusEffectOverride carries through a tag -----------------------
+// The hook's ability is read like any other, so its override lands intact.
 {
   const sb = round(arena({ tags: [{ id: '__testVenomPool', k: K(3, 0) }], speed: 0 }));
   const foe = sb.units.find((u) => u.isEnemy);
   const p = foe.status && foe.status.poison;
   check(!!p, 'a venom tag did not poison the unit standing on it');
   if (p) {
-    check(p.turns === 6, `buffX asked for 6 turns of poison, got ${p.turns}`);
-    check(p.over && p.over.tickDamage === 5, `buffX asked for 5 damage a turn, got ${JSON.stringify(p.over)}`);
+    check(p.turns === 6, `the override asked for 6 turns of poison, got ${p.turns}`);
+    check(p.over && p.over.tickHP === -5, `the override asked for 5 damage a turn, got ${JSON.stringify(p.over)}`);
   }
   // A tag has no side: it caught an ENEMY here, and the party unit in test 1.
 }
@@ -110,14 +110,19 @@ function round(b) {
   check(landed.S.pos === K(1, 0), `the S-class mind should have attacked from the clean tile, it is on ${landed.S.pos}`);
 }
 
-// ----- 4. the status knobs ---------------------------------------------------
-// buffX lines up with the knobs a status actually uses, in one fixed order.
+// ----- 4. the status numbers -------------------------------------------------
+// statusKnobs names the numeric fields a status uses (the first is its badge
+// amount); a statusEffectOverride names fields by name and touches nothing else.
 {
-  check(statusKnobs(STATUSES.poison).join(',') === 'tickDamage,turns', 'poison knobs: ' + statusKnobs(STATUSES.poison));
+  check(statusKnobs(STATUSES.poison).join(',') === 'tickHP,turns', 'poison knobs: ' + statusKnobs(STATUSES.poison));
   check(statusKnobs(STATUSES.shield).join(',') === 'charges', 'shield knobs: ' + statusKnobs(STATUSES.shield));
-  const o = statusOverridesFor(STATUSES.poison, [null, 5]);
-  check(o.turns === 5 && o.tickDamage === undefined, 'an empty buffX slot should leave that knob alone: ' + JSON.stringify(o));
-  check(Object.keys(statusOverridesFor(STATUSES.poison, null)).length === 0, 'no buffX should override nothing');
+  const o = statusOverridesFor(STATUSES.poison, { turns: 5 });
+  check(o.turns === 5 && o.tickHP === undefined, 'an override should touch only the fields it names: ' + JSON.stringify(o));
+  check(Object.keys(statusOverridesFor(STATUSES.poison, null)).length === 0, 'no override should override nothing');
+  check(Object.keys(statusOverridesFor(STATUSES.poison, { nosuchfield: 3, turns: 'x' })).length === 0, 'an override accepted a field that is not a status number');
+  const warned = []; const cw = console.warn; console.warn = (...a) => warned.push(a);
+  check(Object.keys(statusOverridesFor(STATUSES.poison, [4, 5])).length === 0 && warned.length === 1, 'the old positional list form should be refused with a warning');
+  console.warn = cw;
   for (const [id, def] of Object.entries(STATUSES)) {
     check(def.amountIs === undefined && def.amountSign === undefined, `status "${id}" still carries amountIs / amountSign`);
   }
@@ -156,7 +161,7 @@ function round(b) {
 {
   ABILITIES.__testRam = { ...ABILITIES.strike, name: 'Charging Shove', damage: 3,
     castZone: lineOffsets(1, 3), dmgZone: [[0, 0]], tagZone: [], tagId: null, hZone: [],
-    pushZone: [[0, 0, 0, 1]], rotatable: true, moveToTarget: true, buff: '', buffX: null };
+    pushZone: [[0, 0, 0, 1]], rotatable: true, moveToTarget: true, statusEffect: '', statusEffectOverride: null };
 
   const ram = ({ foes, aimAt, wall = [] }) => {
     const b = createBattle({
@@ -255,20 +260,21 @@ function round(b) {
     'a dash offered alias tiles that are not where it goes: ' + JSON.stringify(aliasFree.filter(([k, a]) => k !== a)));
 }
 
-// ----- 9. passives ----------------------------------------------------------
+// ----- 9. triggers ----------------------------------------------------------
 // A passive is a status the unit puts on ITSELF at a moment, without a cast. It
 // names a row of the SAME table a cast would, goes on through the same
 // applyStatus, and sits in the same status bag; whether it stays for the fight
 // or wears off is the ROW's business (its clock / charges), never the passive's.
 {
-  ABILITIES.__testRamPush = { ...ABILITIES.shove, name: 'Ram', damage: 0, heal: 0, buff: '', buffX: null,
+  ABILITIES.__testRamPush = { ...ABILITIES.shove, name: 'Ram', damage: 0, heal: 0, statusEffect: '', statusEffectOverride: null,
     pushZone: [[0, 0, 0]], rotatable: true, tagId: null, tagZone: [], hZone: [] };
 
-  const fight = ({ passives = [], foes, wall = [], heights = {}, foePassives = passives }) => {
+  const P0 = (id, when = 'battleStart') => ({ statusEffect: id, when });
+  const fight = ({ triggers = [], foes, wall = [], heights = {}, foePassives = triggers }) => {
     const b = createBattle({
       config: CONFIG, radius: 4, heights,
-      party: [{ name: 'Gorm', hp: 40, maxHp: 40, abilityIds: ['__testRamPush', 'strike'], partyIndex: 0, passives }],
-      enemies: foes.map((k, i) => ({ name: 'H' + i, hp: 40, maxHp: 40, power: 0, abilityIds: ['__none'], init: 1, speed: 0, intellect: 'C', passives: foePassives })),
+      party: [{ name: 'Gorm', hp: 40, maxHp: 40, abilityIds: ['__testRamPush', 'strike'], partyIndex: 0, triggers }],
+      enemies: foes.map((k, i) => ({ name: 'H' + i, hp: 40, maxHp: 40, power: 0, abilityIds: ['__none'], init: 1, speed: 0, intellect: 'C', triggers: foePassives })),
       partyKeys: [K(0, 0)], enemyKeys: foes, wallKeys: wall,
       instant: true, rng: () => 0.5,
       onChange() {}, onFloater() {}, onLog() {}, onEnd() {},
@@ -283,101 +289,108 @@ function round(b) {
   };
 
   // Collision immunity covers all three impact kinds (the owner's choice).
-  const wallHp = [[], ['collisionImmune']].map((p) => shoveAt(fight({ passives: p, foes: [K(1, 0)], wall: [K(2, 0)] }), K(1, 0))[0]);
+  const wallHp = [[], [P0('collisionImmune')]].map((p) => shoveAt(fight({ triggers: p, foes: [K(1, 0)], wall: [K(2, 0)] }), K(1, 0))[0]);
   check(wallHp[0] === 38 && wallHp[1] === 40, `crash into a wall: plain ${wallHp[0]}, padded ${wallHp[1]} (want 38 / 40)`);
-  const pileHp = [[], ['collisionImmune']].map((p) => shoveAt(fight({ passives: p, foes: [K(1, 0), K(2, 0)] }), K(1, 0)));
+  const pileHp = [[], [P0('collisionImmune')]].map((p) => shoveAt(fight({ triggers: p, foes: [K(1, 0), K(2, 0)] }), K(1, 0)));
   check(pileHp[0].every((h) => h === 38) && pileHp[1].every((h) => h === 40), `shoved into a body: plain ${pileHp[0]}, padded ${pileHp[1]}`);
   const ledge = { [K(0, 0)]: 3, [K(1, 0)]: 3, [K(2, 0)]: 0 };
-  const fallHp = [[], ['collisionImmune']].map((p) => shoveAt(fight({ passives: p, foes: [K(1, 0)], heights: ledge }), K(1, 0))[0]);
+  const fallHp = [[], [P0('collisionImmune')]].map((p) => shoveAt(fight({ triggers: p, foes: [K(1, 0)], heights: ledge }), K(1, 0))[0]);
   check(fallHp[0] === 38 && fallHp[1] === 40, `shoved off a ledge: plain ${fallHp[0]}, padded ${fallHp[1]} (want 38 / 40)`);
 
   // Regeneration heals at the start of the carrier's own turn - the very line a
   // timed regen status uses, because it is the same field on the same table.
-  const healed = [[], ['regeneration']].map((p) => {
-    const b = fight({ passives: p, foes: [K(3, 0)] });
+  const healed = [[], [{ statusEffect: 'regen', when: 'battleStart', statusEffectOverride: { turns: 0 } }]].map((p) => {
+    const b = fight({ triggers: p, foes: [K(3, 0)] });
     const sb = b.state, me = sb.units.find((u) => !u.isEnemy);
     me.hp = 20;
     for (const u of sb.units) if (!u.isEnemy) u.done = true;
     b.endTurn();
     return me.hp;
   });
-  check(healed[0] === 20 && healed[1] === 22, `regeneration: plain ${healed[0]}, regenerating ${healed[1]} (want 20 / 22)`);
+  check(healed[0] === 20 && healed[1] === 22, `regen (clock off): plain ${healed[0]}, regenerating ${healed[1]} (want 20 / 22)`);
 
   // A row with no clock and nothing to spend it is still there after the turn
   // that ticked it - that is all "permanent" means.
   {
-    const b = fight({ passives: ['regeneration'], foes: [K(3, 0)] });
+    const b = fight({ triggers: [{ statusEffect: 'regen', when: 'battleStart', statusEffectOverride: { turns: 0 } }], foes: [K(3, 0)] });
     const sb = b.state, me = sb.units.find((u) => !u.isEnemy);
     for (const u of sb.units) if (!u.isEnemy) u.done = true;
     b.endTurn();
-    check(!!me.status.regeneration, 'a permanent passive was lost when its turn ticked');
-    check(isPermanent(STATUSES.regeneration, me.status.regeneration) && !isPermanent(STATUSES.enraged) && !isPermanent(STATUSES.shield),
-      'isPermanent: regeneration should be, enraged (clock) and shield (spent) should not');
+    check(!!me.status.regen, 'a permanent status was lost when its turn ticked');
+    check(isPermanent(STATUSES.regen, me.status.regen) && !isPermanent(STATUSES.enraged) && !isPermanent(STATUSES.shield),
+      'isPermanent: regen with turns 0 should be, enraged (clock) and shield (spent) should not');
     // The unit card leaves permanent rows out of its slots; the party view asks for them.
-    check(!statusesFor(me).some((s) => s.id === 'regeneration'), 'a permanent passive took a status slot on the card');
-    check(statusesFor(me, { permanent: true }).some((s) => s.id === 'regeneration' && s.permanent), 'the full status list left a permanent passive out');
+    check(!statusesFor(me).some((s) => s.id === 'regen'), 'a permanent status took a status slot on the card');
+    check(statusesFor(me, { permanent: true }).some((s) => s.id === 'regen' && s.permanent), 'the full status list left a permanent status out');
   }
 
   // A row that is SPENT is a fine passive too: "starts every fight with a
   // Shield" blocks the first hit and is then gone, like any shield.
   {
-    const b = fight({ passives: [], foes: [K(1, 0)], foePassives: ['shield'] });
+    const b = fight({ triggers: [], foes: [K(1, 0)], foePassives: [P0('shield')] });
     const sb = b.state, me = sb.units.find((u) => !u.isEnemy), foe = sb.units.find((u) => u.isEnemy);
-    check(!!foe.status.shield, 'a shield passive was not put on at battle start');
+    check(!!foe.status.shield, 'a shield trigger was not put on at battle start');
     b.activate(me.uid); b.selectAbility('strike'); b.clickTile(K(1, 0));
     check(foe.hp === 40 && !foe.status.shield, `a shield passive did not block the first hit and go: hp ${foe.hp}, shield ${!!foe.status.shield}`);
   }
 
-  // The AI's board copy carries the passives too, so a moment fires in its
+  // The AI's board copy carries the triggers too, so a moment fires in its
   // simulations. Checked the cheap way: the arena units have them.
   {
-    const b = fight({ passives: ['collisionImmune'], foes: [K(2, 0)] });
+    const b = fight({ triggers: [P0('collisionImmune')], foes: [K(2, 0)] });
     const sb = b.state;
-    check(sb.units.every((u) => Array.isArray(u.passives) && u.passives.some((p) => p.status === 'collisionImmune' && p.when === 'battleStart')),
-      'passives did not reach the arena units parsed');
-    check(sb.units.every((u) => !!u.status.collisionImmune), 'a battle-start passive is not in the status bag');
+    check(sb.units.every((u) => Array.isArray(u.triggers) && u.triggers.some((p) => p.statusEffect === 'collisionImmune' && p.when === 'battleStart')),
+      'triggers did not reach the arena units parsed');
+    check(sb.units.every((u) => !!u.status.collisionImmune), 'a battle-start trigger is not in the status bag');
   }
 
-  // The three written forms, and what is refused.
-  const P = (e) => parsePassive(e, true);
-  check(P('regeneration')?.when === 'battleStart', "a bare id does not mean 'at battle start'");
-  check(P('enraged@hit')?.when === 'hit' && P('enraged@hit').status === 'enraged', "'id@moment' did not parse");
-  check(P({ status: 'enraged', when: 'hit', buffX: [null, 3] })?.buffX?.[1] === 3, 'the object form lost its buffX');
-  check(P('nosuchrow') === null && P('enraged@nosuchmoment') === null && P(null) === null, 'a bad passive was accepted');
-  check(passiveToString(P('enraged@hit')) === 'enraged@hit' && passiveToString(P('regeneration')) === 'regeneration', 'passiveToString does not round-trip');
+  // The ONE written form, and what is refused.
+  const P = (e) => checkTrigger(e, true);
+  check(P({ statusEffect: 'regen', when: 'battleStart' })?.statusEffect === 'regen', 'the object form did not parse');
+  check(P({ statusEffect: 'enraged', when: 'hit' })?.when === 'hit', "when: 'hit' did not parse");
+  check(P({ statusEffect: 'enraged', when: 'hit', statusEffectOverride: { turns: 3 } })?.statusEffectOverride?.turns === 3, 'the passive lost its override');
+  check(P('regen') === null && P('enraged@hit') === null, 'a bare string trigger was accepted - only { statusEffect, when } is a trigger');
+  check(P({ statusEffect: 'enraged' }) === null, 'a trigger with no `when` was accepted');
+  check(P({ statusEffect: 'nosuchrow', when: 'battleStart' }) === null && P({ statusEffect: 'enraged', when: 'nosuchmoment' }) === null && P(null) === null, 'a bad trigger was accepted');
 
-  // Derivation from what a character IS: node, relic, aura - one list.
-  check(passivesFor({ name: 'Gorm', upgrades: [] }).length === 0, 'a character with no upgrades has passives');
-  const has = (list, id, when = 'battleStart') => list.some((p) => p.status === id && p.when === when);
-  check(has(passivesFor({ name: 'Gorm', upgrades: ['chargeHeadbutt:collisionImmune'] }), 'collisionImmune'),
-    'an unlocked node did not give its passive');
-  check(has(passivesFor({ name: 'Gorm', upgrades: ['chargeHeadbutt:beginEnraged'] }), 'enraged'),
-    'the Raging Entry node did not give its passive');
-  check(has(passivesFor({ name: 'Gorm', upgrades: [], relic: { passives: ['regeneration'] } }), 'regeneration'),
-    'a relic did not give its passive');
-  check(has(passivesFor({ name: 'Gorm', upgrades: [], auraPassives: ['collisionImmune'] }), 'collisionImmune'),
-    'a world-map aura did not give its passive');
-  check(has(passivesFor({ name: 'Gorm', upgrades: [], relic: { passives: ['enraged@hit'] } }), 'enraged', 'hit'),
-    "a relic's 'id@moment' passive was lost");
-  check(passivesFor({ name: 'Gorm', upgrades: [], relic: { passives: ['nosuchrow'] } }).length === 0,
+  // Derivation from what a character IS: node, relic, aura - one list. The
+  // nodes are TEST nodes hung on the strike tree (the real trees are content
+  // and change), on a unit whose name falls back to the default kit (strike).
+  const { ABILITY_UPGRADES } = await import(base + 'config/abilities.js');
+  ABILITY_UPGRADES.strike.__testPad = { name: 'Pad', icon: '⭐', desc: '', requires: [], add: {}, statusEffectAdd: {}, castZoneAdd: [], dmgZoneAdd: [], tagZoneAdd: [], pushDistAdd: 0, flags: {}, triggers: [P0('collisionImmune')] };
+  ABILITY_UPGRADES.strike.__testRage = { name: 'Rage', icon: '⭐', desc: '', requires: [], add: {}, statusEffectAdd: {}, castZoneAdd: [], dmgZoneAdd: [], tagZoneAdd: [], pushDistAdd: 0, flags: {}, triggers: [{ statusEffect: 'enraged', when: 'battleStart', statusEffectOverride: { turns: 3 } }] };
+  check(triggersFor({ name: 'Gorm', upgrades: [] }).length === 0, 'a character with no upgrades has triggers');
+  const has = (list, id, when = 'battleStart') => list.some((p) => p.statusEffect === id && p.when === when);
+  check(has(triggersFor({ name: 'Nobody', upgrades: ['strike:__testPad'] }), 'collisionImmune'),
+    'an unlocked node did not give its trigger');
+  const rage = triggersFor({ name: 'Nobody', upgrades: ['strike:__testRage'] });
+  check(has(rage, 'enraged') && rage[0].statusEffectOverride?.turns === 3, 'a node trigger lost its override on the way: ' + JSON.stringify(rage));
+  delete ABILITY_UPGRADES.strike.__testPad; delete ABILITY_UPGRADES.strike.__testRage;
+  check(has(triggersFor({ name: 'Gorm', upgrades: [], relic: { triggers: [{ statusEffect: 'regen', when: 'battleStart', statusEffectOverride: { turns: 0 } }] } }), 'regen'),
+    'a relic did not give its trigger');
+  check(has(triggersFor({ name: 'Gorm', upgrades: [], auraTriggers: [P0('collisionImmune')] }), 'collisionImmune'),
+    'a world-map aura did not give its trigger');
+  check(has(triggersFor({ name: 'Gorm', upgrades: [], relic: { triggers: [P0('enraged', 'hit')] } }), 'enraged', 'hit'),
+    "a relic's when: 'hit' trigger was lost");
+  check(triggersFor({ name: 'Gorm', upgrades: [], relic: { triggers: [P0('nosuchrow')] } }).length === 0,
     'a status row that does not exist was accepted');
-  check(passivesFor({ name: 'Gorm', upgrades: [], relic: { passives: ['regeneration', 'regeneration'] } }).length === 1,
-    'the same passive twice was not folded into one');
+  check(triggersFor({ name: 'Gorm', upgrades: [], relic: { triggers: [{ statusEffect: 'regen', when: 'battleStart', statusEffectOverride: { turns: 0 } }, { statusEffect: 'regen', when: 'battleStart', statusEffectOverride: { turns: 0 } }] } }).length === 1,
+    'the same trigger twice was not folded into one');
 }
 
-// ----- 10. moments ----------------------------------------------------------
-// 'battleStart' fires before either side moves, and the status goes on FRESH -
-// it skips its carrier's next tick instead of counting down - because
-// startPlayerPhase ticks every party unit at the top of the first round too, and
-// a one-turn buff put on at setup would otherwise be gone before it was ever
-// usable. The rule holds whether the fight opens normally or with an ambush.
-// 'hit' fires every time the carrier actually loses hp.
+// ----- 10. moments, and when a clock runs ---------------------------------------
+// 'battleStart' fires before either side moves; 'hit' every time the carrier
+// loses hp. A status BITES at the start of its carrier's activation and its
+// clock counts down at the END of it - and only an activation it was present at
+// the start of counts. So `turns: 1` is one full activation with the status,
+// whether it went on at battle start, during the enemy's turn or by a hit, and
+// a self-cast mid-activation is not charged for that activation.
 {
-  const run = ({ ambush = false, onParty = true, passive = 'enraged' }) => {
+  const run = ({ ambush = false, onParty = true, trigger = { statusEffect: 'enraged', when: 'battleStart' } }) => {
     const b = createBattle({
       config: CONFIG, radius: 4, heights: {},
-      party: [{ name: 'Gorm', hp: 40, maxHp: 40, abilityIds: ['strike'], partyIndex: 0, passives: onParty ? [passive] : [] }],
-      enemies: [{ name: 'H', hp: 40, maxHp: 40, power: 0, abilityIds: ['strike'], init: 1, speed: 0, intellect: 'C', passives: onParty ? [] : [passive] }],
+      party: [{ name: 'Gorm', hp: 40, maxHp: 40, abilityIds: ['strike'], partyIndex: 0, triggers: onParty ? [trigger] : [] }],
+      enemies: [{ name: 'H', hp: 40, maxHp: 40, power: 0, abilityIds: ['strike'], init: 1, speed: 0, intellect: 'C', triggers: onParty ? [] : [trigger] }],
       partyKeys: [K(0, 0)], enemyKeys: [K(3, 0)], forced: ambush,
       instant: true, rng: () => 0.5,
       onChange() {}, onFloater() {}, onLog() {}, onEnd() {},
@@ -393,40 +406,81 @@ function round(b) {
     check(r.on1, `a battle-start status was missing on the player's first turn (ambush: ${ambush})`);
     check(!r.after(), `a one-turn battle-start status outlived the player's first turn (ambush: ${ambush})`);
   }
-  // An ambushing ENEMY must hold it while it strikes, not lose it to its own tick.
+  // An ambushing ENEMY holds it through the activation it strikes in: a two-turn
+  // haste put on at battle start has counted down exactly once when its opening
+  // activation is over - present during it, charged for it.
   {
-    const r = run({ ambush: true, onParty: false });
-    check(r.on1, 'an ambushing enemy lost its battle-start status before it acted');
+    const r = run({ ambush: true, onParty: false, trigger: { statusEffect: 'haste', when: 'battleStart' } });
+    check(r.who().status.haste && r.who().status.haste.turns === STATUSES.haste.turns - 1,
+      'an ambushing enemy did not carry its battle-start status through its opening activation: ' + JSON.stringify(r.who().status.haste));
   }
-  // 'hit': not there at the start, there the moment hp is lost, not for a
-  // blocked hit. (A three-turn row, so the tick that follows the cast - the
-  // player's cast ends the phase, and the enemy's activation ticks it - does not
-  // take it off again before the check; a one-turn row would be gone by then,
-  // exactly as a one-turn status from a cast is.)
+  // 'hit', with a ONE-turn status: the enemy hits Gorm during the enemy phase,
+  // the haste is there for Gorm's whole next activation, and gone after it.
+  {
+    const b = createBattle({
+      config: CONFIG, radius: 4, heights: {},
+      party: [{ name: 'Gorm', hp: 40, maxHp: 40, abilityIds: ['strike'], partyIndex: 0, triggers: [{ statusEffect: 'haste', when: 'hit', statusEffectOverride: { turns: 1 } }] }],
+      enemies: [{ name: 'H', hp: 40, maxHp: 40, power: 0, abilityIds: ['strike'], init: 1, speed: 0, intellect: 'C' }],
+      partyKeys: [K(0, 0)], enemyKeys: [K(1, 0)],
+      instant: true, rng: () => 0.5,
+      onChange() {}, onFloater() {}, onLog() {}, onEnd() {},
+    });
+    b.start && b.start();
+    const sb = b.state, me = sb.units.find((u) => !u.isEnemy);
+    check(!me.status.haste, "a 'haste when hit' trigger was on before any hit");
+    const pass = () => { for (const u of sb.units) if (!u.isEnemy) u.done = true; b.endTurn(); };
+    pass();   // the enemy strikes; the haste goes on during the enemy phase
+    check(me.hp < 40 && me.status.haste && me.status.haste.turns === 1, `losing hp did not fire the trigger, or its clock ran early: hp ${me.hp}, ${JSON.stringify(me.status.haste)}`);
+    check(b.moveBudget(me) === me.speed + 1, `the haste was not in force on the activation after the hit: budget ${b.moveBudget(me)}`);
+    // Gorm's activation ends (and the enemy hits again, putting a fresh one on):
+    // the first one was charged its one activation, the new one is untouched.
+    const hp1 = me.hp;
+    pass();
+    check(me.hp < hp1 && me.status.haste && me.status.haste.turns === 1, 'the haste did not count down at the end of the activation it was present for: ' + JSON.stringify(me.status.haste));
+  }
+  // A status put on DURING the carrier's own activation is not charged for it.
+  {
+    const b = createBattle({
+      config: CONFIG, radius: 4, heights: {},
+      party: [{ name: 'Gorm', hp: 40, maxHp: 40, abilityIds: ['strike'], partyIndex: 0 }],
+      enemies: [{ name: 'H', hp: 40, maxHp: 40, power: 0, abilityIds: ['__none'], init: 1, speed: 0, intellect: 'C' }],
+      partyKeys: [K(0, 0)], enemyKeys: [K(3, 0)],
+      instant: true, rng: () => 0.5,
+      onChange() {}, onFloater() {}, onLog() {}, onEnd() {},
+    });
+    b.start && b.start();
+    const sb = b.state, me = sb.units.find((u) => !u.isEnemy);
+    me.status.haste = { turns: 2, charges: 0, over: {} };   // as a self-cast mid-activation would
+    const pass = () => { for (const u of sb.units) if (!u.isEnemy) u.done = true; b.endTurn(); };
+    pass();
+    check(me.status.haste && me.status.haste.turns === 2, 'a mid-activation status was charged for the activation it arrived in: ' + JSON.stringify(me.status.haste));
+    pass();
+    check(me.status.haste && me.status.haste.turns === 1, 'a mid-activation status did not count down on its first full activation: ' + JSON.stringify(me.status.haste));
+  }
+  // The bite stays at the START: a poison put on the enemy during the player's
+  // turn bites at the enemy's activation and has its clock run at its end.
   {
     const b = createBattle({
       config: CONFIG, radius: 4, heights: {},
       party: [{ name: 'Gorm', hp: 40, maxHp: 40, abilityIds: ['strike', 'guard'], partyIndex: 0 }],
-      enemies: [{ name: 'H', hp: 40, maxHp: 40, power: 0, abilityIds: ['__none'], init: 1, speed: 0, intellect: 'C', passives: ['poison@hit'] }],
+      enemies: [{ name: 'H', hp: 40, maxHp: 40, power: 0, abilityIds: ['__none'], init: 1, speed: 0, intellect: 'C', triggers: [{ statusEffect: 'poison', when: 'hit' }] }],
       partyKeys: [K(0, 0)], enemyKeys: [K(1, 0)],
       instant: true, rng: () => 0.5,
       onChange() {}, onFloater() {}, onLog() {}, onEnd() {},
     });
     b.start && b.start();
     const sb = b.state, me = sb.units.find((u) => !u.isEnemy), foe = sb.units.find((u) => u.isEnemy);
-    check(!foe.status.poison, "a 'poison@hit' passive was on before any hit");
+    check(!foe.status.poison, "a 'poison when hit' trigger was on before any hit");
     // A blocked hit is not a hit.
     foe.status.shield = { turns: 0, charges: 1, over: {} };
     b.activate(me.uid); b.selectAbility('strike'); b.clickTile(K(1, 0));
     check(foe.hp === 40 && !foe.status.poison, `a blocked hit fired the 'hit' moment (hp ${foe.hp}, poison ${!!foe.status.poison})`);
-    // A real one is.
+    // A real one is: the cast ends the player phase, the enemy's activation opens
+    // with the bite (-2) and closes with the clock (3 -> 2).
     me.done = false; sb.phase = 'player';
     b.activate(me.uid); b.selectAbility('strike'); b.clickTile(K(1, 0));
-    check(foe.hp < 40 && !!foe.status.poison, `losing hp did not fire the 'hit' moment (hp ${foe.hp}, poison ${!!foe.status.poison})`);
-    // ...and it is a status like any other from here: the poison it put on bit
-    // at the enemy's own activation and its clock ran.
     check(foe.status.poison && foe.status.poison.turns === 2 && foe.hp === 40 - 3 - 2,
-      `the passive's status did not tick like a cast one: ${JSON.stringify(foe.status.poison)} hp ${foe.hp}`);
+      `the trigger's poison did not bite at the start and count down at the end: ${JSON.stringify(foe.status.poison)} hp ${foe.hp}`);
   }
 }
 
@@ -464,6 +518,78 @@ function round(b) {
   me2.hp = 10;
   b2.activate(me2.uid); b2.selectAbility('mend'); b2.clickTile(K(0, 0));
   check(me2.hp === 14 && sup === 9, `Mend should have cost exactly one supply: hp ${me2.hp}, supplies ${sup}`);
+}
+
+// ----- 12. statusEffectAdd on an upgrade node -------------------------------
+// A node may bump the numbers of the status its ability applies, on top of the
+// table's value (or the ability's own buffOverride for that field).
+{
+  const { resolveAbility } = await import(base + 'upgrades.js');
+  const { ABILITY_UPGRADES } = await import(base + 'config/abilities.js');
+  ABILITIES.__testHex = { ...ABILITIES.guard, name: 'Hex', statusEffect: 'poison', statusEffectOverride: { turns: 4 }, damage: 0, heal: 0 };
+  ABILITY_UPGRADES.__testHex = {
+    longer: { name: 'Longer', icon: '⭐', desc: '', requires: [], add: {}, statusEffectAdd: { turns: 2 }, castZoneAdd: [], dmgZoneAdd: [], tagZoneAdd: [], pushDistAdd: 0, flags: {}, triggers: [] },
+    harder: { name: 'Harder', icon: '⭐', desc: '', requires: [], add: {}, statusEffectAdd: { tickHP: -3 }, castZoneAdd: [], dmgZoneAdd: [], tagZoneAdd: [], pushDistAdd: 0, flags: {}, triggers: [] },
+  };
+  const r = resolveAbility('__testHex', ['__testHex:longer', '__testHex:harder']);
+  check(r.statusEffectOverride.turns === 6, `statusEffectAdd on a field the ability overrides should stack on the override (4 + 2): ${JSON.stringify(r.statusEffectOverride)}`);
+  check(r.statusEffectOverride.tickHP === STATUSES.poison.tickHP - 3, `statusEffectAdd on a field the ability leaves alone should stack on the table (${STATUSES.poison.tickHP} - 3): ${JSON.stringify(r.statusEffectOverride)}`);
+  check(ABILITIES.__testHex.statusEffectOverride.turns === 4, 'resolving an upgrade wrote into the config table');
+  delete ABILITIES.__testHex; delete ABILITY_UPGRADES.__testHex;
+}
+
+// ----- 13. agency: Stunned and Disarmed, and the sign of aiValue ---------------
+// `agency` is a list on the row: 'stunned' skips the whole activation, 'disarmed'
+// leaves the walk and takes the abilities. Both are spent BY the activation.
+{
+  const mk = () => createBattle({
+    config: CONFIG, radius: 4, heights: {},
+    party: [{ name: 'Gorm', hp: 40, maxHp: 40, abilityIds: ['strike'], partyIndex: 0 }],
+    enemies: [{ name: 'H', hp: 40, maxHp: 40, power: 0, abilityIds: ['strike'], init: 1, speed: 3, intellect: 'C' }],
+    partyKeys: [K(0, 0)], enemyKeys: [K(1, 0)],
+    instant: true, rng: () => 0.5, onChange() {}, onFloater() {}, onLog() {}, onEnd() {},
+  });
+  check(STATUSES.stun.agency.includes('stunned') && STATUSES.disarm.agency.includes('disarmed'), 'the stun / disarm rows do not name their agency');
+  check(STATUSES.stun.skipsTurn === undefined, 'skipsTurn is still on the stun row');
+  // A disarmed party unit: every ability is short ('disarmed'), a cast is refused,
+  // a walk is not; the status is spent when the party's activations end.
+  const b = mk();
+  const sb = b.state, me = sb.units.find((u) => !u.isEnemy), foe = sb.units.find((u) => u.isEnemy);
+  me.status.disarm = { turns: 0, charges: 1, over: {} };
+  b.activate(me.uid);
+  check(b.shortOf(me, b.abilityFor(me, 'strike')) === 'disarmed', 'a disarmed unit was not reported short of agency');
+  b.selectAbility('strike');
+  check(sb.selAb === null, 'a disarmed unit could select an ability');
+  b.clickTile(K(-1, 0));
+  check(me.pos === K(-1, 0), 'a disarmed unit could not walk');
+  for (const u of sb.units) if (!u.isEnemy) u.done = true;
+  b.endTurn();
+  check(!me.status.disarm, 'Disarmed was not spent by the activation it disarmed');
+  // A disarmed ENEMY walks instead of casting, and is free again afterwards.
+  const b2 = mk();
+  const sb2 = b2.state, me2 = sb2.units.find((u) => !u.isEnemy), foe2 = sb2.units.find((u) => u.isEnemy);
+  foe2.status.disarm = { turns: 0, charges: 1, over: {} };
+  for (const u of sb2.units) if (!u.isEnemy) u.done = true;
+  b2.endTurn();
+  check(me2.hp === 40, `a disarmed enemy still cast: party hp ${me2.hp}`);
+  check(!foe2.status.disarm, 'the enemy\'s Disarmed was not spent by its activation');
+  // aiValue: positive = good to carry, in the table...
+  check(STATUSES.shield.aiValue > 0 && STATUSES.poison.aiValue < 0 && STATUSES.stun.aiValue < 0, 'aiValue signs: a shield should be positive, poison and stun negative');
+  // ...and the AI still reads it the right way round: a C-class mind that can
+  // reach the party hands its Guard to itself / an ally, never to a party unit.
+  {
+    const b3 = createBattle({
+      config: CONFIG, radius: 4, heights: {},
+      party: [{ name: 'Gorm', hp: 40, maxHp: 40, abilityIds: ['strike'], partyIndex: 0 }],
+      enemies: [{ name: 'H', hp: 40, maxHp: 40, power: 0, abilityIds: ['guard'], init: 1, speed: 0, intellect: 'S' }],
+      partyKeys: [K(0, 0)], enemyKeys: [K(1, 0)],
+      instant: true, rng: () => 0.5, onChange() {}, onFloater() {}, onLog() {}, onEnd() {},
+    });
+    const sb3 = b3.state, me3 = sb3.units.find((u) => !u.isEnemy), foe3 = sb3.units.find((u) => u.isEnemy);
+    for (const u of sb3.units) if (!u.isEnemy) u.done = true;
+    b3.endTurn();
+    check(!!foe3.status.shield && !me3.status.shield, `with the sign turned round the AI should still shield itself, not the party: foe ${!!foe3.status.shield}, party ${!!me3.status.shield}`);
+  }
 }
 
 console.log(problems.length ? 'PROBLEMS:\n- ' + problems.join('\n- ') : 'OK: engine tests passed.');

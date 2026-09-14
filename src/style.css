@@ -1193,9 +1193,14 @@ button.small {
   color: var(--accent);
 }
 
-/* Settings window */
+/* Settings window.
+   It sits ABOVE every gameplay window (the roster at 58, the party view at 54,
+   the menu at 60): settings is the tool you reach for while looking at one of
+   those, so it must never open underneath one and never be dimmed by that
+   window's own backdrop. Only the layer wipe (90) and the splash (200) are
+   higher, and both of those are meant to cover everything. */
 .settings {
-  z-index: 55;
+  z-index: 70;
   zoom: var(--ui-scale-inv, 1);
 }
 
@@ -1832,13 +1837,23 @@ button.small {
   z-index: 58;
 }
 
-/* Wide enough for five cards in a row (the generic .modal-box caps at 460px,
-   which is why this needs its own max-width, not just a width). */
+/* Wide enough for SEVEN cards in a row (the generic .modal-box caps at 460px,
+   which is why this needs its own max-width, not just a width).
+   The window is a FIXED BOX: width and height are settled here and never move,
+   because the detail pane below the grid used to grow and shrink with whatever
+   character the cursor happened to be over - a window that jumped about while
+   you read it. The head, the grid and the buttons keep their natural height and
+   the detail pane takes whatever is left, scrolling inside itself. */
 .roster-box {
-  width: min(1040px, 94vw);
-  max-width: 94vw;
-  max-height: 88vh;
-  overflow-y: auto;
+  width: min(1460px, 96vw);
+  max-width: 96vw;
+  height: min(920px, 90vh);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* Solider than the shared panel wash (0.78): the arena behind this window was
+     showing through the upgrade trees and making them hard to read. */
+  background: rgba(9, 12, 22, 0.97);
 }
 
 .roster-head {
@@ -1854,8 +1869,15 @@ button.small {
 
 .roster-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 10px;
+  flex: none;
+}
+
+@media (max-width: 1180px) {
+  .roster-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 720px) {
@@ -1957,6 +1979,13 @@ button.small {
   border-radius: 10px;
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid rgba(255, 255, 255, 0.12);
+  /* Takes whatever height the fixed window has left and scrolls inside itself,
+     so a character with a big tree cannot stretch the window. */
+  flex: 1 1 auto;
+  min-height: 0;
+  align-content: start;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .unit-detail:empty {
@@ -2038,6 +2067,20 @@ button.small {
   color: var(--muted);
 }
 
+/* A tree wider than the column scrolls sideways on its own rather than being
+   clipped - the cards inside it are absolutely positioned, so they cannot wrap. */
+.ud-tree-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+}
+
+/* The head and the buttons keep their own height; only the detail pane flexes. */
+.roster-head,
+.roster-box > .row {
+  flex: none;
+}
+
 /* ----- the upgrade tree (roster window) ---------------------------------
    Columns by depth, one CARD per node - icon, name and what it does. The cards
    are absolutely positioned from coordinates computed in ui.js, and the edge
@@ -2068,6 +2111,9 @@ button.small {
   stroke-width: 2;
 }
 
+/* A card is a <button>: an `open` node is pressed to take the upgrade, every
+   other node is disabled. The generic button look is undone here - this one
+   keeps the tree's own colours and its left-aligned two-line text. */
 .ut-card {
   position: absolute;
   display: flex;
@@ -2078,7 +2124,21 @@ button.small {
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.16);
+  font: inherit;
+  color: inherit;
+  text-align: left;
   cursor: help;
+  transition: background 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
+}
+
+/* Disabled cards (owned, locked) must not read as pressable, and must not take
+   the generic button hover. */
+.ut-card:disabled {
+  cursor: help;
+}
+
+.ut-card:disabled:hover {
+  transform: none;
 }
 
 .ut-icon {
@@ -2123,9 +2183,16 @@ button.small {
   color: #b9e8ab;
 }
 
-/* Takeable right now: every prerequisite is unlocked. */
+/* Takeable right now: every prerequisite is unlocked. This is the only state
+   that is clickable, so it is the only one that gets a pointer and a hover. */
 .ut-card.open {
   border-color: var(--accent);
+  cursor: pointer;
+}
+
+.ut-card.open:hover {
+  background: rgba(255, 209, 102, 0.18);
+  transform: translateY(-1px);
 }
 
 .ut-card.open .ut-text b {
@@ -3029,4 +3096,65 @@ button.small {
   width: 100%;
   height: 100%;
   pointer-events: none;
+}
+
+/* ----- Party view: section tints, separators, the mini upgrade tree ---------- */
+/* Three tints so the eye sorts the column at a glance: what the unit DOES
+   (abilities, relic) in the panel blue, what it IS (passives) in gold, what is
+   ON it right now (status effects) in green. */
+.pv-ability,
+.pv-relic {
+  background: rgba(95, 199, 224, 0.07);
+  border-color: rgba(95, 199, 224, 0.22);
+}
+
+.pv-passives {
+  background: rgba(255, 209, 102, 0.07);
+  border-color: rgba(255, 209, 102, 0.25);
+}
+
+.pv-effects {
+  background: rgba(143, 224, 184, 0.07);
+  border-color: rgba(143, 224, 184, 0.25);
+}
+
+.pv-sep {
+  flex: none;
+  height: 1px;
+  margin: 2px 6px;
+  background: linear-gradient(to right, transparent, rgba(255, 255, 255, 0.22), transparent);
+}
+
+/* The tree can be wider than the column: it scrolls sideways inside its box
+   rather than stretching the column. */
+.pv-tree-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px 0 6px;
+}
+
+.ability-tree.mini {
+  margin-top: 0;
+}
+
+.ut-card.mini {
+  padding: 4px 7px;
+  gap: 0;
+  align-items: stretch;
+}
+
+.ut-card.mini .ut-text {
+  width: 100%;
+  gap: 1px;
+  justify-content: center;
+}
+
+.ut-card.mini .ut-text b {
+  font-size: 10.5px;
+}
+
+.ut-card.mini .ut-text i {
+  font-size: 9.5px;
+  line-height: 1.2;
+  -webkit-line-clamp: 1;
 }

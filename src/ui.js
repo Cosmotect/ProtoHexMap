@@ -4,7 +4,8 @@ import { describeHex, lerpTable } from './game.js';
 import { terrainInfo, terrainName, encounterLabel, encounterInfo, tc } from './text.js';
 import { t, tn, hasKey } from './i18n.js';
 import { playFatigueStep, playFatigueClear, clearStaggerMs } from './audio.js';
-import { unitAbilityIds, upgradeTree, treeLayout, upgradeRef, upgradeInfo, abilityDesc } from './upgrades.js';
+import { unitAbilityIds, upgradeInfo, abilityDesc, unlockUpgrade } from './upgrades.js';
+import { abilityTreeHtml } from './upgradetree.js';
 import { ABILITIES } from './config/abilities.js';
 import { statusesFor, badgeNumber, statusInfo } from './status.js';
 import { biomeColorFor } from './map.js';
@@ -29,7 +30,7 @@ function abilityTip(id, ab) {
   const nums = [];
   if (ab.damage > 0) nums.push(t('battle.ui.dmg', { n: ab.damage }));
   if (ab.heal > 0) nums.push(t('battle.ui.heal', { n: ab.heal }));
-  if (ab.buff) nums.push(statusInfo(ab.buff).name);
+  if (ab.statusEffect) nums.push(statusInfo(ab.statusEffect).name);
   if (nums.length) parts.push(nums.join(', '));
   return parts.join(' - ');
 }
@@ -914,7 +915,10 @@ export function createUI(config, handlers) {
   const rosterEl = $('roster');
   let rosterPick = null;
   $('btn-roster-cancel').addEventListener('click', () => closeRoster());
-  $('btn-roster-confirm').addEventListener('click', () => {
+  // "Lock in": the one place the pick is actually committed. A click on the
+  // dark area OUTSIDE the window does exactly this too - with nothing picked
+  // that means the party is left alone, which is what Cancel does anyway.
+  function commitRoster() {
     if (!rosterPick) return;
     const { selectedName, confirmedName, roster, onPick } = rosterPick;
     closeRoster();
@@ -925,8 +929,13 @@ export function createUI(config, handlers) {
     if (selectedName === confirmedName) return;
     const def = roster.find((r) => r.name === selectedName);
     if (def && onPick) onPick(def);
-  });
-  function openRoster({ slotIndex, party, roster, onPick }) {
+  }
+  $('btn-roster-confirm').addEventListener('click', commitRoster);
+  // Clicking the backdrop (never the window itself) closes it the same way the
+  // button does. pointerdown rather than click so a drag that starts inside the
+  // window and ends outside it does not count as "clicking outside".
+  rosterEl.addEventListener('pointerdown', (e) => { if (e.target === rosterEl) commitRoster(); });
+  function openRoster({ slotIndex, party, roster, onPick, onUnitChanged }) {
     const current = party[slotIndex];
     $('roster-sub').textContent = t('roster.replace', { name: tn(current.name) });
     // A unit already serving in a DIFFERENT slot can't be picked here; the
@@ -944,7 +953,7 @@ export function createUI(config, handlers) {
         ${taken ? `<div class="rc-tag">${t('roster.inParty')}</div>` : ''}
       </div>`;
     }).join('');
-    rosterPick = { roster, onPick, party, confirmedName: current.name, selectedName: current.name };
+    rosterPick = { roster, onPick, onUnitChanged, party, confirmedName: current.name, selectedName: current.name };
     // The detail window below the grid defaults to the confirmed unit;
     // hovering any roster card previews that character instead (see the
     // mouseover/mouseleave handlers below).
@@ -1004,8 +1013,14 @@ export function createUI(config, handlers) {
     const row = (config.party?.roster ?? []).find((r) => r.name === base);
     return (row && row.story) || def.story || '';
   }
+  // Whoever the detail window is showing right now. The upgrade cards below are
+  // buttons, and pressing one has to know WHICH unit to grant the node to - and
+  // that is only possible when the character on screen is actually in the party
+  // (`unit`), not a roster row being previewed.
+  let detailShown = null;
   function renderUnitDetail(def, unit = null) {
     const el = $('unit-detail');
+    detailShown = def ? { def, unit } : null;
     if (!def) { el.innerHTML = ''; return; }
     const unlocked = new Set(unit?.upgrades ?? []);
     const sections = unitAbilityIds(def.name).map((id) => {
@@ -1014,7 +1029,7 @@ export function createUI(config, handlers) {
       return `<div class="ud-ability">
         <div class="ud-ab-head"><span class="ud-ab-icon">${ab.icon}</span><b>${escapeHtml(abilityName(id))}</b></div>
         <div class="ud-ab-desc">${escapeHtml(abilityDesc(id, config))}</div>
-        ${abilityTree(id, unlocked)}
+        <div class="ud-tree-scroll">${abilityTree(id, unlocked)}</div>
       </div>`;
     }).join('');
     el.innerHTML = `
@@ -1027,64 +1042,24 @@ export function createUI(config, handlers) {
       <div class="ud-abilities">${sections}</div>`;
   }
 
-  // ----- the ability upgrade tree (roster window) -------------------------
-  // A real card per node - icon, name and what it does - laid out in columns by
-  // depth, with the requires-edges drawn behind them. It used to be an SVG of
-  // 9px circles with the name underneath: the shape of the tree was legible,
-  // but what any node actually DID was hidden in a tooltip, which is no way to
-  // choose a companion.
-  //
-  // The cards are absolutely positioned from coordinates computed here, and the
-  // edge SVG uses the SAME coordinates, so the lines meet the cards exactly
-  // without measuring the DOM after layout.
-  const TREE = {
-    cardW: 152, cardH: 62,   // one node
-    colGap: 34, rowGap: 10,  // between columns / stacked cards
-    padY: 4,
-  };
-  function abilityTree(abilityId, unlocked) {
-    const tree = upgradeTree(abilityId);
-    if (!tree) return '';
-    const { layers, edges } = treeLayout(abilityId);
-    const rows = Math.max(1, ...layers.map((l) => l.length));
-    const W = layers.length * TREE.cardW + (layers.length - 1) * TREE.colGap;
-    const H = rows * TREE.cardH + (rows - 1) * TREE.rowGap + TREE.padY * 2;
-    // Each column is centred vertically against the tallest one, so a branch of
-    // two sits level with the middle of a branch of three.
-    const pos = {};
-    layers.forEach((nodes, d) => {
-      const colH = nodes.length * TREE.cardH + (nodes.length - 1) * TREE.rowGap;
-      const top = TREE.padY + (H - TREE.padY * 2 - colH) / 2;
-      nodes.forEach((n, i) => {
-        pos[n] = { x: d * (TREE.cardW + TREE.colGap), y: top + i * (TREE.cardH + TREE.rowGap) };
-      });
-    });
-    const isOpen = (n) => (tree[n].requires ?? []).every((p) => unlocked.has(upgradeRef(abilityId, p)));
-    // Edges leave a parent's right edge and arrive at a child's left edge; the
-    // cubic keeps them clear of the cards they pass.
-    const lines = edges.map(([a, b]) => {
-      const p = pos[a], c = pos[b];
-      const x1 = p.x + TREE.cardW, y1 = p.y + TREE.cardH / 2;
-      const x2 = c.x, y2 = c.y + TREE.cardH / 2;
-      const mid = x1 + (x2 - x1) / 2;
-      const on = unlocked.has(upgradeRef(abilityId, a)) ? ' on' : '';
-      return `<path class="ut-edge${on}" d="M${x1} ${y1} C${mid} ${y1} ${mid} ${y2} ${x2} ${y2}"></path>`;
-    }).join('');
-    const cards = Object.keys(tree).map((n) => {
-      const p = pos[n];
-      const cls = unlocked.has(upgradeRef(abilityId, n)) ? 'owned' : isOpen(n) ? 'open' : 'locked';
-      const { name, desc, icon } = upgradeInfo(abilityId, n);
-      return `<div class="ut-card ${cls}" style="left:${p.x}px;top:${p.y}px;width:${TREE.cardW}px;height:${TREE.cardH}px"
-        title="${escapeAttr(`${name} - ${desc}`)}">
-        <span class="ut-icon">${icon}</span>
-        <span class="ut-text"><b>${escapeHtml(name)}</b><i>${escapeHtml(desc)}</i></span>
-      </div>`;
-    }).join('');
-    return `<div class="ability-tree" style="width:${W}px;height:${H}px">
-      <svg class="ut-edges" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">${lines}</svg>
-      ${cards}
-    </div>`;
-  }
+  // The ability upgrade tree is drawn by src/upgradetree.js (shared with the
+  // party view, which draws it in miniature).
+  const abilityTree = (abilityId, unlocked) => abilityTreeHtml(abilityId, unlocked, 'full');
+
+  // Pressing an available (gold) upgrade card takes that node on the spot.
+  // Only nodes with `open` state are enabled buttons, and unlockUpgrade checks
+  // the prerequisites again, so nothing here can hand out a gated node. A
+  // character who is not in the party has no unit to grant to - the cards are
+  // then just a read-only preview of what that character could learn.
+  $('unit-detail').addEventListener('click', (e) => {
+    const card = e.target.closest('.ut-card');
+    if (!card || card.disabled) return;
+    const unit = detailShown?.unit;
+    if (!unit) return;
+    if (!unlockUpgrade(unit, card.dataset.ref)) return;
+    renderUnitDetail(detailShown.def, unit);
+    rosterPick?.onUnitChanged?.(unit);
+  });
 
   return { update, renderLog, setHover, showEnd, hideEnd, openDialog, closeDialog, dialogOpen, flashDialog, confirm, chooseUnit, chooseUpgrade, chooseBlackMarketUpgrade, showBanner, buildLegend, buildFatigueBar, updateBlur, setStartScreen, setLayerSelector, openRoster, closeRoster, rosterOpen, setBattleMode, setDeployBar, updateBattle };
 }
