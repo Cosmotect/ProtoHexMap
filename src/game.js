@@ -528,6 +528,11 @@ export class Game {
       case 'stasisSeed':
       case 'stasisColony':
         return this.startCombat(hex, forced);
+      case 'hack':
+        // EXPERIMENT (src/local/hack/, see DESIGN.md "The Hack encounter"): played
+        // out by the hack bridge; this branch is one of the few lines outside
+        // that folder and goes with it.
+        return this.startHack(hex);
       case 'treasure': {
         this.consume(hex, type, forced);
         // A scenario may fix the exact amount a cache holds.
@@ -889,6 +894,31 @@ export class Game {
       return this.finishCombat(ctx, result);
     }
     return this.resolveBattle(hex, forced, opts);
+  }
+
+  // ----- the HACK encounter (EXPERIMENT - src/local/hack/, see DESIGN.md) ----
+  // The world-map side of the hack is deliberately tiny: build a combat-shaped
+  // context with no enemies, hand it to the bridge, and on the way back reuse
+  // finishCombat's reward path for a win. A failed hack is simply consumed -
+  // no reward, no run-ending defeat. Ripping the experiment out = deleting
+  // these two methods and the 'hack' case in enter().
+  startHack(hex) {
+    const ctx = {
+      hex, forced: false, opts: {}, enemies: [], debuffs: [],
+      saved: this.state.party.map((u) => ({ maxHp: u.maxHp })),
+      damageMod: 0, stasis: false, title: null, lore: null, hack: true,
+    };
+    if (this.hackDelegate && this.hackDelegate(ctx)) return true;
+    // No arena to play it on (headless): the terminal is left alone, consumed.
+    this.addLog('log.hack.failed');
+    this.consume(hex, 'hack', false);
+    return true;
+  }
+  finishHack(ctx, { won, rounds }) {
+    if (won) return this.finishCombat(ctx, { won: true, rounds, interactive: true });
+    this.addLog('log.hack.failed');
+    this.consume(ctx.hex, 'hack', false);
+    return true;
   }
 
   // ----- event effects ---------------------------------------------------

@@ -15,6 +15,9 @@ import { createBattle } from './local/battle/engine.js';
 import { COMBAT_CONFIG } from './config/localmap.js';
 import { resolvedAbilitiesFor, availableUpgrades, triggersFor } from './upgrades.js';
 import { recipeFromCode } from './local/mapcode.js';
+// EXPERIMENT: the Hack encounter. Everything about it lives in src/local/hack/;
+// main.js only creates the bridge and routes three moments to it (see DESIGN.md).
+import { createHackBridge, HACK_TYPE } from './local/hack/hackbridge.js';
 import { makeEnemyOfType } from './battle.js';
 import { t, tn, initLanguage, applyStaticTexts, onLanguageChange } from './i18n.js';
 import { tc } from './text.js';
@@ -129,6 +132,12 @@ const cinematic = createCombatCinematic({
   onModeChange: (isLocal) => document.body.classList.toggle('local-mode', isLocal),
 });
 window.__cinematic = cinematic; // for debugging / automated tests
+// EXPERIMENT (src/local/hack/): the hack encounter's own bridge to the arena.
+const hackBridge = createHackBridge({
+  config: CONFIG, getGame: () => game, getUi: () => ui, cinematic, renderer,
+  worldNeighborsFor: (hex) => worldNeighborsFor(hex), worldEdgesFor: (hex) => worldEdgesFor(hex),
+  escapeHtml: (s) => escapeHtml(s),
+});
 const COMBAT_TYPES = new Set(['battle', 'stasisSeed', 'stasisColony']);
 
 // ----- the start flow -------------------------------------------------------
@@ -456,6 +465,7 @@ function abortBattle() {
   cinematic.localView.cancelDeployment();
   ui.setDeployBar(null);
   ui.setBattleMode(null);
+  hackBridge.abort();   // EXPERIMENT (src/local/hack/)
 }
 
 // Starts the dive. The work is split across the two moments the cinematic
@@ -621,6 +631,11 @@ ui = createUI(CONFIG, {
       startCombatDive(game.state.position, () => game.enter(false));
       return;
     }
+    // EXPERIMENT (src/local/hack/): a hack dives into the arena the same way.
+    if (action.kind === 'encounter' && action.type === HACK_TYPE) {
+      hackBridge.enter(game.state.position, () => game.enter(false));
+      return;
+    }
     game.enter(false);
   },
   onLoadSeed: (value) => startRun(resolveSeed(value)),
@@ -762,6 +777,7 @@ function startRun(seed, opts = {}) {
   // Fights are played out on the local map. Camera already down in the arena:
   // start straight away. Not there yet (the Nomads event): dive first. Anything
   // in between should not happen; refusing makes the fight auto-resolve safely.
+  game.hackDelegate = (ctx) => hackBridge.delegate(ctx);   // EXPERIMENT (src/local/hack/)
   game.combatDelegate = (ctx) => {
     if (battle) return false;
     // The arena is on screen, or the dive has passed its swap point and is

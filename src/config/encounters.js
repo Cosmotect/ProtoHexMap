@@ -23,6 +23,10 @@ export const ENCOUNTERS = {
       // worldflake (config.layers.unlockOrder; the chain is meta-progression,
       // remembered by the browser across runs).
       gate: 1,
+      // EXPERIMENT: the Hack encounter (src/local/hack/, see DESIGN.md). A modest
+      // weight so a few show up per map while it is being playtested; set to 0
+      // to keep it off generated maps.
+      hack: 1.5,
     },
     guaranteed: { acolyte: 1 },   // ...but at least this many per map
     unique: ['gate'],             // types that appear at most ONCE per map
@@ -39,6 +43,7 @@ export const ENCOUNTERS = {
       stasisColony: { color: 0x6e2c8f, shape: 'cone' },
       acolyte: { color: 0xfff3b0, shape: 'icosahedron' },
       gate: { color: 0x35d17a, shape: 'pyramid' },   // the green pyramid
+      hack: { color: 0x7dff5f, shape: 'box' },       // EXPERIMENT: the hack terminal (src/local/hack/)
       // The waypoint that completes a scenario (tutorial) map. Never generated on
       // normal maps, so it is hidden from the legend.
       goal: { color: 0x9fd9ff, shape: 'cone', hidden: true },
@@ -325,6 +330,7 @@ radius: 3
       event: 'optional',
       treasure: 'never',
       gate: 'never',
+      hack: 'always',     // EXPERIMENT (src/local/hack/): a hack, won or lost, is a rest of sorts
     },
     // Notes for the 'optional' ones are in the locale tables (reset.note.<type>).
     // Which encounters fatigue can force the party into on arrival.

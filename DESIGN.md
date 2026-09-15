@@ -1298,6 +1298,143 @@ stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }
     it is not mistaken for a click outside.
 
 
+## The Hack encounter - an EXPERIMENT (src/local/hack/, since 2026-09-15)
+
+**This is a big experiment, and it is quarantined on purpose.** It tries a radical
+departure from how combat works on the local map, to find out whether the true
+essence of the core gameplay - PATTERN MATCHING ON A HEX GRID - can carry a play
+mode on its own, with no enemies at all. It may grow a lot, and it may be ripped
+out wholesale. Two rules follow from that, and every future session must keep them:
+
+1. **All of its code is self-contained in `src/local/hack/`.** Its rules, its
+   board, its extra presentation, its numbers and even its two tile tags live
+   there and nowhere else. It imports from the rest of the game (the hex math,
+   the ability table, the upgrade resolver, the arena view's public methods)
+   but nothing in the rest of the game imports from it except the bridge line
+   in main.js.
+2. **The rest of the game does not change.** The hack reaches the shared code
+   only through IF BRANCHES that route into the folder - the complete list is
+   below, and it doubles as the RIP-OUT CHECKLIST: delete the folder, undo those
+   lines, and the game is exactly what it was. No shared rule, table, view or
+   HUD function was altered for it. When the experiment needs something the
+   shared code does not offer, the answer is to add it INSIDE the folder (even
+   at the cost of a little duplication), not to bend a shared file.
+
+### The idea
+
+Instead of enemies, the board holds static NODES with hp. Units aim their
+abilities - the same hex-pattern abilities they fight with - and on End turn
+everything fires at once. A tile covered by two abilities takes its combined
+damage DOUBLED, by three TRIPLED. Damage dealt to nodes fills a HACK PROGRESS
+bar; some tiles are MINES, and an ability hex landing on one drains the bar and
+hurts the caster. The player has a limited number of turns to fill the bar. The
+synergy of overlapping patterns is meant to become the foundation of a
+progression where rewards are upgrades installed into INDIVIDUAL HEXES of an
+ability, changing how that hex behaves when it overlaps a hex of another unit's
+ability. (Not built yet: v1 is the play mode itself.)
+
+### The rules (v1 - `hackconfig.js` holds every number)
+
+* **The board** (`hackmap.js`): a completely flat arena (every tile pinned to the
+  neutral elevation, which is what switches the elevation wave off) of `radius`
+  5, the party seated around the centre, `nodes` (9) of `nodeHp` (20) strewn
+  about with `nodePairs` (3) of them placed adjacent to another node so a 3-hex
+  pattern can cover two at once, and `mines` (6), each dropped next to a node it
+  guards (`minesNearNodes`). The first ring around the party is kept empty. All
+  seeded from the run seed and the world tile.
+* **The turn**: player phase only. Any unit can be selected and repositioned
+  freely within its speed from the tile it started the turn on (click elsewhere
+  to take a move back) - exactly the fight's rule. Nodes block walking (fliers
+  glide over, never stop on one); mines are walkable and do nothing underfoot.
+  Picking an ability and clicking a target LOCKS the unit's aim (painted on the
+  board in the unit's own colour, a ring on the aim tile) - nothing fires yet.
+  Re-aiming replaces the lock; walking takes it back; a locked unit stays
+  selectable. Selection passes to the next unit without a lock by itself.
+* **End turn** (button or E) fires every lock at once. Per covered tile: the
+  damage of every ability covering it, summed, times `multipliers[count]`
+  (1 / 2 / 3). Only an ability's `dmgZone` counts; its heal / status / push /
+  dash / height / tag effects are ignored in this mode, and a 0-damage ability
+  cannot be locked (the engine says so with a floater). A NODE loses the total;
+  the bar rises by the hp ACTUALLY removed - overkill is wasted
+  (`overkillCounts` false), so finishing a node with the exact stack is a real
+  decision. A node at 0 hp vanishes. A MINE hit by n hexes drains the bar by
+  `minePenalty` (15) x n and costs each aiming unit `mineDamage` (3) hp per hex,
+  never below 1 hp (`mineLethal` false); a hit mine detonates (`mineDetonates`).
+  Wounds carry back to the world-map party like a fight's.
+* **The bar** runs -`progressMax` .. +`progressMax` (100), starting at 0. +100 =
+  the hack succeeds: the party wins and gets the REGULAR reward screen (the
+  battle report window with an upgrade pick and victory supplies, through
+  `finishCombat` itself). -100, or the last of `turns` (7) ending short = the
+  hack fails: the encounter is consumed, no reward, the run continues (a small
+  "Hack failed" window, then the flight back out). A hack, won or lost, resets
+  fatigue (`fatigue.resetOn.hack = 'always'`). Mines never kill.
+* **Preview**: while aiming, hovering a castable tile paints the pattern (the
+  arena's own aim preview) AND every node / mine shows the number it would take
+  if the turn fired now - the standing locks plus the hovered aim, which stands
+  in for the hovering unit's own lock. After locking, the numbers stay. A node's
+  label shows its hp otherwise. Mines show their penalty in red.
+* **Reaching it**: `hack` is an ordinary encounter type rolled at world
+  generation (`encounters.weights.hack`, 1.5 - set 0 to keep it off generated
+  maps), a lime box marker. Enter it like a battle: the same cloud dive, no
+  deployment step (the recipe seats the party). Not forceable by fatigue.
+
+### How it is built - the duck-typed engine
+
+`hackengine.js` is a SEPARATE engine that implements the combat engine's public
+surface (`state` with `units / tags / heights / phase / selAb / aimMap / reach /
+over / busy`, plus `clickTile / selectAbility / endTurn / cancel / aimPreview /
+curPlayer / abilityFor / costOf / shortOf / moveBudget / moveLeft / start /
+debugResolve`). The arena view (`LocalMapView.bindBattle / syncBattle`, the hover
+aim preview) and the HUD (`ui.setBattleMode / updateBattle`, End turn, the 1/2/3
+hotkeys, right-click cancel) only ever read that surface, so the hack runs on the
+existing arena and battle bar with ZERO changes to either. Nodes and mines are
+ordinary entries in `state.tags` (a node is a barrier - hp > 0 - so the shared
+movement rule blocks it; the emoji sprite the arena draws for a node is hidden
+under the hack's own node body). The cost is duplication: movement / reach /
+aiming are re-implemented (a few dozen lines), and if the fight engine's surface
+grows, this file may have to follow.
+
+`hackview.js` layers the extra presentation on top of the arena without touching
+it: the progress bar (a DOM panel with its own injected `<style>` - style.css is
+untouched), node bodies with hp labels, lock marks, preview numbers, the
+hack-specific hint text and turn counter written into the battle bar's elements
+after each HUD update. `hackbridge.js` is the hack's copy of main.js's combat
+bridge (dive in, build the engine, bind, finish, abort). `hackconfig.js` is
+every knob and the two tag definitions (`node`, `mine` - NOT in COMBAT_TAGS).
+`tools/hack-test.cjs` plays a hack headlessly (walk, three locks on one node,
+the x3 preview, fire, a mine hit, win -> reward window, lose -> consumed).
+
+### The IF branches outside the folder (= the rip-out checklist)
+
+* `src/main.js`: the import of `hackbridge.js`; `createHackBridge(...)` after the
+  cinematic; `hackBridge.abort()` in `abortBattle()`; the `action.type ===
+  HACK_TYPE` branch in `onEnter`; `game.hackDelegate = ...` next to
+  `game.combatDelegate`.
+* `src/game.js`: `case 'hack'` in `enter()`; the `startHack()` / `finishHack()`
+  methods (a combat-shaped context with no enemies; a win goes through
+  `finishCombat`, a loss just consumes).
+* `src/config/encounters.js`: `weights.hack`, `visuals.hack`, `fatigue.resetOn.hack`.
+* `src/locales/en.js` + `ru.js`: `visual.hack.label`, `visual.hack.info`,
+  `log.hack.failed` (the world map needs a name and a legend entry; every other
+  hack text is English-only inside `hackconfig.js`).
+* `DESIGN.md`: this section. `README.md` does not mention it.
+
+### Open questions for the experiment
+
+* Balance is a first guess: 9 nodes x 20 hp against 7 turns, with the starter
+  trio's 2-4 damage abilities, makes stacking mandatory - which is the point -
+  but whether 20 hp / x3 / wasted overkill is the right tension is for play to
+  tell. Every number is in `hackconfig.js`.
+* Should walking spend the turn budget too, or a per-unit action budget?
+  (v1: turns only.)
+* The hex-upgrade progression (upgrades installed into individual hexes of an
+  ability, changing what that hex does when overlaid with another unit's) is the
+  reason the mode exists and is not built. It would live in the folder too.
+* Once the mode has proven itself, the duplication with the fight engine (reach,
+  aim aliases) can be resolved either by extracting a shared "board" module or
+  by folding the hack into the fight engine as a mode - a decision for AFTER the
+  experiment, not during.
+
 ## Open questions
 
 1. Should fog ever re-cover tiles (line of sight), or stay permanent? Currently permanent.

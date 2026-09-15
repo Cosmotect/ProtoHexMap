@@ -186,6 +186,10 @@ export const en = {
   'visual.acolyte.label': 'Acolyte of the Great Forge',
   'visual.acolyte.info': 'Restores one disabled unit at {revivePct} health. At least {acolyteMin} per map. Not consumed if nobody is disabled.',
   'visual.gate.label': 'Layer gate',
+  // EXPERIMENT: the Hack encounter (src/local/hack/, see DESIGN.md). These rows go with it.
+  'visual.hack.label': 'Hack',
+  'visual.hack.info': 'EXPERIMENT. A dormant terminal on a flat board strewn with nodes and mines. Every unit aims an ability, then all fire at once on End turn: a tile covered by two abilities takes double damage, by three triple. Damage dealt to nodes fills the hack progress bar; an ability hex landing on a mine drains it and hurts the caster. Fill the bar within the turn budget for the regular victory reward; fail and the terminal is simply gone.',
+  'log.hack.failed': 'The hack failed. The terminal goes dark.',
   'visual.gate.info': 'An extremely rare green pyramid - at most one per map. Entering it teaches the party the way into another LAYER of the worldflake, and what is learned stays learned between runs; once a second layer is known, a selector above "Begin journey" lets a run start on any unlocked layer. The true source of the Stasis waits at the core. Cannot be forced; does not reset fatigue.',
   'visual.goal.label': 'Waypoint',
   'visual.goal.info': 'Reach this marker to complete the training map.',
