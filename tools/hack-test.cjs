@@ -59,12 +59,12 @@ fs.mkdirSync(OUT, { recursive: true });
   const s0 = await page.evaluate(() => {
     const h = window.__hack; const sb = h.state;
     return {
-      units: sb.units.length, nodes: Object.values(sb.tags).filter((t) => t.kind === 'node').length,
-      mines: Object.values(sb.tags).filter((t) => t.kind === 'mine').length,
+      units: sb.units.length, nodes: Object.values(sb.tags).filter((t) => t.defId === 'node').length,
+      mines: Object.values(sb.tags).filter((t) => t.defId === 'mine').length,
       flat: new Set(Object.values(sb.heights)).size === 1,
       bar: !!document.getElementById('hack-bar'), battleBar: !document.getElementById('battle-bar').classList.contains('hidden'),
       round: document.getElementById('battle-round').textContent, active: sb.activeUid, abilities: document.querySelectorAll('#battle-abilities button').length,
-      progress: sb.progress, turns: h.hackConfig.turns,
+      progress: sb.ext.hack.progress, turns: h.hackConfig.turns, lockedAim: sb.lockedAim,
     };
   });
   check(s0.units === 3, `three party units on the board (${s0.units})`);
@@ -72,7 +72,10 @@ fs.mkdirSync(OUT, { recursive: true });
   check(s0.flat, 'the board is flat');
   check(s0.bar && s0.battleBar, 'hack progress bar and battle bar are shown');
   check(/Turn 1 \/ \d+/.test(s0.round), `battle bar reads the turn (${s0.round})`);
-  check(!!s0.active && s0.abilities === 2, 'a unit is selected with two ability buttons');
+  check(!!s0.active && s0.abilities >= 2, `a unit is selected with its ability buttons (${s0.abilities})`);
+  check(s0.lockedAim, 'aim locks are on (config.combat.lockedAim)');
+  const layoutInfo = await page.evaluate(() => ({ layout: window.__hack.layout, desc: document.getElementById('li-desc').textContent }));
+  check(!!layoutInfo.layout?.id && layoutInfo.desc.includes(layoutInfo.layout.name), `a layout was drawn and named (${layoutInfo.layout?.id})`);
   await page.screenshot({ path: path.join(OUT, 'hack-1-open.png') });
 
   // ----- 3. play a turn: three aims on one node -----------------------------
@@ -88,7 +91,8 @@ fs.mkdirSync(OUT, { recursive: true });
     const aimRot = (a, b) => { if (a === b) return 0; const [q1, r1] = PK(a), [q2, r2] = PK(b); const dq = q2 - q1, dr = r2 - r1; const x = Math.sqrt(3) * (dq + dr / 2), y = 1.5 * dr; const ang = Math.atan2(y, x) * 180 / Math.PI; return ((Math.round(ang / 60) % 6) + 6) % 6; };
     const covers = (ab, from, anchor, node) => ab.dmgZone.some((o) => add(anchor, rot(o, ab.rotatable ? aimRot(from, anchor) : 0)) === node);
     const out = { locks: [], node: null, preview: null };
-    const nodes = Object.keys(sb.tags).filter((k) => sb.tags[k].kind === 'node');
+    const nodes = Object.keys(sb.tags).filter((k) => sb.tags[k].defId === 'node');
+    const lockable = (u, id) => { const ab = h.abilityFor(u, id); return !!ab && ab.damage > 0; };
     // Pick the node closest to the party.
     const dist = (a, b) => { const [q1, r1] = PK(a), [q2, r2] = PK(b); return (Math.abs(q1 - q2) + Math.abs(r1 - r2) + Math.abs(q1 + r1 - q2 - r2)) / 2; };
     const node = nodes.sort((a, b) => Math.min(...sb.units.map((u) => dist(u.pos, a))) - Math.min(...sb.units.map((u) => dist(u.pos, b))))[0];
@@ -102,7 +106,7 @@ fs.mkdirSync(OUT, { recursive: true });
       for (const from of stands) {
         for (const id of u.abilityIds) {
           const ab = h.abilityFor(u, id);
-          if (!h.lockable(u, id)) continue;
+          if (!lockable(u, id)) continue;
           for (const off of ab.castZone) {
             const anchor = add(from, off);
             if (covers(ab, from, anchor, node)) { plan = { from, id, anchor }; break; }
@@ -133,20 +137,22 @@ fs.mkdirSync(OUT, { recursive: true });
   const locked = turn.locks.filter((l) => l.locked && l.coversNode).length;
   check(locked >= 2, `at least two units locked an aim on the same node (${locked})`);
   if (turn.preview) {
-    const H = await page.evaluate(() => window.__hack.hackConfig);
-    check(turn.preview.n === locked && turn.preview.mult === H.multipliers[Math.min(locked, H.multipliers.length) - 1], `preview stacks ${turn.preview.n} abilities at x${turn.preview.mult} = ${turn.preview.total}`);
+    const mults = await page.evaluate(() => window.game.config.combat.stack.multipliers);
+    check(turn.preview.n === locked && turn.preview.mult === mults[Math.min(locked, mults.length) - 1], `preview stacks ${turn.preview.n} abilities at x${turn.preview.mult} = ${turn.preview.total}`);
+    check(turn.preview.parts && turn.preview.parts.length === locked && turn.preview.raw === turn.preview.parts.reduce((a, p) => a + p.dmg, 0), `preview lists each ability's damage (${(turn.preview.parts || []).map((p) => p.dmg).join('+')})`);
   }
   await page.screenshot({ path: path.join(OUT, 'hack-2-locked.png') });
-  const labelsShown = await page.evaluate(() => window.__localView.scene.children.filter((o) => o.isSprite).length);
-  check(labelsShown > 0, `label sprites on the board (${labelsShown})`);
+  const fx = await page.evaluate(() => ({ labels: window.__localView.lockLabels.length, marks: window.__localView.lockFx.length, plaques: window.__localView.tokens.filter((t) => t.userData.plaque && t.userData.plaque.visible).length }));
+  check(fx.labels > 0 && fx.marks > 0, `the arena draws lock marks and billboards (${fx.marks} marks, ${fx.labels} billboards)`);
+  check(fx.plaques === 0, 'overhead unit cards are off');
 
   // Fire.
   const fired = await page.evaluate(async () => {
-    const h = window.__hack; const sb = h.state; const node = Object.keys(sb.tags).find(() => true);
-    const p0 = sb.progress; const r0 = sb.round;
+    const h = window.__hack; const sb = h.state;
+    const p0 = sb.ext.hack.progress; const r0 = sb.round;
     h.endTurn();
-    await new Promise((r) => setTimeout(r, 1400));
-    return { p0, p1: sb.progress, r0, r1: sb.round, lastTurn: sb.lastTurn, busy: sb.busy, over: sb.over, locks: h.lockedUnits().length, bar: document.querySelector('#hack-bar .hack-ends .val')?.textContent, round: document.getElementById('battle-round').textContent };
+    await new Promise((r) => setTimeout(r, 2400));
+    return { p0, p1: sb.ext.hack.progress, r0, r1: sb.round, lastTurn: sb.ext.hack.lastTurn, busy: sb.busy, over: sb.over, locks: h.lockedUnits().length, bar: document.querySelector('#hack-bar .hack-ends .val')?.textContent, round: document.getElementById('battle-round').textContent };
   });
   console.log('  fired:', JSON.stringify(fired));
   const expectedGain = Math.min(turn.preview?.total ?? 0, turn.nodeHpBefore);
@@ -156,21 +162,68 @@ fs.mkdirSync(OUT, { recursive: true });
   check(fired.bar === (fired.p1 > 0 ? '+' : '') + String(fired.p1), `the bar shows the progress (${fired.bar})`);
   await page.screenshot({ path: path.join(OUT, 'hack-3-fired.png') });
 
+  // OVERKILL: a node cut down to 2 hp, hit by one ability of damage d > 2.
+  // With H.overkill 'hurts' the bar must move by 2 - (d - 2).
+  const over = await page.evaluate(async () => {
+    const h = window.__hack; const sb = h.state; const H = h.hackConfig;
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const PK = (k) => k.split(',').map(Number); const K = (q, r) => q + ',' + r;
+    const rot = (o, k) => { let q = o[0], r = o[1]; for (let i = 0; i < k; i++) { const nq = -r, nr = q + r; q = nq; r = nr; } return [q, r]; };
+    const aimRot = (a, b) => { if (a === b) return 0; const [q1, r1] = PK(a), [q2, r2] = PK(b); const dq = q2 - q1, dr = r2 - r1; const x = Math.sqrt(3) * (dq + dr / 2), y = 1.5 * dr; const ang = Math.atan2(y, x) * 180 / Math.PI; return ((Math.round(ang / 60) % 6) + 6) % 6; };
+    const add = (k, o) => { const [q, r] = PK(k); return K(q + o[0], r + o[1]); };
+    const nodes = Object.keys(sb.tags).filter((k) => sb.tags[k].defId === 'node');
+    for (const u of sb.units) {
+      h.activate(u.uid); await wait(30);
+      const reach = h.reachFor();
+      const stands = [u.pos, ...Object.keys(reach.d).filter((k) => !reach.occ.has(k) && !sb.tags[k])];
+      for (const from of stands) for (const id of u.abilityIds) {
+        const ab = h.abilityFor(u, id);
+        if (!ab || ab.damage <= 2) continue;
+        for (const off of ab.castZone) {
+          const anchor = add(from, off);
+          const rk = ab.rotatable ? aimRot(from, anchor) : 0;
+          const tiles = ab.dmgZone.map((o) => add(anchor, rot(o, rk)));
+          const node = tiles.find((t) => nodes.includes(t));
+          if (!node) continue;
+          // Only one node and no mine under the pattern, so the sum is clean.
+          if (tiles.filter((t) => sb.tags[t]).length !== 1) continue;
+          if (from !== u.pos) { h.clickTile(from); await wait(1200); }
+          h.selectAbility(id); await wait(30);
+          if (!sb.aimMap || sb.aimMap[anchor] === undefined) { h.cancel(); continue; }
+          sb.tags[node].hp = 2;
+          const pv = h.previewTotals(anchor).get(node);
+          h.clickTile(anchor); await wait(60);
+          const p0 = sb.ext.hack.progress;
+          h.endTurn(); await wait(2400);
+          return { found: true, dmg: ab.damage, p0, p1: sb.ext.hack.progress, pvDealt: pv?.dealt, pvOver: pv?.over, nodeGone: !sb.tags[node], last: sb.ext.hack.lastTurn, mode: H.overkill };
+        }
+      }
+    }
+    return { found: false };
+  });
+  console.log('  overkill:', JSON.stringify(over));
+  if (over.found) {
+    const expect = over.mode === 'hurts' ? 2 - (over.dmg - 2) : over.mode === 'counts' ? over.dmg : 2;
+    check(over.p1 - over.p0 === expect, `overkill rule '${over.mode}': bar moved ${over.p1 - over.p0} (expected ${expect})`);
+    check(over.pvDealt === 2 && over.pvOver === over.dmg - 2, `preview split the hit into dealt ${over.pvDealt} + over ${over.pvOver}`);
+    check(over.nodeGone, 'the node went down');
+  } else console.log('  (no clean single-node aim available - skipped)');
+
   // A mine hit: lock an aim on a mine tile directly and fire.
   const mine = await page.evaluate(async () => {
     const h = window.__hack; const sb = h.state;
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     const PK = (k) => k.split(',').map(Number);
     const K = (q, r) => q + ',' + r;
-    const mines = Object.keys(sb.tags).filter((k) => sb.tags[k].kind === 'mine');
+    const mines = Object.keys(sb.tags).filter((k) => sb.tags[k].defId === 'mine');
     for (const u of sb.units) {
       h.activate(u.uid); await wait(30);
       const reach = h.reachFor();
       const stands = [u.pos, ...Object.keys(reach.d).filter((k) => !reach.occ.has(k) && !sb.tags[k])];
       for (const from of stands) {
         for (const id of u.abilityIds) {
-          if (!h.lockable(u, id)) continue;
           const ab = h.abilityFor(u, id);
+          if (!ab || !(ab.damage > 0)) continue;
           if (ab.rotatable) continue;   // keep it simple: a single-tile, non-rotating aim
           for (const off of ab.castZone) {
             const [q, r] = PK(from); const anchor = K(q + off[0], r + off[1]);
@@ -178,11 +231,11 @@ fs.mkdirSync(OUT, { recursive: true });
             if (from !== u.pos) { h.clickTile(from); await wait(1200); }
             h.selectAbility(id); await wait(30);
             if (!sb.aimMap || sb.aimMap[anchor] === undefined) { h.cancel(); continue; }
-            const hp0 = u.hp, p0 = sb.progress;
+            const hp0 = u.hp, p0 = sb.ext.hack.progress;
             h.clickTile(anchor); await wait(60);
             const lock = sb.units.find((x) => x.uid === u.uid).lock;
-            h.endTurn(); await wait(1400);
-            return { found: true, hp0, hp1: sb.units.find((x) => x.uid === u.uid).hp, p0, p1: sb.progress, mineGone: !sb.tags[anchor], lock: !!lock, over: sb.over };
+            h.endTurn(); await wait(2400);
+            return { found: true, hp0, hp1: sb.units.find((x) => x.uid === u.uid).hp, p0, p1: sb.ext.hack.progress, mineGone: !sb.tags[anchor], lock: !!lock, over: sb.over };
           }
         }
       }
@@ -196,6 +249,67 @@ fs.mkdirSync(OUT, { recursive: true });
     check(mine.p1 <= mine.p0 - H.minePenalty || mine.over, `the bar dropped by the mine penalty (${mine.p0} -> ${mine.p1})`);
     check(mine.mineGone === !!H.mineDetonates, 'the mine detonated');
   } else console.log('  (no reachable mine for a plain aim this layout - skipped)');
+
+  // ----- 3c. a REGULAR battle uses the same volley --------------------------
+  // Lose this hack quickly, then open a fight against a dummy and check that a
+  // lock does not fire until End turn, and that the billboard reads the enemy.
+  await page.evaluate(() => window.__hack.debugResolve(false));
+  await page.waitForFunction(() => !document.getElementById('dialog').classList.contains('hidden'), null, { timeout: 15000 });
+  await dismissDialog();
+  await page.waitForFunction(() => window.__cinematic.mode() === 'idle', null, { timeout: 30000 });
+  await page.waitForTimeout(600);
+  await page.evaluate(() => { const g = window.game; const hex = g.state.position; hex.encounter = 'battle'; hex.enemies = [{ name: 'Dummy', hp: 9, maxHp: 9, power: 0, alive: true }]; g.emit('change'); });
+  await page.waitForTimeout(200);
+  await page.keyboard.press('e');
+  // Deployment: drop the party on the first free tiles.
+  await page.waitForFunction(() => !!window.__battle || !!(window.__localView && window.__localView.deploy), null, { timeout: 30000 });
+  await page.evaluate(() => {
+    const v = window.__localView; if (!v.deploy) return;
+    const taken = new Set(v.placement?.enemyKeys || []);
+    const ek = (v.placement?.enemyKeys || [])[0];
+    const PK = (k) => k.split(',').map(Number);
+    const dist = (a, b) => { const [q1, r1] = PK(a), [q2, r2] = PK(b); return (Math.abs(q1 - q2) + Math.abs(r1 - r2) + Math.abs(q1 + r1 - q2 - r2)) / 2; };
+    // Nearest free tiles to the enemy, so a melee lock can reach it.
+    const tiles = [...v.map.hexes.values()].sort((a, b) => (ek ? dist(a.key, ek) - dist(b.key, ek) : 0));
+    for (const tile of tiles) { if (!v.deploy) break; if (taken.has(tile.key)) continue; const before = v.deploy.index; v.placeDeployUnit(tile.key); if (!v.deploy || v.deploy.index > before) taken.add(tile.key); }
+  });
+  await page.waitForFunction(() => !!window.__battle && window.__cinematic.mode() === 'local' && window.__battle.state.phase === 'player', null, { timeout: 30000 });
+  await page.waitForTimeout(300);
+  const fight = await page.evaluate(async () => {
+    const b = window.__battle; const sb = b.state;
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const enemy = sb.units.find((u) => u.isEnemy);
+    // Walk the first unit next to the enemy if it can, then lock a strike-like
+    // ability on it. If nobody can reach, lock anywhere and just check the flow.
+    const me = sb.units.find((u) => !u.isEnemy && u.hp > 0);
+    b.activate(me.uid); await wait(30);
+    const ab = me.abilityIds.map((id) => b.abilityFor(me, id)).find((a) => a && a.damage > 0);
+    const id = me.abilityIds.find((i) => b.abilityFor(me, i) === ab);
+    b.selectAbility(id); await wait(30);
+    const keys = Object.keys(sb.aimMap || {});
+    const atEnemy = keys.find((k) => k === enemy.pos);
+    const target = atEnemy ?? keys[0];
+    const pv = target ? b.previewTotals(target) : new Map();
+    const enemyEntry = pv.get(enemy.pos) ?? null;
+    b.clickTile(target); await wait(60);
+    const afterLock = { hp: enemy.hp, locked: !!me.lock, phase: sb.phase, round: sb.round };
+    b.endTurn(); await wait(3000);
+    return { keys: keys.length, atEnemy: !!atEnemy, enemyEntry: enemyEntry && { kind: enemyEntry.kind, hp: enemyEntry.target?.hp, total: enemyEntry.total, dealt: enemyEntry.dealt }, afterLock, after: { hp: enemy.hp, round: sb.round, phase: sb.phase, over: sb.over } };
+  });
+  console.log('  fight:', JSON.stringify(fight));
+  check(fight.afterLock.locked && fight.afterLock.hp === 9, 'in a regular battle a click locks the aim and nothing fires yet');
+  if (fight.atEnemy) {
+    check(fight.enemyEntry && fight.enemyEntry.kind === 'enemy' && fight.enemyEntry.hp === 9 && fight.enemyEntry.total > 0, `the billboard reads the enemy (${JSON.stringify(fight.enemyEntry)})`);
+    check(fight.after.hp < 9, `End turn fired the lock (enemy 9 -> ${fight.after.hp})`);
+  } else console.log('  (enemy out of reach on this layout - only the lock flow was checked)');
+  await page.screenshot({ path: path.join(OUT, 'hack-3c-battle.png') });
+  await page.evaluate(() => window.__battle && window.__battle.debugResolve(true));
+  await page.waitForFunction(() => !document.getElementById('dialog').classList.contains('hidden'), null, { timeout: 15000 });
+  await dismissDialog(); await page.waitForTimeout(300);
+  if (await dialogOpen()) { await page.evaluate(() => { const c = document.querySelector('#dialog-actions button'); if (c) c.click(); }); await page.waitForTimeout(300); if (await dialogOpen()) await dismissDialog(); }
+  await page.waitForFunction(() => window.__cinematic.mode() === 'idle', null, { timeout: 30000 });
+  await page.waitForTimeout(600);
+  await startEnter();
 
   // ----- 4. win -> the regular reward window ---------------------------------
   await page.evaluate(() => window.__hack.debugResolve(true));

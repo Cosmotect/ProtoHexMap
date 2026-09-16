@@ -8,21 +8,23 @@
 //    * routes the Enter key to bridge.enter() when the tile holds a hack,
 //    * sets game.hackDelegate = bridge.delegate,
 //    * calls bridge.abort() where it aborts a fight (restart / new map).
-//  Everything else - the dive, the arena, the engine, the HUD, the end - is
-//  handled here, through the SAME calls the combat bridge makes on the view
-//  and the HUD (the hack engine is duck-typed to the fight engine, see
-//  hackengine.js).
+//  The hack runs on the ORDINARY combat engine (createBattle) since
+//  2026-09-15: no enemies, the node / mine tags dropped into its tag table,
+//  and a `rules` object (hackrules.js) supplying the progress bar, the mine
+//  and overkill effects and the end condition. Aim locks, the volley and the
+//  damage billboards are the engine's and the arena's own.
 // =====================================================================
 import { HACK_CONFIG } from './hackconfig.js';
 import { buildHackRecipe } from './hackmap.js';
-import { createHack } from './hackengine.js';
+import { createHackRules, makeHackTags } from './hackrules.js';
 import { createHackView } from './hackview.js';
-import { resolvedAbilitiesFor } from '../../upgrades.js';
+import { createBattle } from '../battle/engine.js';
+import { resolvedAbilitiesFor, triggersFor } from '../../upgrades.js';
 
 export const HACK_TYPE = 'hack';
 
 export function createHackBridge({ config, getGame, getUi, cinematic, renderer, worldNeighborsFor, worldEdgesFor, escapeHtml }) {
-  let hack = null;        // the running hack engine
+  let hack = null;        // the running engine (createBattle with the hack rules)
   let hackCtx = null;     // the context game.startHack handed over
   let hackView = null;    // the extra presentation
   let pending = null;     // { hex, recipe } between the dive and the engine
@@ -72,19 +74,25 @@ export function createHackBridge({ config, getGame, getUi, cinematic, renderer, 
       : buildHackRecipe(H, game.seed, ctx.hex, game.livingUnits().length);
     pending = null;
     const partyDefs = game.state.party
-      .map((u, i) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.maxHp, partyIndex: i, alive: u.alive, abilityDefs: resolvedAbilitiesFor(u) }))
+      .map((u, i) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.maxHp, partyIndex: i, alive: u.alive, abilityDefs: resolvedAbilitiesFor(u), triggers: triggersFor(u) }))
       .filter((u) => u.alive && u.hp > 0);
     const placement = view.beginBattle({ party: partyDefs, enemies: [] });
     hackCtx = ctx;
-    hack = createHack({
+    const rules = createHackRules(H, { onFloater: (k, text, color) => view.addFloater(k, text, color) });
+    hack = createBattle({
       config,
-      hack: H,
       radius: view.map?.radius ?? H.radius,
       heights: placement.heights,
       party: partyDefs,
+      enemies: [],
       partyKeys: placement.partyKeys,
-      nodeKeys: recipe.nodeKeys,
-      mineKeys: recipe.mineKeys,
+      enemyKeys: [],
+      forced: false,
+      deferOpening: true,
+      noFlee: true,
+      rules,
+      // The board: nodes (barriers) and mines (hazards) as ordinary tags.
+      tags: makeHackTags(H, recipe.nodeKeys, recipe.mineKeys),
       onChange: () => {
         view.syncBattle();
         ui.updateBattle();
@@ -96,6 +104,8 @@ export function createHackBridge({ config, getGame, getUi, cinematic, renderer, 
       onAnim: (anim, done) => view.runMoveAnim(anim, done),
       onEnd: (won) => setTimeout(() => finish(won), 900),
     });
+    hack.hackConfig = H;
+    hack.layout = recipe.layout ?? null;
     window.__hack = hack;   // for debugging / automated tests
     view.bindBattle(hack);
     ui.setBattleMode(hack, { title: H.text.title, lore: null, debuffs: [] });
@@ -103,7 +113,10 @@ export function createHackBridge({ config, getGame, getUi, cinematic, renderer, 
     // The Local Map Info panel: its lore line is a locale KEY in a fight; the
     // hack's is plain text, so it is written straight into the element.
     const desc = document.getElementById('li-desc');
-    if (desc) { desc.textContent = H.text.lore; desc.classList.remove('hidden'); }
+    if (desc) {
+      desc.textContent = `${H.text.lore} Layout: ${recipe.layout?.name ?? '?'} - ${recipe.layout?.desc ?? ''}`;
+      desc.classList.remove('hidden');
+    }
     // The camera is already down (the encounter was started from inside the
     // arena): open at once. Mid-dive, onArrived does it on landing.
     if (cinematic.mode() === 'local') hack.start();
@@ -139,6 +152,7 @@ export function createHackBridge({ config, getGame, getUi, cinematic, renderer, 
     ui.setBattleMode(null);
     cinematic.localView.endBattle();
     const rounds = h.state.round;
+    const hx = h.state.ext.hack ?? { progress: 0, lostBy: null };
     if (won) {
       // The regular reward path: the battle dialog with an upgrade pick.
       ctx.opts.intro = { title: H.text.wonTitle, text: H.text.wonText };
@@ -147,10 +161,10 @@ export function createHackBridge({ config, getGame, getUi, cinematic, renderer, 
       game.finishHack(ctx, { won: false, rounds });
       // Our own small window; closing it flies the party back out (main.js
       // onDialogClosed does that for any dialog closed inside the arena).
-      const text = h.state.lostBy === 'mines' ? H.text.lostTextMines : H.text.lostTextTurns;
+      const text = hx.lostBy === 'mines' ? H.text.lostTextMines : H.text.lostTextTurns;
       ui.openDialog({
         title: H.text.lostTitle,
-        html: `<p>${esc(text)}</p><div class="effect">${esc(`Hack progress ended at ${h.state.progress > 0 ? '+' : ''}${h.state.progress} after ${rounds} turn${rounds === 1 ? '' : 's'}.`)}</div>`,
+        html: `<p>${esc(text)}</p><div class="effect">${esc(`Hack progress ended at ${hx.progress > 0 ? '+' : ''}${hx.progress} after ${rounds} turn${rounds === 1 ? '' : 's'}.`)}</div>`,
         actions: [{ label: 'Continue', onClick: () => ui.closeDialog() }],
       });
     }

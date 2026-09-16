@@ -2700,6 +2700,16 @@ button.small {
   border-color: var(--accent);
   background: rgba(255, 209, 102, 0.16);
 }
+/* The ability this unit has LOCKED its aim with (config.combat.lockedAim):
+   a padlock in the corner, and the accent border without the fill. */
+.battle-abilities .ab.locked { border-color: var(--accent); }
+.battle-abilities .ab.locked::after {
+  content: "🔒";
+  position: absolute;
+  left: 2px;
+  top: 0;
+  font-size: 10px;
+}
 
 .battle-abilities .ab:disabled {
   opacity: 0.4;

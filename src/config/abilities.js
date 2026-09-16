@@ -141,6 +141,12 @@ export const ABILITIES = {
   clawSwipe: A({ name: 'Claw Swipe', icon: '🔪', color: '#5fc7e0', desc: 'Clawed slashes that tear through.', damage: 3, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], rotatable: true }),
   glaive: A({ name: 'Glaive Strike', icon: '⚔️', color: '#e0b25f', desc: 'Downward jab with a sleek glaive.', damage: 4, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], rotatable: true }),
   plasmaBolt: A({ name: 'Plasma Bolt', icon: '☄️', color: '#e0b25f', desc: 'A bolt of plasma, eerily calm, searing.', damage: 2, castZone: ringOffsets(1, 3), dmgZone: [[0, 0]] }),
+
+  //Hack Abilities
+  hackflurry: A({ name: 'Hack Flurry', icon: '🇧🇬', damage: 2, castZone: ringOffsets(0, 3), dmgZone: [[1, 0], [0, -1], [-1, 1]] }),
+  hackExtendedflurry: A({ name: 'Hack Extended Flurry', icon: '🇦🇲', damage: 2, castZone: [[0, 0]], dmgZone: [[1, 0], [2, 0], [0, -1], [0, -2], [-1, 1], [-2, 2]], rotatable: true }),
+  hackKite: A({ name: 'Hack Kite', icon: '🇩🇰', damage: 4, castZone: ringOffsets(0, 3), dmgZone: [[-2, 2], [2, -2], [1, 1], [-1, -1]] }),
+  hackSplayHex: A({ name: 'Hack SplayHex', icon: '🇹🇩', damage: 5, castZone: ringOffsets(0, 3), dmgZone: [[-2, 0], [2, 0], [-2, 2], [2, -2], [0, 2], [0, -2]] }),
 };
 
 

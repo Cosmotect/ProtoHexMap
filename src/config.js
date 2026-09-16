@@ -123,7 +123,16 @@ export const CONFIG = {
     stasisLine: 0x9a5cff,     // the lines growing from the Seed to its Colonies
     visitedTint: 1,           // multiplier applied to the colour of tiles you already stepped on
     reachableRing: 0xffd166,
-    abilityAimRing: 0xff4d4d,  // tile highlight while picking a target for a unit's ability
+    // A unit's LOCKED aim (and its live aim under the cursor), drawn as a thin hex
+    // OUTLINE in its party slot's colour. Each slot's outline is a little smaller
+    // than the one before, so all three nest inside each other on a shared tile:
+    // red (1st), green (2nd), blue (3rd). Extra slots repeat the colours.
+    lockColors: [0xff3b3b, 0x3bff6e, 0x3b8bff],
+    // Arena tiles a unit may move to / aim at: a small dark hex dot in the tile's
+    // centre, kept faint so the aim outlines above stay the loudest thing on the board.
+    moveDot: 0x000000,
+    moveDotOpacity: 0.2,
+    abilityAimRing: 0xff4d4d,  // (legacy) was the red castable-tile ring; castable tiles now use moveDot
     // ----- the aim PREVIEW: what a cast aimed at the hovered tile would touch.
     // The ring above says where an ability MAY be pointed; these fills say what
     // happens if it is pointed there. One colour per consequence, not per

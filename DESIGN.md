@@ -260,14 +260,56 @@ balance must be re-measured against interactive play.
   handcrafted arena before the swap - see "Handcrafted local maps" below.
 * **The combat engine** (`local/battle/engine.js` + `bhex.js`; definitions in
   `src/config/abilities.js`, deliberately NOT in the settings window):
-  * **Player phase - one simultaneous turn**: select any unit and reposition it
-    FREELY within its range, which is always measured from the tile it started the
-    round on - so a move is taken back by simply clicking elsewhere. Casting an
-    ability commits the turn so far: the caster is finished and every unit standing
-    away from its starting tile locks in place; units still at home keep their
-    freedom. The phase ends by itself once every living unit has cast; **End turn**
-    (button or E) ends it early for the whole party. Player haste is not consumed by
-    repositioning.
+  * **Player phase - one simultaneous turn, AIM LOCKS** (`combat.lockedAim`, on
+    since 2026-09-15; grown out of the Hack experiment and made the default for
+    every fight by the owner's decision): select any unit and reposition it
+    FREELY within its range, which is always measured from the tile it started
+    the round on - so a move is taken back by simply clicking elsewhere. Picking
+    an ability and clicking a target LOCKS that unit's aim (`u.lock`): nothing
+    fires yet, the unit stays selectable, re-aiming replaces the lock and walking
+    takes it back (the pattern was measured from where it stood). Selection moves
+    on to the next unit that has not aimed. **End turn** (button or E) FIRES every
+    lock at once, in party order, then hands over to the enemy phase; the phase
+    never ends by itself. **Stacking**: a tile covered by several DAMAGING locks
+    takes each of their damage multiplied by `combat.stack.multipliers[count]`
+    (1 / 2 / 3, the last entry repeats) - so two abilities of 2 and 5 on one tile
+    deal (2+5)x2 = 14. Stacking applies after the height modifier and before a
+    crit; only the party's volley stacks (enemies still act one by one). Costs
+    are checked at lock time and paid when the lock fires. With `lockedAim`
+    false the older flow returns: a click casts at once and the phase ends when
+    everyone has cast (kept for comparison and for tools/engine-test.mjs, which
+    still assumes it). Player haste is not consumed by repositioning.
+  * **The damage pre-calculation** (`previewTotals(hoverKey)` in the engine,
+    `LocalMapView.syncLockFx` in the arena): over every unit, barrier or hazard
+    the standing locks cover - plus the aim under the cursor, which stands in
+    for the hovering unit's own lock - floats ONE compact billboard in three
+    colours: the target's hp (white) and the outcome (-> 6, green while it
+    survives, red when it goes down; SHIELD when a block eats it) on the top
+    row, the arithmetic ((2+5)x2=14, gold) below it, an encounter note on a
+    third row. The card is scaled so it is never wider than its own hex
+    (2026-09-15). The arithmetic lists each ability's nominal damage (base, height,
+    crit); the outcome is read back from playing the whole volley out on a copy
+    of the board - shields, shoves and crashes included - so the two can
+    disagree exactly when the board would. Every unit's aim - its lock, or the
+    live aim under the cursor, which replaces the active unit's lock while
+    hovering - is drawn as a thin hex OUTLINE (no dark backing) on each covered
+    tile and the aim tile, in its party slot's colour (`colors.lockColors`):
+    red for the 1st, green for the 2nd (a step smaller), blue for the 3rd
+    (smaller again), so outlines stacked on one tile nest instead of hiding
+    each other. Tiles a unit may walk to or aim at are only a small, faint
+    black hex dot in the tile's centre (`colors.moveDot` / `moveDotOpacity`,
+    20%); an inspected enemy's reach uses the same dot in its red. The aim
+    preview keeps its fills only for the extra consequences (shove, height,
+    tag, dash, and heal / buff), shrunk inside the innermost outline. The locked ability's button
+    wears a padlock. An encounter's `rules` may add a note to a billboard (the
+    Hack's overkill and mine penalties).
+  * **Rules hooks** (`createBattle`'s `rules` and `tags` options, since
+    2026-09-15): an encounter type can plug its own end condition and tile
+    effects into the engine without the engine knowing what they mean -
+    `attach(sb)`, `onBarrierHit`, `onHazardHit`, `onTurnFired`, `checkEnd`,
+    `decoratePreview`, `debugResolve`; `tags` drops pre-built tag INSTANCES
+    (kinds outside COMBAT_TAGS) into the tag table; the rules' own state lives
+    in `sb.ext`. The Hack is the only user; the hooks are generic and stay.
   * **Enemy phase**: enemies act by initiative (ties by index), one move + one cast
     each. The AI simulates every reachable cast and scores the outcome (damage,
     kills, stuns, and POPPING A SHIELD - for and against); with nothing worth casting
@@ -394,7 +436,10 @@ balance must be re-measured against interactive play.
     callbacks (onChange / onFloater / onLog / onAnim / onEnd). The view draws
     movement / cast ranges as hex-outline rings (bright over a dark backing, pulsing;
     the hovered ring goes solid white and its tile rises), DOM floaters for combat
-    numbers, and the battle bar (`#battle-bar`: active unit, ability buttons, End
+    numbers, the overhead unit cards (portrait + hp bar + statuses over every
+    body - OFF since 2026-09-15 via `local.unitPlaques`, the arena was too
+    cluttered; the party panel, the enemy roster and the billboards carry the
+    numbers), and the battle bar (`#battle-bar`: active unit, ability buttons, End
     turn) in place of the status bar. The party panel's HP updates live as hits land;
     deaths only become official at the end of the fight.
   * **Wiring**: `game.startCombat` -> `prepareCombat` (rolls the enemies, applies
@@ -1304,7 +1349,13 @@ stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }
 departure from how combat works on the local map, to find out whether the true
 essence of the core gameplay - PATTERN MATCHING ON A HEX GRID - can carry a play
 mode on its own, with no enemies at all. It may grow a lot, and it may be ripped
-out wholesale. Two rules follow from that, and every future session must keep them:
+out wholesale. **Update 2026-09-15**: the part of it that proved itself at once -
+aiming all three units, then firing on End turn, with stacking and the damage
+pre-calculation - was PROMOTED into the combat engine and the arena as the
+default for every fight (see "Aim locks" and "The damage pre-calculation" in the
+combat section above). What remains the experiment is the BOARD: nodes, mines,
+the progress bar and the turn budget. Two rules follow, and every future session
+must keep them:
 
 1. **All of its code is self-contained in `src/local/hack/`.** Its rules, its
    board, its extra presentation, its numbers and even its two tile tags live
@@ -1335,29 +1386,38 @@ ability. (Not built yet: v1 is the play mode itself.)
 
 ### The rules (v1 - `hackconfig.js` holds every number)
 
-* **The board** (`hackmap.js`): a completely flat arena (every tile pinned to the
-  neutral elevation, which is what switches the elevation wave off) of `radius`
-  5, the party seated around the centre, `nodes` (9) of `nodeHp` (20) strewn
-  about with `nodePairs` (3) of them placed adjacent to another node so a 3-hex
-  pattern can cover two at once, and `mines` (6), each dropped next to a node it
-  guards (`minesNearNodes`). The first ring around the party is kept empty. All
-  seeded from the run seed and the world tile.
-* **The turn**: player phase only. Any unit can be selected and repositioned
-  freely within its speed from the tile it started the turn on (click elsewhere
-  to take a move back) - exactly the fight's rule. Nodes block walking (fliers
-  glide over, never stop on one); mines are walkable and do nothing underfoot.
-  Picking an ability and clicking a target LOCKS the unit's aim (painted on the
-  board in the unit's own colour, a ring on the aim tile) - nothing fires yet.
-  Re-aiming replaces the lock; walking takes it back; a locked unit stays
-  selectable. Selection passes to the next unit without a lock by itself.
-* **End turn** (button or E) fires every lock at once. Per covered tile: the
-  damage of every ability covering it, summed, times `multipliers[count]`
-  (1 / 2 / 3). Only an ability's `dmgZone` counts; its heal / status / push /
-  dash / height / tag effects are ignored in this mode, and a 0-damage ability
-  cannot be locked (the engine says so with a floater). A NODE loses the total;
-  the bar rises by the hp ACTUALLY removed - overkill is wasted
-  (`overkillCounts` false), so finishing a node with the exact stack is a real
-  decision. A node at 0 hp vanishes. A MINE hit by n hexes drains the bar by
+* **The board** (`hackmap.js` + `hacklayouts.js`): a completely flat arena
+  (every tile pinned to the neutral elevation, which is what switches the
+  elevation wave off) of `radius` 5. WHERE nodes and mines go is one of TWENTY
+  LAYOUTS, drawn by seed per terminal (`forceLayout` pins one by id for
+  playtesting, `layoutPool` narrows the draw). A layout is data: node and mine
+  counts (14-18 nodes, 14-30 mines - dense on purpose, since 2026-09-15), the
+  minimum node spacing (1 = nodes may touch), where the party starts ('centre'
+  or a cluster on one random side of the rim, 'edge'), and two WEIGHT functions
+  over the free tiles - one for nodes, one (seeing the placed nodes) for mines;
+  the placer draws tiles without replacement in proportion to weight, so a
+  layout is a shape of probability, not a fixed picture. The twenty: even
+  (scatter, dense scatter, blue noise, minefield), central congregation (core,
+  citadel, core-and-outposts, halo), clustered (three clusters, five knots,
+  archipelago, six corners), shaped (crescent, gradient, lanes, spiral,
+  honeycomb) and noise-driven (Perlin hills, veins, islands - `src/noise.js`).
+  Mine recipes recur: guard (next to a node), pocket (between nodes), moat (one
+  ring out), inverse (the empty stretches). The first ring around the party is
+  always kept free. `tools/hack-layouts-sheet.mjs` draws all twenty as a
+  contact sheet (SVG) to judge the shapes. The layout's name and description
+  are shown in the Local Map Info panel while playing, so feedback can name it.
+* **The turn** is the ordinary fight's turn now (aim locks, see the combat
+  section): walk, lock, End turn fires. Nodes are BARRIER tags (they block
+  walking; fliers glide over, never stop on one); mines are HAZARD tags,
+  walkable, ticking nothing. Every ability locks, as in a fight, and every
+  effect of a fired ability applies (a charge lands, a shove shoves); only
+  damaging abilities count for the stack multiplier. A NODE loses the total;
+  the bar rises by the hp ACTUALLY removed. OVERKILL - damage past the node's
+  remaining hp - is a toggle, `overkill`: **'hurts'** (the default since
+  2026-09-15) DRAINS the bar by the excess, so a sloppy stack costs you;
+  'wasted' drops it; 'counts' fills the bar with it. The preview label on a
+  targeted node splits the hit accordingly ("-2 x3 -16!" - two land, sixteen
+  spill, in red when they hurt). A node at 0 hp vanishes. A MINE hit by n hexes drains the bar by
   `minePenalty` (15) x n and costs each aiming unit `mineDamage` (3) hp per hex,
   never below 1 hp (`mineLethal` false); a hit mine detonates (`mineDetonates`).
   Wounds carry back to the world-map party like a fight's.
@@ -1378,29 +1438,30 @@ ability. (Not built yet: v1 is the play mode itself.)
   maps), a lime box marker. Enter it like a battle: the same cloud dive, no
   deployment step (the recipe seats the party). Not forceable by fatigue.
 
-### How it is built - the duck-typed engine
+### How it is built - a rules plug-in on the combat engine
 
-`hackengine.js` is a SEPARATE engine that implements the combat engine's public
-surface (`state` with `units / tags / heights / phase / selAb / aimMap / reach /
-over / busy`, plus `clickTile / selectAbility / endTurn / cancel / aimPreview /
-curPlayer / abilityFor / costOf / shortOf / moveBudget / moveLeft / start /
-debugResolve`). The arena view (`LocalMapView.bindBattle / syncBattle`, the hover
-aim preview) and the HUD (`ui.setBattleMode / updateBattle`, End turn, the 1/2/3
-hotkeys, right-click cancel) only ever read that surface, so the hack runs on the
-existing arena and battle bar with ZERO changes to either. Nodes and mines are
-ordinary entries in `state.tags` (a node is a barrier - hp > 0 - so the shared
-movement rule blocks it; the emoji sprite the arena draws for a node is hidden
-under the hack's own node body). The cost is duplication: movement / reach /
-aiming are re-implemented (a few dozen lines), and if the fight engine's surface
-grows, this file may have to follow.
+Until 2026-09-15 the hack ran on a SEPARATE duck-typed engine (`hackengine.js`,
+gone now). It runs on `createBattle` itself: no enemies, the node / mine tag
+instances dropped into the engine's tag table through its `tags` option
+(`makeHackTags`), and a `rules` object (`hackrules.js`, `createHackRules`)
+supplying what the engine does not know: `onBarrierHit` (a node lost hp -> the
+bar, and the overkill rule), `onHazardHit` (a mine under a hex -> the bar, the
+caster's hp, detonation once the volley has landed), `onTurnFired` (the turn's
+tally), `checkEnd` (the bar's ends and the turn budget replace
+last-side-standing), `decoratePreview` (the billboard's overkill / mine note)
+and `debugResolve`. The rules' state is `sb.ext.hack` (`progress`, `lastTurn`,
+`lostBy`). Aim locks, the volley, stacking and the billboards are the engine's
+and the arena's own.
 
-`hackview.js` layers the extra presentation on top of the arena without touching
-it: the progress bar (a DOM panel with its own injected `<style>` - style.css is
-untouched), node bodies with hp labels, lock marks, preview numbers, the
-hack-specific hint text and turn counter written into the battle bar's elements
-after each HUD update. `hackbridge.js` is the hack's copy of main.js's combat
-bridge (dive in, build the engine, bind, finish, abort). `hackconfig.js` is
-every knob and the two tag definitions (`node`, `mine` - NOT in COMBAT_TAGS).
+`hackview.js` layers the rest on top of the arena without touching it: the
+progress bar (a DOM panel with its own injected `<style>` - style.css is
+untouched), node bodies with the hp as a FLAT DECAL on the column's top (turned
+to the camera's bearing; nothing of the hack's floats, so the arena's billboard
+is the only floating reading), and the "Turn n / N" counter written into the
+battle bar. `hackbridge.js` is the hack's copy of main.js's combat bridge (dive
+in, build the engine with the rules, bind, finish, abort). `hackconfig.js` is
+every knob and the two tag definitions (`node`, `mine` - NOT in COMBAT_TAGS);
+`hacklayouts.js` the twenty board layouts.
 `tools/hack-test.cjs` plays a hack headlessly (walk, three locks on one node,
 the x3 preview, fire, a mine hit, win -> reward window, lose -> consumed).
 
@@ -1414,6 +1475,8 @@ the x3 preview, fire, a mine hit, win -> reward window, lose -> consumed).
   methods (a combat-shaped context with no enemies; a win goes through
   `finishCombat`, a loss just consumes).
 * `src/config/encounters.js`: `weights.hack`, `visuals.hack`, `fatigue.resetOn.hack`.
+* `src/local/battle/engine.js`: nothing hack-specific - the `rules` / `tags`
+  options and their hooks are generic and stay (see "Rules hooks" above).
 * `src/locales/en.js` + `ru.js`: `visual.hack.label`, `visual.hack.info`,
   `log.hack.failed` (the world map needs a name and a legend entry; every other
   hack text is English-only inside `hackconfig.js`).
@@ -1421,19 +1484,20 @@ the x3 preview, fire, a mine hit, win -> reward window, lose -> consumed).
 
 ### Open questions for the experiment
 
-* Balance is a first guess: 9 nodes x 20 hp against 7 turns, with the starter
-  trio's 2-4 damage abilities, makes stacking mandatory - which is the point -
-  but whether 20 hp / x3 / wasted overkill is the right tension is for play to
-  tell. Every number is in `hackconfig.js`.
+* Balance is a first guess: 14-18 nodes x 20 hp against 7 turns, with the
+  starter trio's 2-4 damage abilities, makes stacking mandatory - which is the
+  point - but whether 20 hp / x3 / overkill-hurts is the right tension, and
+  which of the twenty layouts play well, is for play to tell. Every number is
+  in `hackconfig.js`, every layout in `hacklayouts.js`.
 * Should walking spend the turn budget too, or a per-unit action budget?
   (v1: turns only.)
 * The hex-upgrade progression (upgrades installed into individual hexes of an
   ability, changing what that hex does when overlaid with another unit's) is the
   reason the mode exists and is not built. It would live in the folder too.
-* Once the mode has proven itself, the duplication with the fight engine (reach,
-  aim aliases) can be resolved either by extracting a shared "board" module or
-  by folding the hack into the fight engine as a mode - a decision for AFTER the
-  experiment, not during.
+* The playtester tools (`tools/playtester/`) assume the older cast-at-once flow
+  in places (and are already broken by an earlier config move - `COMBAT_CONFIG`
+  no longer lives in `config/abilities.js`); `tools/engine-test.mjs` likewise.
+  Both need a pass once the aim-lock flow settles.
 
 ## Open questions
 

@@ -747,7 +747,7 @@ export function createSettings({ config, defaults, onChange, getUiScale, getUiSc
       // "color", the per-layer biome palette ("color0".."color6"), anything
       // ending in "Color" (groundColor, cloudColor...), and the whole colors
       // section get a colour picker instead of a raw number.
-      const isColor = key === 'color' || /^color\d+$/.test(key) || /Color$/.test(key) || (path.startsWith('colors.') && !/tint|height/i.test(key));
+      const isColor = key === 'color' || /^color\d+$/.test(key) || /Color$/.test(key) || (path.startsWith('colors.') && !/tint|height|opacity/i.test(key));
       return isColor ? 'color' : 'number';
     }
     return 'text';

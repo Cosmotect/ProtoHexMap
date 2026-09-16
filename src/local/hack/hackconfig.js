@@ -11,27 +11,33 @@
 //  abilities takes double damage, by three triple. Damage dealt to nodes fills
 //  the HACK PROGRESS bar; a hex landing on a mine drains it (and hurts the
 //  unit). Fill the bar within the turn budget to win.
+//  The aim-lock volley and the stacking are the COMBAT ENGINE's now
+//  (config.combat.lockedAim / combat.stack, since 2026-09-15); what stays
+//  here is the board, the nodes, the mines and the bar.
 // =====================================================================
 
 export const HACK_CONFIG = {
   // ----- the board ---------------------------------------------------
   radius: 5,          // rings of local hexes (the arena is completely flat)
-  nodes: 9,           // how many nodes are strewn about
-  nodePairs: 3,       // of those, how many are placed ADJACENT to another node
-                      // (so a 3-hex pattern can cover two nodes at once)
   nodeHp: 20,         // hp of every node
-  mines: 6,           // how many mines
-  minesNearNodes: true, // true = every mine is dropped next to a node (it guards it);
-                        // false = anywhere on the board
-  partyRingMax: 1,    // the party starts clustered around the centre, at most this far from it
+  // WHERE nodes and mines go is a LAYOUT (hacklayouts.js): twenty of them,
+  // each with its own counts, spacing and party start. A terminal draws one
+  // by seed. forceLayout pins one by id for playtesting ('citadel', 'veins',
+  // ...); layoutPool (a list of ids) narrows the draw; null = all twenty.
+  forceLayout: null,
+  layoutPool: null,
+  partyRingMax: 1,    // a 'centre' start seats the party at most this far from the middle
 
   // ----- the rules ---------------------------------------------------
   turns: 7,           // End-turn presses the player gets to fill the bar
-  multipliers: [1, 2, 3],   // damage multiplier by how many abilities cover a tile
-                            // (1 ability x1, 2 abilities x2, 3+ x3 - the last entry repeats)
+  // (The stacking multipliers moved to config.combat.stack.multipliers - they
+  // are every fight's now, not the hack's.)
   progressMax: 100,   // the bar runs -progressMax .. +progressMax, starting at 0
-  overkillCounts: false,    // false = damage past a node's remaining hp is wasted
-                            // (finishing a node with the exact stack is a real decision)
+  // OVERKILL - damage past a node's remaining hp:
+  //   'hurts'   the excess DRAINS the hack progress bar (a sloppy stack costs you)
+  //   'wasted'  the excess simply does nothing
+  //   'counts'  the excess fills the bar like any other damage
+  overkill: 'hurts',
   minePenalty: 15,    // hack progress lost per ability hex that lands on a mine
   mineDamage: 3,      // hp the aiming unit loses per hex that lands on a mine
   mineLethal: false,  // false = mine damage never takes a unit below 1 hp
@@ -41,10 +47,6 @@ export const HACK_CONFIG = {
   colors: {
     node: 0x5fc7e0,          // the node column
     nodeHurt: 0xff9950,      // a node below half hp
-    // One colour per party slot: each unit's locked aim is painted in its own colour.
-    locks: [0xffd166, 0x8fe0b8, 0xc66dff, 0xff9f43, 0x5fc7e0],
-    previewText: '#ffd75f',  // the damage number over a targeted node
-    mineText: '#ff5d73',     // the penalty number over a targeted mine
   },
   // The two tile tags of this mode. They are NOT in COMBAT_TAGS on purpose:
   // the shared tag table stays untouched, and the hack engine resolves these

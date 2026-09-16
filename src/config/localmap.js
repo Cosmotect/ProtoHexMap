@@ -25,6 +25,17 @@ export const COMBAT_CONFIG = {
     highBonus: 1,       // damage added when attacking from 2+ levels above
     lowPenalty: 1,      // damage removed when attacking from 2+ levels below
     voidEdges: false,   // true = shoves over the map edge kill instead of crashing
+    // ----- AIM LOCKS - the party fires together (since 2026-09-15) -----------
+    // true: picking an ability and clicking a target LOCKS the unit's aim; End
+    // turn then fires every lock at once, in party order, and a tile covered by
+    // several damaging locks takes their damage multiplied by stack.multipliers
+    // [count] (two abilities x2, three x3, the last entry repeats). Re-aiming
+    // replaces a lock, walking takes it back; nothing fires before End turn.
+    // false: the older flow - a click casts at once and the phase ends by itself
+    // when everyone has cast (kept for comparison and for tools/engine-test.mjs).
+    // Grew out of the Hack experiment (src/local/hack/, see DESIGN.md).
+    lockedAim: true,
+    stack: { multipliers: [1, 2, 3] },
     // (What popping a shield is worth to the enemy AI used to live here as
     // `shieldStripScore`. It moved into the shield's own row in the status table
     // below, as `aiValue`, so every status carries its own worth in one place.)
@@ -72,6 +83,11 @@ export const LOCAL_MAP_CONFIG = {
   // tile visually breaks into a sub-grid of local tiles.
   local: {
     aimFxOpacity: 0.5,        // how bright the aim-preview fills are (0..1, see colors.aim*Fill)
+    // The overhead unit cards (portrait + hp bar + statuses over every body).
+    // OFF since 2026-09-15: the arena was too cluttered with them; the party
+    // panel, the enemy roster and the damage pre-calculation billboards carry
+    // the numbers. true brings them back.
+    unitPlaques: false,
     radius: 6,                // rings of local hexes around the arena centre
     hexSize: 1.0,
     gap: 0.03,

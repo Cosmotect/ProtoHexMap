@@ -490,6 +490,11 @@ export const en = {
   'battle.ui.endTurn.title': 'End the whole party\'s turn (E)',
   'battle.ui.hp': '{hp}/{max} HP',
   'battle.ui.canMove': 'Move freely - positions lock when any ability is cast.',
+  // Aim locks (config.combat.lockedAim): pick an ability, click a tile to lock the
+  // aim; End turn fires every lock at once.
+  'battle.ui.aimFree': 'Move freely, pick an ability and click a tile to lock the aim.',
+  'battle.ui.aimLocked': 'Aim locked: {ability} (re-aim or walk to change).',
+  'battle.ui.aimed': '{n}/{total} aimed - End turn fires all.',
   'battle.ui.locked': 'Position locked. Cast an ability or end the turn.',
   'battle.ui.moveLeft.title': 'Movement points left this round (after walking and ability costs)',
   'battle.ui.supplies.title': 'The run\'s supplies - some abilities cost them',

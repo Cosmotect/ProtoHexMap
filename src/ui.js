@@ -802,7 +802,13 @@ export function createUI(config, handlers) {
     els.battleRound.textContent = sb.ambush ? t('battle.ui.ambush') : t('battle.ui.round', { n: sb.round });
     const c = battleRef.curPlayer();
     if (sb.phase === 'player' && c) {
-      const hint = c.moveLocked ? t('battle.ui.locked') : t('battle.ui.canMove');
+      // AIM LOCKS (config.combat.lockedAim): the hint says whether this unit has
+      // aimed, and how many of the party have - End turn fires them all.
+      const aimed = sb.lockedAim && battleRef.lockedUnits ? battleRef.lockedUnits().length : 0;
+      const total = sb.units.filter((u) => !u.isEnemy && u.hp > 0).length;
+      const hint = sb.lockedAim
+        ? `${c.lock ? t('battle.ui.aimLocked', { ability: c.lock.abName }) : t('battle.ui.aimFree')} ${t('battle.ui.aimed', { n: aimed, total })}`
+        : c.moveLocked ? t('battle.ui.locked') : t('battle.ui.canMove');
       // The two pools an ability cost can draw on, so a spend is SEEN where it
       // happens: movement left this round (walk included) and the run's
       // supplies. The world-map supplies counter is hidden during a fight, which
@@ -819,7 +825,7 @@ export function createUI(config, handlers) {
       els.battleAbilities.innerHTML = c.abilityIds.map((id) => {
         const ab = battleRef.abilityFor(c, id);   // the unit's UPGRADED def
         if (!ab) return '';
-        const sel = sb.selAb === id ? 'selected' : '';
+        const sel = sb.selAb === id ? 'selected' : c.lock && c.lock.abId === id ? 'locked' : '';
         const num = ab.damage > 0 ? `⚔${ab.damage}` : ab.heal > 0 ? `+${ab.heal}` : '';
         const slot = slots.indexOf(id);
         const key = slot >= 0 && slot < 3 ? ` [${slot + 1}]` : '';

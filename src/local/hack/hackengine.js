@@ -29,7 +29,9 @@
 //      effects of an ability are ignored in this mode (0-damage abilities
 //      cannot be locked at all).
 //    * A NODE hit loses hp; the HACK PROGRESS bar rises by the hp actually
-//      removed (overkill wasted unless overkillCounts). A node at 0 vanishes.
+//      removed. OVERKILL (damage past the node's remaining hp) is ruled by
+//      H.overkill: 'hurts' drains the bar by the excess, 'wasted' drops it,
+//      'counts' fills the bar with it. A node at 0 vanishes.
 //    * A MINE hit by n hexes drains the bar by minePenalty x n and costs each
 //      aiming unit mineDamage hp per hex (never below 1 hp unless mineLethal).
 //      A hit mine detonates (mineDetonates).
@@ -223,7 +225,12 @@ export function createHack({ config, hack: H, radius, heights, party, partyKeys,
     for (const [k, e] of contrib) {
       const mult = multFor(e.n);
       const tag = sb.tags[k];
-      out.set(k, { n: e.n, mult, raw: e.raw, total: e.raw * mult, kind: tag ? tag.kind : 'ground', pending: e.pending, tag });
+      const total = e.raw * mult;
+      // For a node: what lands (dealt) and what spills past its hp (over) -
+      // the same split endTurn applies, so the label promises what will happen.
+      const dealt = tag && tag.kind === 'node' ? Math.min(total, tag.hp) : total;
+      const over = tag && tag.kind === 'node' ? Math.max(0, total - tag.hp) : 0;
+      out.set(k, { n: e.n, mult, raw: e.raw, total, dealt, over, kind: tag ? tag.kind : 'ground', pending: e.pending, tag });
     }
     return out;
   }
@@ -317,7 +324,7 @@ export function createHack({ config, hack: H, radius, heights, party, partyKeys,
       if (u.hp <= 0 || !u.lock) continue;
       for (const t of u.lock.tiles) (contrib.get(t) ?? contrib.set(t, []).get(t)).push({ u, dmg: u.lock.damage });
     }
-    let gained = 0, lost = 0;
+    let gained = 0, lost = 0, overkill = 0;
     const max = H.progressMax;
     for (const [k, list] of contrib) {
       const n = list.length, mult = multFor(n);
@@ -325,11 +332,14 @@ export function createHack({ config, hack: H, radius, heights, party, partyKeys,
       const total = raw * mult;
       const tag = sb.tags[k];
       if (tag && tag.kind === 'node') {
-        const dealt = H.overkillCounts ? total : Math.min(total, tag.hp);
+        const dealt = Math.min(total, tag.hp);
+        const over = Math.max(0, total - tag.hp);
         tag.hp = Math.max(0, tag.hp - total);
-        gained += dealt;
-        floater(k, `-${total}${mult > 1 ? ` x${mult}` : ''}`, '#ffd75f');
-        blog(`${tag.name} ${k}: -${total} (${n} abilit${n === 1 ? 'y' : 'ies'} x${mult})`);
+        gained += H.overkill === 'counts' ? total : dealt;
+        if (over > 0 && H.overkill === 'hurts') { lost += over; overkill += over; }
+        floater(k, `-${dealt}${mult > 1 ? ` x${mult}` : ''}`, '#ffd75f');
+        if (over > 0) floater(k, H.overkill === 'hurts' ? `⚠ overkill -${over}` : `overkill ${over}`, H.overkill === 'hurts' ? '#ff5d73' : '#9aa7bd');
+        blog(`${tag.name} ${k}: -${dealt} (${n} abilit${n === 1 ? 'y' : 'ies'} x${mult})${over ? ` overkill ${over} (${H.overkill})` : ''}`);
         if (tag.hp <= 0) { delete sb.tags[k]; floater(k, '✸ node down', '#ff9950'); blog('Node ' + k + ' is down'); }
       } else if (tag && tag.kind === 'mine') {
         for (const c of list) {
@@ -345,7 +355,7 @@ export function createHack({ config, hack: H, radius, heights, party, partyKeys,
       } else floater(k, '✸', '#9aa7bd');
     }
     sb.progress = Math.max(-max, Math.min(max, sb.progress + gained - lost));
-    sb.lastTurn = { round: sb.round, gained, lost };
+    sb.lastTurn = { round: sb.round, gained, lost, overkill };
     for (const u of sb.units) { u.lock = null; u.done = true; }
     sb.activeUid = null;
     emit();

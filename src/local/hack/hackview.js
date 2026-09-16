@@ -1,19 +1,17 @@
 // =====================================================================
 //  HACK ENCOUNTER - the extra presentation.  *** EXPERIMENT (see DESIGN.md) ***
 //
-//  Everything the hack shows that a fight does not, layered ON TOP of the
-//  ordinary arena (LocalMapView) without changing it:
+//  What the hack shows that a fight does not, layered ON TOP of the ordinary
+//  arena (LocalMapView) without changing it:
 //    * the HACK PROGRESS bar at the top of the screen (-max .. 0 .. +max),
 //      a DOM element with its own <style> block - style.css is untouched;
-//    * NODE bodies: a short hex column per node with its hp on a label,
-//      standing in for the emoji sprite syncBattle() would show (that sprite
-//      is hidden for node tiles; mines keep theirs);
-//    * LOCK marks: every unit's locked aim painted on the board in that
-//      unit's own colour (a fill per covered tile, a ring on the aim tile);
-//    * PREVIEW numbers: over every node and mine the total it would take if
-//      the turn fired now - the standing locks plus the aim under the cursor.
-//  The view reads the hack engine's state and previewTotals(); it owns its
-//  own meshes and DOM and removes all of them in dispose().
+//    * NODE bodies: a short hex column per node with its hp as a FLAT DECAL on
+//      the column's top face (the emoji sprite the arena would draw for the
+//      tag is hidden; mines keep theirs). Nothing of the hack's floats: the
+//      only floating readings are the arena's own damage billboards.
+//    * the battle bar's round counter reads "Turn n / N".
+//  Lock marks and the damage pre-calculation used to live here; they are the
+//  arena's now (LocalMapView.syncLockFx, since 2026-09-15).
 // =====================================================================
 import * as THREE from 'three';
 
@@ -24,6 +22,7 @@ export function createHackView({ view, hack, H }) {
   const cfg = view.config.local;
   const tileRadius = cfg.hexSize - cfg.gap / SQRT3;
   const colors = H.colors;
+  const hx = () => hack.state.ext.hack;
 
   // ----- the progress bar (DOM) -------------------------------------------
   const style = document.createElement('style');
@@ -66,14 +65,16 @@ export function createHackView({ view, hack, H }) {
 
   function refreshBar() {
     const sb = hack.state;
-    const p = sb.progress, max = H.progressMax;
+    const h = hx();
+    if (!h) return;
+    const p = h.progress, max = H.progressMax;
     const pct = Math.min(100, Math.abs(p) / max * 100) / 2;   // half the track each way
     fillEl.className = 'hack-fill ' + (p >= 0 ? 'pos' : 'neg');
     fillEl.style.width = pct + '%';
     fillEl.style.left = p >= 0 ? '50%' : (50 - pct) + '%';
     valEl.textContent = (p > 0 ? '+' : '') + p;
     const left = H.turns - sb.round + (sb.over ? 0 : 1);
-    const delta = sb.lastTurn ? (sb.lastTurn.gained - sb.lastTurn.lost) : null;
+    const delta = h.lastTurn ? (h.lastTurn.gained - h.lastTurn.lost) : null;
     turnsEl.className = 'hack-turns' + (left <= 1 && !sb.over ? ' last' : '');
     turnsEl.innerHTML = sb.over
       ? (sb.over === 'win' ? 'HACK COMPLETE' : 'HACK FAILED')
@@ -81,75 +82,47 @@ export function createHackView({ view, hack, H }) {
     // The battle bar's round counter reads "Turn n / N" in this mode.
     const roundEl = document.getElementById('battle-round');
     if (roundEl) roundEl.textContent = sb.over ? (sb.over === 'win' ? 'Hack complete' : 'Hack failed') : `Turn ${sb.round} / ${H.turns}`;
-    // The fight's movement hint does not apply: nothing locks a unit in place here.
-    const hint = document.querySelector('#battle-active .muted');
-    if (hint) {
-      const c = hack.curPlayer();
-      const n = hack.lockedUnits().length, total = sb.units.filter((u) => u.hp > 0).length;
-      hint.textContent = c && c.lock ? `Aim locked: ${c.lock.abName} (re-aim or walk to change). ${n}/${total} aimed - End turn fires all.`
-        : `Move freely, pick an ability and click a tile to LOCK the aim. ${n}/${total} aimed - End turn fires all.`;
-    }
   }
 
-  // ----- label sprites (canvas text) -----------------------------------------
-  const texCache = new Map();
-  function labelTexture(text, color, sub) {
-    const key = text + '|' + color + '|' + (sub ?? '');
-    let tex = texCache.get(key);
-    if (tex) return tex;
-    const cv = document.createElement('canvas');
-    cv.width = 256; cv.height = 128;
-    const g = cv.getContext('2d');
-    g.clearRect(0, 0, 256, 128);
-    // A soft dark pill so the number reads on a bright tile.
-    g.fillStyle = 'rgba(10, 14, 24, 0.72)';
-    const w = sub ? 220 : 150, h = 80, x = (256 - w) / 2, y = (128 - h) / 2;
-    g.beginPath();
-    g.moveTo(x + 24, y); g.lineTo(x + w - 24, y); g.quadraticCurveTo(x + w, y, x + w, y + 24);
-    g.lineTo(x + w, y + h - 24); g.quadraticCurveTo(x + w, y + h, x + w - 24, y + h);
-    g.lineTo(x + 24, y + h); g.quadraticCurveTo(x, y + h, x, y + h - 24);
-    g.lineTo(x, y + 24); g.quadraticCurveTo(x, y, x + 24, y); g.closePath(); g.fill();
-    g.fillStyle = color;
-    g.textAlign = sub ? 'left' : 'center';
-    g.textBaseline = 'middle';
-    g.font = 'bold 54px "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace';
-    if (sub) {
-      g.fillText(text, x + 16, 64);
-      const tw = g.measureText(text).width;
-      g.font = 'bold 30px "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace';
-      g.fillStyle = '#ffffff';
-      g.fillText(sub, x + 16 + tw + 8, 60);
-    } else g.fillText(text, 128, 64);
-    tex = new THREE.CanvasTexture(cv);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    texCache.set(key, tex);
-    return tex;
-  }
-  function makeLabel(text, color, sub, scale = 0.9) {
-    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture(text, color, sub), transparent: true, depthTest: false, depthWrite: false }));
-    sprite.scale.set(scale, scale / 2, 1);
-    sprite.renderOrder = 20;
-    return sprite;
-  }
-  const tilePos = (k) => view.map.hexes.get(k);
-
-  // ----- node bodies ---------------------------------------------------------
+  // ----- node bodies with a flat hp decal on top -----------------------------
   const nodeGeo = new THREE.CylinderGeometry(tileRadius * 0.5, tileRadius * 0.58, 0.5, 6, 1);
   nodeGeo.translate(0, 0.25, 0);
   if (view.map?.orientation === 'flat') nodeGeo.rotateY(Math.PI / 6);
-  const nodes = new Map();   // key -> { body, label, hp }
+  const decalGeo = new THREE.PlaneGeometry(tileRadius * 0.86, tileRadius * 0.86);
+  decalGeo.rotateX(-Math.PI / 2);
+  const decalTex = new Map();   // hp -> texture
+  function hpTexture(hp, hurt) {
+    const key = hp + (hurt ? 'h' : '');
+    let tex = decalTex.get(key);
+    if (tex) return tex;
+    const cv = document.createElement('canvas');
+    cv.width = 128; cv.height = 128;
+    const g = cv.getContext('2d');
+    g.clearRect(0, 0, 128, 128);
+    g.fillStyle = 'rgba(8, 12, 22, 0.55)';
+    g.beginPath(); g.arc(64, 64, 52, 0, Math.PI * 2); g.fill();
+    g.fillStyle = hurt ? '#ffd9b0' : '#ffffff';
+    g.font = `bold ${String(hp).length > 2 ? 52 : 64}px "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace`;
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(String(hp), 64, 68);
+    tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    decalTex.set(key, tex);
+    return tex;
+  }
+  const nodes = new Map();   // key -> { body, decal, hp }
   function syncNodes() {
     const sb = hack.state;
-    const want = new Set(Object.keys(sb.tags).filter((k) => sb.tags[k].kind === 'node'));
+    const want = new Set(Object.keys(sb.tags).filter((k) => sb.tags[k].defId === 'node' && sb.tags[k].hp > 0));
     for (const [k, n] of nodes) {
       if (want.has(k)) continue;
       scene.remove(n.body); n.body.material.dispose();
-      scene.remove(n.label); n.label.material.dispose();
+      scene.remove(n.decal); n.decal.material.dispose();
       nodes.delete(k);
     }
     for (const k of want) {
       const tag = sb.tags[k];
-      const tile = tilePos(k);
+      const tile = view.map.hexes.get(k);
       if (!tile) continue;
       let n = nodes.get(k);
       if (!n) {
@@ -157,96 +130,24 @@ export function createHackView({ view, hack, H }) {
         body.position.set(tile.x, tile.top, -tile.y);
         body.castShadow = true;
         scene.add(body);
-        const label = makeLabel(String(tag.hp), '#ffffff', null, 0.95);
-        label.position.set(tile.x, tile.top + 0.95, -tile.y);
-        scene.add(label);
-        n = { body, label, hp: tag.hp, text: null };
+        const decal = new THREE.Mesh(decalGeo, new THREE.MeshBasicMaterial({ map: hpTexture(tag.hp, false), transparent: true, depthWrite: false }));
+        decal.position.set(tile.x, tile.top + 0.505, -tile.y);
+        decal.renderOrder = 6;
+        scene.add(decal);
+        n = { body, decal, hp: null };
         nodes.set(k, n);
       }
       const hurt = tag.hp <= tag.maxHp / 2;
       n.body.material.color.set(hurt ? colors.nodeHurt : colors.node);
       n.body.material.emissive.set(hurt ? colors.nodeHurt : colors.node);
+      if (n.hp !== tag.hp) {
+        n.hp = tag.hp;
+        n.decal.material.map = hpTexture(tag.hp, hurt);
+        n.decal.material.needsUpdate = true;
+      }
       // The emoji sprite the arena drew for this tag is redundant under a body.
       const sprite = view.tagSprites?.get(k);
       if (sprite) sprite.visible = false;
-    }
-  }
-
-  // ----- lock marks + preview numbers ---------------------------------------
-  let marks = [];
-  let previewLabels = [];
-  let lastSig = null;
-  function clearMarks() {
-    for (const m of marks) { scene.remove(m); m.material.dispose(); }
-    marks = [];
-    for (const l of previewLabels) { scene.remove(l); l.material.dispose(); }
-    previewLabels = [];
-  }
-  function fill(k, color, opacity, lift = 0) {
-    const tile = tilePos(k); if (!tile) return;
-    const m = new THREE.Mesh(view.aimFillGeo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }));
-    m.position.set(tile.x, tile.top + 0.05 + lift, -tile.y);
-    m.renderOrder = 4;
-    scene.add(m); marks.push(m);
-  }
-  function ring(k, color) {
-    const tile = tilePos(k); if (!tile) return;
-    const m = new THREE.Mesh(view.hlRingGeo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthWrite: false, side: THREE.DoubleSide }));
-    m.position.set(tile.x, tile.top + 0.06, -tile.y);
-    m.renderOrder = 5;
-    scene.add(m); marks.push(m);
-  }
-  function hoverKey() {
-    const sb = hack.state;
-    if (sb.over || sb.phase !== 'player' || !sb.selAb || !sb.aimMap) return null;
-    const k = view.hoverKey;
-    return k && sb.aimMap[k] !== undefined ? k : null;
-  }
-  function signature() {
-    const sb = hack.state;
-    const locks = sb.units.map((u) => (u.lock ? `${u.uid}:${u.lock.abId}@${u.lock.anchor}` : '')).join(';');
-    return `${locks}|${hoverKey() ?? ''}|${sb.selAb ?? ''}|${sb.activeUid ?? ''}|${sb.round}|${sb.over ?? ''}|${Object.keys(sb.tags).length}|${sb.progress}`;
-  }
-  function syncMarks() {
-    const sig = signature();
-    if (sig === lastSig) return;
-    lastSig = sig;
-    clearMarks();
-    const sb = hack.state;
-    if (sb.over) { syncNodeLabels(new Map()); return; }
-    // Standing locks, each in its unit's colour.
-    for (const u of sb.units) {
-      if (u.hp <= 0 || !u.lock) continue;
-      const color = colors.locks[u.idx % colors.locks.length];
-      const active = u.uid === sb.activeUid;
-      for (const t of u.lock.tiles) fill(t, color, active ? 0.34 : 0.22, 0.01 + u.idx * 0.004);
-      ring(u.lock.anchor, color);
-    }
-    // The numbers: what every covered node / mine would take.
-    const totals = hack.previewTotals(hoverKey());
-    syncNodeLabels(totals);
-    for (const [k, e] of totals) {
-      if (e.kind !== 'mine') continue;
-      const tile = tilePos(k); if (!tile) continue;
-      const l = makeLabel(`-${H.minePenalty * e.n}`, colors.mineText, e.n > 1 ? `x${e.n}` : null, 1.15);
-      l.position.set(tile.x, tile.top + 0.9, -tile.y);
-      scene.add(l); previewLabels.push(l);
-    }
-  }
-  // A node's label shows its hp - or, while targeted, the damage it would take.
-  function syncNodeLabels(totals) {
-    for (const [k, n] of nodes) {
-      const tag = hack.state.tags[k];
-      const e = totals.get(k);
-      let text, color, sub = null;
-      if (e && e.total > 0) { text = `-${e.total}`; color = colors.previewText; sub = e.mult > 1 ? `x${e.mult}` : null; }
-      else { text = String(tag ? tag.hp : n.hp); color = '#ffffff'; }
-      const key = text + '|' + color + '|' + (sub ?? '');
-      if (n.text === key) continue;
-      n.text = key;
-      n.label.material.map = labelTexture(text, color, sub);
-      n.label.material.needsUpdate = true;
-      n.label.scale.set(sub ? 1.4 : 0.95, sub ? 0.7 : 0.475, 1);
     }
   }
 
@@ -254,15 +155,18 @@ export function createHackView({ view, hack, H }) {
   function refresh() {
     syncNodes();
     refreshBar();
-    lastSig = null;
-    syncMarks();
   }
   let raf = 0;
   (function tick() {
     raf = requestAnimationFrame(tick);
     if (!view.scene || view.scene !== scene) return;
-    // Hovering changes the preview without any engine change: watch it here.
-    syncMarks();
+    // The hp decals turn to face the camera's bearing, so the number reads
+    // upright from wherever the arena has been rotated to.
+    if (view.camera) {
+      for (const n of nodes.values()) {
+        n.decal.rotation.y = Math.atan2(view.camera.position.x - n.decal.position.x, view.camera.position.z - n.decal.position.z);
+      }
+    }
     // A sprite the arena re-created (a tag re-synced) would pop back: keep node
     // tiles' emoji hidden.
     for (const k of nodes.keys()) { const s = view.tagSprites?.get(k); if (s && s.visible) s.visible = false; }
@@ -270,12 +174,12 @@ export function createHackView({ view, hack, H }) {
 
   function dispose() {
     cancelAnimationFrame(raf);
-    clearMarks();
-    for (const n of nodes.values()) { scene.remove(n.body); n.body.material.dispose(); scene.remove(n.label); n.label.material.dispose(); }
+    for (const n of nodes.values()) { scene.remove(n.body); n.body.material.dispose(); scene.remove(n.decal); n.decal.material.dispose(); }
     nodes.clear();
     nodeGeo.dispose();
-    for (const t of texCache.values()) t.dispose();
-    texCache.clear();
+    decalGeo.dispose();
+    for (const t of decalTex.values()) t.dispose();
+    decalTex.clear();
     bar.remove();
     style.remove();
     document.body.classList.remove('hack-mode');
