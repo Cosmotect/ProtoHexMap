@@ -4,7 +4,7 @@ import { createRng } from './rng.js';
 import { generateMap, setType, setBiome } from './map.js';
 import { buildScenarioMap, cloneEnemies } from './scenarios/scenario.js';
 import { hexKey, neighbors, hexesInRange, hexDistance } from './hex.js';
-import { simulateBattle, makeEnemies, makeRegulars, renameDuplicates, makeEnemyOfType } from './battle.js';
+import { simulateBattle, makeArena, makeRegulars, renameDuplicates } from './battle.js';
 import { recipeFromCode } from './local/mapcode.js';
 import { availableUpgrades, unlockUpgrade, upgradeCount } from './upgrades.js';
 import { EVENTS } from './events.js';
@@ -18,7 +18,7 @@ const FLAVOUR_POOL = { battle: 4, combatIntro: 6, treasure: 4, shop: 13, acolyte
 export class Game {
   // `scenario` switches the run into SCENARIO MODE (src/scenarios/): the map is
   // built from the scenario's data instead of the generator, and every roll the
-  // script covers (forced fights, event picks, enemy groups) is read from it.
+  // script covers (forced fights, event picks, enemy line-ups) is read from it.
   // `layer` is which layer of the worldflake the run happens on (config.layers;
   // main.js passes the start screen's selection - for now it only recolours the
   // biomes, see map.js biomeColorFor).
@@ -31,11 +31,17 @@ export class Game {
     this.rng = createRng(seed);
     this.map = scenario ? buildScenarioMap(config, scenario) : generateMap(config, this.rng, this.layer);
     this.map.layer = this.layer;
-    // Enemy groups are rolled up front for every battle tile, so the danger of a revealed
-    // battle can be shown before the party enters it. (Scenario battles come authored.)
+    // Every battle tile (and the Seed) rolls its ARENA up front: one handcrafted
+    // map out of the tile's cell of config.battleMaps (ring band x layer), whose
+    // pinned enemies are the fight's enemies - so the danger of a revealed battle,
+    // the tile's hover and the fight itself all read the same map. (Scenario
+    // battles come authored: enemies from the script, an arena only if the
+    // script gives one - otherwise flat ground.)
     for (const h of this.map.hexes.values()) {
       if ((h.encounter === 'battle' || h.encounter === 'stasisSeed') && !h.enemies) {
-        h.enemies = makeEnemies(this.rng, config.battle, h.ring, h.isSeed ? 'boss' : 'regular', this.map.layer);
+        const arena = makeArena(this.rng, config, h.ring, h.isSeed ? 'boss' : 'regular', this.map.layer);
+        h.recipe = arena.recipe;
+        h.enemies = arena.enemies;
       }
     }
 
@@ -103,12 +109,14 @@ export class Game {
       if (h.encounter === 'shop' && !h.shop) h.shop = this.rollShopStock();
     }
 
-    // Handcrafted arenas (config.craftedMaps): some battle and shop tiles trade
-    // the random arena for an authored map code. Rolled on a rng of its OWN,
-    // after every other generation roll, so tuning the rates never reshuffles
-    // the map, the enemies or the shop stock of an existing seed. Scenario maps
-    // are authored already and skip this entirely.
-    if (!scenario) this.assignCraftedMaps();
+    // Shop arenas (config.craftedMaps.shop): some shop tiles get an authored map
+    // code, stored for a shop flow that does not open a local map yet. Rolled on
+    // a rng of its OWN, after every other generation roll, so tuning the rate
+    // never reshuffles the map, the fights or the shop stock of an existing
+    // seed. Scenario maps are authored already and skip this entirely. (Battle
+    // tiles do not roll here any more: since 2026-09-16 every fight takes its
+    // map from config.battleMaps in the loop above.)
+    if (!scenario) this.assignShopMaps();
 
     this.map.start.visited = true;
     this.reveal(this.map.start.q, this.map.start.r, run.revealStartRadius, true);
@@ -118,34 +126,25 @@ export class Game {
     else this.addLog('log.newRun', { seed, n: this.map.colonies.length, steps: pathLength });
   }
 
-  // ----- handcrafted arenas -------------------------------------------
-  // Rolls which battle / shop tiles use an authored map code instead of the
-  // random arena generator (config.craftedMaps: per-kind rate + map list).
-  // A crafted battle brings its own garrison - the authored enemies REPLACE
-  // the group rolled at generation. A map code has no say over its tile's
-  // chevrons (2026-09-10 - the old `danger:` header line is gone): those are
-  // read purely from the tile's ring band, see dangerRank() below. A code
-  // that fails to parse is skipped with a console warning: a typo in a
-  // config map must never take the run down with it.
-  assignCraftedMaps() {
-    const crafted = this.config.craftedMaps ?? {};
+  // ----- shop arenas ---------------------------------------------------
+  // Rolls which shop tiles carry an authored map code (config.craftedMaps.shop:
+  // rate + map list). Stored only - the shop flow does not open a local map
+  // yet. A code that fails to parse is skipped with a console warning: a typo
+  // in a config map must never take the run down with it. (Until 2026-09-16
+  // this also rolled which BATTLE tiles used a crafted map instead of the
+  // random arena; every battle is a crafted map now, see the constructor.)
+  assignShopMaps() {
+    const set = this.config.craftedMaps?.shop;
+    if (!set?.maps?.length) return;
     const rng = createRng((this.seed ^ 0x5eedca) >>> 0);
     for (const h of this.map.hexes.values()) {
-      const set = h.encounter === 'battle' ? crafted.combat
-        : h.encounter === 'shop' ? crafted.shop : null;
-      if (!set?.maps?.length || !rng.chance(set.rate ?? 0)) continue;
+      if (h.encounter !== 'shop' || !rng.chance(set.rate ?? 0)) continue;
       const recipe = recipeFromCode(rng.pick(set.maps), this.config);
       if (recipe.errors.length) {
         console.warn(`crafted map "${recipe.id}" skipped:`, recipe.errors.join('; '));
         continue;
       }
       h.recipe = recipe;
-      if (h.encounter === 'battle') {
-        if (recipe.enemyTypeIds.length) {
-          const units = recipe.enemyTypeIds.map((id) => makeEnemyOfType(this.config.battle, id)).filter(Boolean);
-          if (units.length === recipe.enemyTypeIds.length) h.enemies = renameDuplicates(units);
-        }
-      }
     }
   }
 
@@ -411,12 +410,15 @@ export class Game {
   spawnColony(c) {
     c.active = true;
     c.hex.encounter = 'stasisColony';
-    // Scripted Colonies (tutorial) bring an authored garrison; the rest roll one.
+    // Scripted Colonies (tutorial) bring an authored garrison; the rest roll
+    // a Colony arena (config.battleMaps.colonies), enemies included.
     if (c.script?.enemies) {
       c.hex.enemies = cloneEnemies(c.script.enemies, this.config.battle);
       if (c.script.title) c.hex.enemies.title = c.script.title;
     } else {
-      c.hex.enemies = makeEnemies(this.rng, this.config.battle, c.hex.ring, 'colony', this.map.layer);
+      const arena = makeArena(this.rng, this.config, c.hex.ring, 'colony', this.map.layer);
+      c.hex.recipe = arena.recipe;
+      c.hex.enemies = arena.enemies;
     }
     this.addLog('log.colonySpawn', {
       where: { hex: { type: c.hex.type, biome: c.hex.biome, q: c.hex.q, r: c.hex.r } },
@@ -450,6 +452,7 @@ export class Game {
       const type = h.encounter;
       h.encounter = null;
       h.enemies = null;
+      h.recipe = null;
       if (h.revealed) this.addLog('log.witherConsumed', { label: { key: `visual.${type}.label` } });
       this.emit('encounter', { hex: h, type, forced: false, withered: true });
     }
@@ -738,14 +741,21 @@ export class Game {
   // ----- battle ---------------------------------------------------------
   // A fight happens in three steps, so the INTERACTIVE combat on the local map
   // (src/local/battle/) can slot in between them:
-  //   prepareCombat()  rolls the enemies, applies the Stasis debuffs, logs the
+  //   prepareCombat()  takes the tile's fight (map + enemies), applies the Stasis debuffs, logs the
   //                    opening - and returns a context describing the fight
   //   ...the fight...  either simulateBattle (the old auto-resolve) or the
   //                    combatDelegate set by main.js (the playable arena)
   //   finishCombat()   lifts the debuffs, applies deaths, rewards, dialogs, end
   prepareCombat(hex, forced, opts = {}) {
     const s = this.state;
-    const enemies = hex.enemies ?? makeEnemies(this.rng, this.config.battle, hex.ring, hex.isSeed ? 'boss' : hex.isColony ? 'colony' : 'regular', this.map.layer);
+    // A tile that never rolled its fight (a battle conjured onto a bare tile by
+    // a test or an event) rolls it now, arena and all, the same way generation does.
+    let enemies = hex.enemies;
+    if (!enemies) {
+      const arena = makeArena(this.rng, this.config, hex.ring, hex.isSeed ? 'boss' : hex.isColony ? 'colony' : 'regular', this.map.layer);
+      hex.recipe = hex.recipe ?? arena.recipe;
+      enemies = arena.enemies;
+    }
     hex.enemies = null;
 
     // Stasis debuffs: temporarily weaken the party and/or reinforce the enemy for

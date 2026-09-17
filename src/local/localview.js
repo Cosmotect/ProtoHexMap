@@ -9,7 +9,7 @@
 // =====================================================================
 import * as THREE from 'three';
 import { MapControls } from 'three/addons/controls/MapControls.js';
-import { generateLocalMap, pickRandomTiles, pickClusteredTiles, applyElevationWave, neutralElevation } from './localmap.js';
+import { generateLocalMap, pickRandomTiles, pickClusteredTiles, neutralElevation } from './localmap.js';
 import { hexKey, hexesInRange, hexDistance, axialToPlane } from '../hex.js';
 import { COMBAT_CONFIG } from '../config/localmap.js';
 import { tagDefById } from '../config/entities.js';
@@ -214,7 +214,7 @@ export class LocalMapView {
   //   party     = living player units [{ name, hp }]
   //   enemies   = enemy units [{ name, hp }]
   //   seed      = number, so the same fight always lays out the same arena
-  //   recipe    = future handcrafted arena description (see localmap.js)
+  //   recipe    = the handcrafted arena (src/local/mapcode.js recipe; null = flat ground)
   // layout: 'battle' (default) scatters both sides on random tiles;
   //         'camp' seats the party around a campfire (the start screen).
   // neighbors: the 6 surrounding WORLD tiles as [{ dx, dy, color, dh }] - world-plane
@@ -244,14 +244,14 @@ export class LocalMapView {
     // camera facing the same way, instead of always the same fixed side.
     // Unused for 'camp' (the campfire keeps its own composed azimuth).
     this.worldAzimuth = worldAzimuth;
+    // The arena IS its recipe (src/local/mapcode.js): every fight plays on a
+    // handcrafted map, whose tiles, heights, walls, holes and braziers are laid
+    // over the bare grid here. There is no random terrain any more (the
+    // elevation wave went on 2026-09-16) - a recipe-less arena, such as the
+    // campfire start screen or a scenario fight that authors none, is flat
+    // ground at the neutral step.
     this.map = generateLocalMap(this.config, recipe);
     this.recipe = recipe ?? null;
-    // Battle arenas get rolling tile heights (high ground matters in combat);
-    // the campfire start screen stays flat and calm.
-    // A recipe that authors its own elevations IS the arena's height map: the
-    // random wave stays off so the designed terrain comes through untouched.
-    const recipeHasHeights = !!recipe?.tiles && Object.values(recipe.tiles).some((t) => t.elevation != null);
-    if (layout !== 'camp' && !recipeHasHeights) applyElevationWave(this.map, () => rng.random(), COMBAT_CONFIG.combat.elevationLevels);
     this.scene = new THREE.Scene();
     // The local map's own background settings, separate from the world map's.
     const bg = this.config.localBackground;

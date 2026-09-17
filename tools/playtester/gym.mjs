@@ -1,20 +1,21 @@
 // =====================================================================
 //  VIRTUAL PLAYTESTER - the combat gym (CLI).
 //
-//  Sweeps the bestiary: every enemy group x several party progression points
-//  x N seeds, each fight played headlessly by a bot on a live arena. One JSON
+//  Sweeps the handcrafted combat maps (each map is a fight: its arena and its
+//  pinned enemies) x several party progression points x N seeds, each fight
+//  played headlessly by a bot on the map's real arena. One JSON
 //  line per fight goes to the output file; tools/playtester/report.mjs turns
 //  the log into the difficulty-ladder report.
 //
 //  Usage (from the project root):
 //    node tools/playtester/gym.mjs                         # defaults below
 //    node tools/playtester/gym.mjs --seeds 50 --bot random
-//    node tools/playtester/gym.mjs --groups huskTrio,warband --upgrades 0,8
+//    node tools/playtester/gym.mjs --maps tick-nest,war-camp --upgrades 0,8
 //    node tools/playtester/gym.mjs --patch balance.json    # config experiment
 //
 //  Flags:
-//    --groups   comma list of enemyGroups ids, or "all" (default all)
-//    --seeds    fights per (group x progression) cell         (default 25)
+//    --maps     comma list of crafted combat map ids, or "all" (default all)
+//    --seeds    fights per (map x progression) cell           (default 25)
 //    --upgrades comma list of party upgrade counts            (default 0,4,8,12)
 //    --party    comma list of roster names                    (default first 3)
 //    --bot      greedy | random                               (default greedy)
@@ -28,6 +29,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../../src/config.js';
+import { craftedMapIndex } from '../../src/battle.js';
 import { createRng } from '../../src/rng.js';
 import { runFight, buildParty } from './headless.mjs';
 import { BOTS } from './bots.mjs';
@@ -70,9 +72,9 @@ const partyNames = args.party
   ? String(args.party).split(',')
   : (CONFIG.party.roster ?? []).slice(0, CONFIG.party.size ?? 3).map((r) => r.name);
 const patch = args.patch ? applyPatch(CONFIG, String(args.patch)) : null;
-const groupIds = !args.groups || args.groups === 'all'
-  ? Object.keys(CONFIG.battle.enemyGroups ?? {})
-  : String(args.groups).split(',');
+const mapIds = !args.maps || args.maps === 'all'
+  ? Object.keys(craftedMapIndex(CONFIG))
+  : String(args.maps).split(',');
 const outFile = String(args.out ?? path.join(path.dirname(new URL(import.meta.url).pathname), 'runs.jsonl'));
 
 // The header line makes every log self-describing and every run replayable.
@@ -83,18 +85,18 @@ const header = {
   party: partyNames,
   seeds: { from: seed0, count: seeds },
   upgradePoints,
-  groups: groupIds,
+  maps: mapIds,
   forced: !!args.forced,
   patch,
 };
 const lines = [JSON.stringify(header)];
 
-const total = groupIds.length * upgradePoints.length * seeds;
+const total = mapIds.length * upgradePoints.length * seeds;
 let done = 0, failures = 0;
 const t0 = performance.now();
-console.log(`gym: ${groupIds.length} groups x ${upgradePoints.length} progression points x ${seeds} seeds = ${total} fights (${botName} bot)`);
+console.log(`gym: ${mapIds.length} maps x ${upgradePoints.length} progression points x ${seeds} seeds = ${total} fights (${botName} bot)`);
 
-for (const groupId of groupIds) {
+for (const mapId of mapIds) {
   for (const upgrades of upgradePoints) {
     for (let s = 0; s < seeds; s++) {
       const seed = seed0 + s;
@@ -102,13 +104,13 @@ for (const groupId of groupIds) {
         // The party is rebuilt per fight (fresh HP; seeded upgrade spread that
         // varies with the seed, so a cell samples many builds, not one).
         const party = buildParty(CONFIG, partyNames, upgrades, createRng((seed * 31 + upgrades) >>> 0));
-        const rec = runFight({ config: CONFIG, groupId, party, seed, bot, forced: !!args.forced });
+        const rec = runFight({ config: CONFIG, mapId, party, seed, bot, forced: !!args.forced });
         rec.kind = 'fight';
         rec.upgrades = upgrades;
         lines.push(JSON.stringify(rec));
       } catch (e) {
         failures += 1;
-        lines.push(JSON.stringify({ kind: 'error', groupId, upgrades, seed, error: String(e && e.message || e) }));
+        lines.push(JSON.stringify({ kind: 'error', mapId, upgrades, seed, error: String(e && e.message || e) }));
       }
       done += 1;
       if (done % 200 === 0) {

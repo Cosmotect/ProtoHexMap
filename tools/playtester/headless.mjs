@@ -8,21 +8,23 @@
 //  battle state shows a player. Nothing here reaches into private rules, so
 //  the statistics are about the game people actually play.
 //
-//  Everything is seeded and reproducible: the same (seed, group, party spec,
+//  Everything is seeded and reproducible: the same (seed, map, party spec,
 //  bot) always replays the same fight. The arena mirrors a live one: the same
-//  local map generator, the same elevation wave, the same "random distinct
-//  tiles" unit placement the arena view uses.
+//  handcrafted map (src/local/mapcode.js recipe - since 2026-09-16 every
+//  fight IS a map; the random generator and its elevation wave are gone), the
+//  map's own pinned enemy tiles, and the same "random distinct tiles" party
+//  placement the arena view uses for a forced fight.
 //
 //  Two entry points:
-//    runFight()  the gym's standalone fight (phase 1): fresh group, record out
-//    runArena()  the shared core: play prepared defs on a fresh arena - the
+//    runFight()  the gym's standalone fight (phase 1): one map id, record out
+//    runArena()  the shared core: play prepared defs on a recipe's arena - the
 //                world runner (phase 2) feeds it every fight of a full run
 // =====================================================================
 import { createRng } from '../../src/rng.js';
 import { createBattle } from '../../src/local/battle/engine.js';
-import { COMBAT_CONFIG } from '../../src/config/abilities.js';
-import { generateLocalMap, applyElevationWave, pickRandomTiles } from '../../src/local/localmap.js';
-import { makeGroup } from '../../src/battle.js';
+import { COMBAT_CONFIG } from '../../src/config/localmap.js';
+import { generateLocalMap, pickRandomTiles } from '../../src/local/localmap.js';
+import { craftedMapById, enemiesOfRecipe } from '../../src/battle.js';
 import { resolvedAbilitiesFor, availableUpgrades, unlockUpgrade } from '../../src/upgrades.js';
 
 // Builds a live party from the roster: `names` from config.party.roster,
@@ -46,43 +48,58 @@ export function buildParty(config, names, upgradeCount, rng) {
   return party;
 }
 
-// The shared arena core: builds a fresh local map, places the given unit defs
-// (party defs must carry partyIndex + abilityDefs, enemy defs come from the
-// bestiary), plays the whole fight with `bot` in instant mode and returns what
-// happened. Every roll inside the battle comes from a seeded rng, so the same
-// arguments always replay the same fight.
+// The shared arena core: builds the recipe's local map, places the given unit
+// defs (party defs must carry partyIndex + abilityDefs, enemy defs come from
+// the bestiary; the recipe's pinned tiles seat the enemies positionally, like
+// LocalMapView.placeUnits), plays the whole fight with `bot` in instant mode
+// and returns what happened. Every roll inside the battle comes from a seeded
+// rng, so the same arguments always replay the same fight. No recipe = a flat
+// arena at the default radius (what a scenario fight without one gets).
 export function runArena({ config, partyDefs, enemyDefs, seed, bot, forced = false,
-                           partyDamageMod = 0, noFlee = false }) {
+                           partyDamageMod = 0, noFlee = false, recipe = null }) {
   const rng = createRng(seed);
   const botRng = createRng(seed ^ 0x9e3779b9);   // the bot's own dice, replayable separately
 
-  // The arena, exactly as the live game builds one: local grid + elevation
-  // wave snapped to levels around the neutral middle step.
-  const map = generateLocalMap(config);
-  applyElevationWave(map, rng.random, COMBAT_CONFIG.combat.elevationLevels);
+  // The arena, exactly as the live game builds one: the bare grid with the
+  // handcrafted recipe laid over it (heights, walls, ether holes, braziers).
+  const map = generateLocalMap(config, recipe);
   const heights = {};
-  for (const tile of map.hexes.values()) heights[tile.key] = tile.elevation;
+  const wallKeys = [], etherKeys = [];
+  for (const tile of map.hexes.values()) {
+    heights[tile.key] = tile.elevation;
+    if (tile.type === 'wall') wallKeys.push(tile.key);
+    if (tile.type === 'ether') etherKeys.push(tile.key);
+  }
+  const startTags = [];
+  for (const tile of map.hexes.values()) for (const id of tile.tags ?? []) startTags.push({ k: tile.key, id });
 
-  // Placement mirrors localview.placeUnits (random distinct tiles), with one
-  // guard the live game does NOT have yet: everyone spawns inside the same
-  // walkable component of the height graph. Day-one gym finding: the wave can
-  // produce 1-tile pillars and sealed plateaus (every step off them is a 2+
-  // level cliff no ground unit may take), and a fight with someone spawned
-  // there can never end - the engine has no flee and no reachability check.
-  // The harness filters those spawns so the statistics measure the fights, not
-  // the soft-locks; the game itself needs the same guard in placeUnits.
+  // Placement mirrors localview.placeUnits: the recipe's enemy tiles are taken
+  // positionally, and whoever is left (the party; extra enemies such as the
+  // Stasis "extra enemies" debuff's) lands on random distinct GROUND tiles -
+  // inside the largest walkable component of the height graph, so a unit is
+  // never dropped somewhere it cannot walk out of (the authored maps are
+  // checked for that, but a guard costs nothing).
   const walkable = largestWalkableComponent(map, heights);
-  const spots = pickRandomTiles(map, partyDefs.length + enemyDefs.length, rng.random,
-    new Set([...map.hexes.keys()].filter((k) => !walkable.has(k))));
+  const used = new Set([...map.hexes.keys()].filter((k) => !walkable.has(k)));
+  const authored = recipe?.spawns?.enemies ?? [];
+  const enemyKeys = enemyDefs.map((_, i) => {
+    const k = authored[i];
+    if (k && map.hexes.has(k) && !used.has(k)) { used.add(k); return k; }
+    return null;
+  });
+  const need = partyDefs.length + enemyKeys.filter((k) => !k).length;
+  const spots = pickRandomTiles(map, need, rng.random, used);
   const partyKeys = spots.slice(0, partyDefs.length);
-  const enemyKeys = spots.slice(partyDefs.length);
+  let f = partyDefs.length;
+  for (let i = 0; i < enemyKeys.length; i++) if (!enemyKeys[i]) enemyKeys[i] = spots[f++];
 
   let outcome = null;
   const t0 = performance.now();
   const battle = createBattle({
     config: COMBAT_CONFIG,
-    radius: config.local.radius,
+    radius: map.radius,
     heights,
+    wallKeys, etherKeys, startTags,
     party: partyDefs,
     enemies: enemyDefs,
     partyKeys, enemyKeys,
@@ -127,14 +144,17 @@ export function runArena({ config, partyDefs, enemyDefs, seed, bot, forced = fal
 
 // One standalone gym fight. Returns a plain record for the JSONL log.
 //   config       the game CONFIG (possibly patched by an experiment)
-//   groupId      an id from config.battle.enemyGroups
+//   mapId        a crafted combat map id (config.craftedMaps.combat.maps); the
+//                map brings its arena AND its enemies
 //   party        live units from buildParty (mutated: wounds land on it)
-//   seed         drives the arena, the placement and every combat roll
+//   seed         drives the placement and every combat roll
 //   bot          { name, actUnit(battle, unit, rng, helpers) } from bots.mjs
 //   forced       true = the fight opens with the enemy AMBUSH phase
-export function runFight({ config, groupId, party, seed, bot, forced = false }) {
-  const enemies = makeGroup(config.battle, groupId);
-  if (!enemies.length) throw new Error(`unknown enemy group: ${groupId}`);
+export function runFight({ config, mapId, party, seed, bot, forced = false }) {
+  const recipe = craftedMapById(config, mapId);
+  if (!recipe) throw new Error(`unknown or broken crafted map: ${mapId}`);
+  const enemies = enemiesOfRecipe(config.battle, recipe);
+  if (!enemies.length) throw new Error(`crafted map ${mapId} pins no enemies`);
 
   const partyDefs = party.map((u, i) => ({
     name: u.name, icon: u.icon, hp: u.hp, maxHp: u.maxHp,
@@ -142,7 +162,7 @@ export function runFight({ config, groupId, party, seed, bot, forced = false }) 
   })).filter((u) => u.alive && u.hp > 0);
   const enemyDefs = enemies.map((e) => ({ ...e }));
 
-  const res = runArena({ config, partyDefs, enemyDefs, seed, bot, forced });
+  const res = runArena({ config, partyDefs, enemyDefs, seed, bot, forced, recipe });
 
   // Wounds carry back like main.js does, so a campaign can chain fights.
   for (const u of res.battle.state.units) {
@@ -155,7 +175,7 @@ export function runFight({ config, groupId, party, seed, bot, forced = false }) 
   const partyLeft = party.reduce((a, u) => a + Math.max(0, u.hp), 0);
   return {
     seed,
-    groupId,
+    mapId,
     title: enemies.title,
     bot: bot.name,
     forced,
@@ -166,19 +186,21 @@ export function runFight({ config, groupId, party, seed, bot, forced = false }) 
     partyHpLeftPct: Math.round((partyLeft / partyMax) * 100),
     enemiesLeft: res.enemiesLeft,
     enemiesFled: res.enemiesFled,
-    enemyPower: enemies.reduce((a, e) => a + (e.power ?? 0), 0),
+    enemyHp: enemies.reduce((a, e) => a + (e.maxHp ?? 0), 0),   // the ladder's sort key (power is gone)
     durMs: res.durMs,
   };
 }
 
-// The largest set of tiles a GROUND unit can walk between (steps of more than
-// 1 height level are walls, same rule as the engine's reach()). Spawning
-// everyone inside one component keeps every fight finishable.
+// The largest set of GROUND tiles a ground unit can walk between (walls and
+// ether are not tiles to stand on; steps of more than 1 height level are
+// walls, same rule as the engine's reach()). Spawning everyone inside one
+// component keeps every fight finishable.
 function largestWalkableComponent(map, heights) {
+  const ground = (k) => { const t = map.hexes.get(k); return !!t && (!t.type || t.type === 'ground'); };
   const seen = new Set();
   let best = new Set();
   for (const start of map.hexes.keys()) {
-    if (seen.has(start)) continue;
+    if (seen.has(start) || !ground(start)) continue;
     const comp = new Set([start]);
     const queue = [start];
     seen.add(start);
@@ -187,7 +209,7 @@ function largestWalkableComponent(map, heights) {
       const [q, r] = k.split(',').map(Number);
       for (const [dq, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, -1], [-1, 1]]) {
         const nk = `${q + dq},${r + dr}`;
-        if (seen.has(nk) || !map.hexes.has(nk)) continue;
+        if (seen.has(nk) || !ground(nk)) continue;
         if (Math.abs((heights[nk] ?? 0) - (heights[k] ?? 0)) > 1) continue;
         seen.add(nk); comp.add(nk); queue.push(nk);
       }

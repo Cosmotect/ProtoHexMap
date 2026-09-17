@@ -151,9 +151,10 @@ export const CONFIG = {
   },
 };
 
-// The "which enemy GROUPS spawn on which world layer" table lives in
-// config/encounters.js (ENCOUNTERS.battleSpawns) so it sits next to the rest
-// of encounter design, but every existing reader still asks for it at
-// CONFIG.battle.spawns (src/battle.js, src/settings.js) - so it is wired in
-// here rather than making those files know about two config sections.
-CONFIG.battle.spawns = ENCOUNTERS.battleSpawns;
+// The "which handcrafted MAPS a fight may roll on which world layer" table
+// lives in config/encounters.js (ENCOUNTERS.battleMaps) so it sits next to
+// the map codes themselves, but its readers ask for it at CONFIG.battle.maps
+// (src/battle.js makeArena, src/settings.js's Battles table) - so it is wired
+// in here rather than making those files know about two config sections.
+// (It was the enemy-GROUP spawn table, battle.spawns, until 2026-09-16.)
+CONFIG.battle.maps = ENCOUNTERS.battleMaps;

@@ -228,56 +228,17 @@ export const ENTITIES = {
       rotChorister: { name: 'Rot Chorister', shape: 'tetrahedron', color: '#6f7d4a', hp: 8, init: 5, speed: 4, flying: false, intellect: 'C', abilities: ['strike'] },
     },
 
-    // =================================================================
-    //  GROUPS - the line-ups that actually spawn. A group is a title plus
-    //  a list of bestiary ids; repeats are fine and get numbered ("Husk 2").
-    //  Nothing is rolled inside a group: what is written here is what walks
-    //  onto the arena, so a fight can be read straight off this table.
-    //  There used to be a "total power" figure noted after each group, back
-    //  when power fed the damage multiplier - removed 2026-09-10 along with
-    //  the stat itself. A group's toughness is its unit count plus whatever
-    //  abilities those bestiary rows carry now.
-    // =================================================================
-    enemyGroups: {
-      // --- regular groups, inner rings ---
-      loneRaider: { title: 'Lone raider', units: ['raider'] },
-      strays: { title: 'Strays', units: ['husk', 'drifter'] },
-      scoutPair: { title: 'Scouting pair', units: ['raider', 'drifter'] },
-      huskTrio: { title: 'Shambling trio', units: ['husk', 'husk', 'husk'] },
-      tickSwarm: { title: 'Tick piper', units: ['rageTick', 'weakTick', 'frailTick', 'rushTick', 'drifter'] },
-
-      // --- regular groups, middle rings ---
-      raidParty: { title: 'Raiding party', units: ['raider', 'raider', 'raider', 'stalker', 'stalker', 'warden'] },
-      stalkerPack: { title: 'Stalker pack', units: ['stalker', 'stalker', 'stalker', 'stalker', 'drifter', 'drifter'] },
-      wardenGuard: { title: 'Warden guard', units: ['brute', 'warden', 'warden', 'raider', 'husk'] },
-      stripedBombardierMatingGrounds: { title: 'Striped Bombardier Mating Grounds', units: ['stripedBombardier', 'stripedBombardier', 'stripedBombardier'] },
-
-
-      // --- regular groups, outer rings ---
-      warband: { title: 'Warband', units: ['ravager', 'ravager', 'brute', 'brute', 'warden', 'warden', 'stalker', 'stalker'] },
-      huskTide: { title: 'Husk tide', units: ['ravager', 'brute', 'husk', 'husk', 'husk', 'husk', 'husk', 'husk', 'stalker', 'stalker', 'stalker', 'stalker'] },
-      ruinHunt: { title: 'Ruin hunt', units: ['ravager', 'ravager', 'ravager', 'stalker', 'stalker', 'stalker', 'warden', 'raider', 'raider'] },
-
-      // --- the Stasis Seed's court: 80-100 on the difficulty scale ---
-      forgeTyrant: { title: 'Forge Tyrant', units: ['forgeTyrant', 'tyrantsShadow', 'forgeHound', 'forgeHound', 'forgeHound'] },
-      wardenOfTheRim: { title: 'Warden of the Rim', units: ['wardenOfTheRim', 'rimSentry', 'rimSentry', 'rimSentry', 'rimSentry'] },
-      huskChoir: { title: 'Husk Choir', units: ['choirHusk', 'choirHusk', 'choirHusk', 'choirHusk', 'choirHusk', 'choirHusk', 'choirHusk', 'choirHusk', 'choirHusk'] },
-      etherLeviathan: { title: 'Ether Leviathan', units: ['etherLeviathan', 'etherSpawn', 'etherSpawn', 'etherSpawn'] },
-      twinStalkers: { title: 'Twin Stalkers', units: ['paleStalker', 'darkStalker', 'stalkerShade', 'stalkerShade', 'stalkerShade', 'stalkerShade'] },
-
-      // --- Stasis Colony garrisons: 50-70, a step above the outer rings ---
-      colonyWarden: { title: 'Colony Warden', units: ['colonyWarden', 'wardenServitor', 'wardenServitor', 'wardenServitor'] },
-      stasisBrood: { title: 'Stasis Brood', units: ['broodHusk', 'broodHusk', 'broodHusk', 'broodHusk', 'broodHusk', 'broodHusk'] },
-      twinSentinels: { title: 'Twin Sentinels', units: ['paleSentinel', 'darkSentinel', 'stasisMote', 'stasisMote'] },
-      colonyAnchor: { title: 'Colony Anchor', units: ['colonyAnchor', 'anchorTether', 'anchorTether'] },
-      rotChorus: { title: 'Rot Chorus', units: ['rotChorister', 'rotChorister', 'rotChorister', 'rotChorister', 'rotChorister', 'rotChorister', 'rotChorister'] },
-    },
+    // (The GROUPS table - `enemyGroups`, a title plus a line-up of bestiary
+    // ids per fight - lived here until 2026-09-16. A fight's line-up is now
+    // pinned tile by tile in its handcrafted map code: config/encounters.js
+    // craftedMaps.combat.maps, `!Enemy` lines. See battleMaps there for
+    // which map each kind of fight may roll.)
 
     // How far out each RING band reaches (distance from the map centre). A ring
-    // past the last band's maxRing keeps using the last one. WHICH groups each
-    // band rolls, per layer, is `battleSpawns` in config/encounters.js (wired
-    // in here as CONFIG.battle.spawns by config.js - moved there 2026-09-10 so
-    // it sits with the rest of encounter design instead of the party/battle-sim
+    // past the last band's maxRing keeps using the last one. WHICH handcrafted
+    // maps each band rolls, per layer, is `battleMaps` in config/encounters.js
+    // (wired in here as CONFIG.battle.maps by config.js - it sits with the map
+    // codes and the rest of encounter design instead of the party/battle-sim
     // numbers this file holds).
     enemies: {
       bands: {

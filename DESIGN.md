@@ -18,11 +18,13 @@ through dialogs.
 > On a 0-100 combat difficulty scale: regular encounters occupy 0-60, Stasis Colonies
 > 50-70, bosses 80-100.
 
-The three enemy pools live in `src/config/entities.js`: `battle.enemies.bands` (regular
-groups, by ring), `battle.colonies` (Stasis Colonies), `battle.bosses` (the Stasis
-Seed). Power is an ENEMY-ONLY number; the party grows through ability upgrade trees
-(see "Ability upgrades" below), so all old party-power yardsticks are void and the
-balance must be re-measured against interactive play.
+Since 2026-09-16 a fight IS a handcrafted map (its arena and its pinned enemies
+together), and the five pools are the rows of `battleMaps` in
+`src/config/encounters.js`: `inner` / `middle` / `outer` (regular fights, by the
+tile's ring band, `battle.enemies.bands`), `colonies` and `seed`, one column per
+layer. There is no power number at all any more; the party grows through ability
+upgrade trees (see "Ability upgrades" below), so all old party-power yardsticks are
+void and the balance must be re-measured against interactive play.
 
 ## Links
 
@@ -226,7 +228,10 @@ balance must be re-measured against interactive play.
 
 * **The arena**: a hex grid of `local.radius` (6) rings in the OPPOSITE orientation to
   the world map, so one world tile visually breaks into a sub-grid (a handcrafted
-  map's own radius wins - see "Handcrafted local maps" below). Tile colours are
+  map's own radius wins - see "Handcrafted local maps" below). **Every fight plays
+  on a handcrafted map** (since 2026-09-16): the random arena generator is gone,
+  and with it the random elevation wave described further down this bullet, which
+  is kept only as the record of how the arena used to be shaped. Tile colours are
   shades of the entered world tile with a strong ELEVATION VALUE RAMP on top
   (`local.tileShade`): each level away from the neutral middle brightens or darkens
   the tile by `perLevel` (0.17), so all five height steps read at a glance, and the
@@ -237,16 +242,16 @@ balance must be re-measured against interactive play.
   were 0.5 / 0.6 and drowned the terrain. Arena tiles have a
   BASELINE height from the entered world tile's TYPE - max(`local.tileHeight`, type's
   visual height x `local.typeHeightScale` (16)) - so a hill arena starts taller than a
-  plains one; battle arenas then add rolling heights on top: `applyElevationWave`
-  (three seeded sine waves) snaps each tile to a level 0..`elevationLevels` (4), drawn
-  at `local.elevationStep` (0.35) world units per level (the campfire layout stays
-  flat, baseline only). The levels are CENTRED on `local.elevationMid` (2): that
+  plains one; the map's recipe then sets each tile's level 0..`elevationLevels`
+  (4), drawn at `local.elevationStep` (0.35) world units per level (a recipe-less
+  arena - the campfire, a scenario fight that authors none - stays flat at the
+  neutral step). The levels are CENTRED on `local.elevationMid` (2): that
   middle step is the untouched ground, flush with the surrounding world tiles, and
-  the arena has two steps up and two steps down around it. The wave's mix over an
-  arena is about 43% middle, 25% each one step up / down, 3.5% each two steps up /
-  down, so the outer steps read as rare peaks and pits; its feature size (`FREQ` in
-  localmap.js) is x2 the original, which leaves ~36% of tile borders flat and ~14% a
-  2-level cliff. THREE rings of surrounding world tiles stand around the arena
+  the arena has two steps up and two steps down around it. (Until 2026-09-16 a
+  battle arena without a recipe got `applyElevationWave` instead - three seeded
+  sine waves snapped to levels, about 43% middle / 25% one step up or down / 3.5%
+  two steps, `FREQ` tuned so ~14% of borders were 2-level cliffs. Removed with the
+  decision to ship only authored maps.) THREE rings of surrounding world tiles stand around the arena
   as giant uninteractive backdrop hexes: bottoms on the arena floor, tops at the SAME
   type-baseline formula - so a mountain neighbour towers over a hill arena and a
   same-type neighbour sits flush with the arena's wave-less level; hidden tiles use
@@ -450,8 +455,9 @@ balance must be re-measured against interactive play.
     rewards, dialogs, win / lose states). With no delegate, `resolveBattle` falls back
     to the legacy auto-simulation (`battle.js`: damage roll 2-8 triangular x
     `powerBase` (1.15) ^ (power gap / 3), low-HP desperation bonus, enemies prefer
-    healthier targets) - kept for headless tests. `battle.js` also still generates
-    every enemy group.
+    healthier targets) - kept for headless tests. `battle.js` is also where a
+    fight is BUILT: `makeArena` rolls the tile's handcrafted map out of
+    `config.battle.maps` and turns its pinned enemies into live units.
   * **Debug handles**: `window.game`, `__renderer`, `__cinematic`, `__localView`,
     `__startScreen`, `__battle` (with `debugResolve(won)` to decide a fight
     instantly).
@@ -460,41 +466,75 @@ balance must be re-measured against interactive play.
 
 ## Handcrafted local maps - map codes (src/local/mapcode.js)
 
-Any encounter that opens a local map can trade the random generator for an
-AUTHORED arena. The authoring format is the MAP CODE: plain text, one line per
-statement, built to be scanned by human eyes and pasted around.
+**Every fight plays on a handcrafted map** (owner's decision, 2026-09-16). There is
+no random arena generator and no separate enemy-group table: a combat map is the
+whole fight - its terrain AND its enemies. The authoring format is the MAP CODE:
+plain text, one line per statement, built to be scanned by human eyes and pasted
+around.
 
-* **The format**: `id:` (required), `radius:` (optional - the arena takes the
-  code's size, any 1..12 rings), then tile lines
-  `q,r: <type> [elevation] [tags...] [!Enemy Name]`. (A `danger:` header line
-  existed until 2026-09-10; it's gone now - a battle tile's chevrons come
-  purely from its ring band, see `config.battle.danger.ringBands`.) Only
-  tiles that differ from plain ground at the neutral elevation are listed. Types:
-  `ground`; `wall` (a rock column - nobody walks or flies through, a shove
+* **The format**: `id:` (required - what the spawn table lists), `title:`
+  (optional - the fight's display name in the battle log, the Local Map Info panel
+  and the playtester report; defaults to the id with dashes as spaces,
+  capitalised), `radius:` (optional - the arena takes the code's size, any 1..12
+  rings), then tile lines `q,r: <type> [elevation] [tags...] [!Enemy Name]`. (A
+  `danger:` header line existed until 2026-09-10; it's gone - a battle tile's
+  chevrons come purely from its ring band, see `config.battle.danger.ringBands`.)
+  Only tiles that differ from plain ground at the neutral elevation are listed.
+  Types: `ground`; `wall` (a rock column - nobody walks or flies through, a shove
   against it crashes like the arena rim); `ether` (a hole - nobody walks in, a
   shove over it kills, exactly like a lethal void edge). Tags are tile tag ids
-  from `COMBAT_TAGS` (today: `fire`) and come up PERMANENT - an authored
-  brazier is terrain, it does not gutter out like a cast's fire. `!` pins one
-  bestiary enemy (by id or display name) to the tile. `#` comments. The parser
-  (`parseMapCode` / `buildRecipe` / `recipeFromCode`) validates everything
-  against the config and reports readable per-line errors; a broken code is
-  skipped with a console warning, never crashes a run.
-* **Storage + rates** (`config/encounters.js craftedMaps`): per encounter kind
-  - `combat` and `shop` for now - a `rate` (chance a placed encounter uses a
-  crafted map instead of a generated arena) and a `maps` list of code strings.
-  Three sample maps ship: the-causeway (radius 4), ember-hollow (radius 6),
-  wayside-hollow (shop, radius 3).
-* **Assignment** (`Game.assignCraftedMaps`): rolled at world generation on a
-  rng of its OWN (seed ^ 0x5eedca), after every other roll - tuning the rates
-  never reshuffles an existing seed's map, enemies or shop stock. A crafted
-  battle's authored enemies REPLACE the rolled group (so the tile's hover, the
-  fight and the simulation all agree); its chevrons always come from the
-  tile's ring band (`dangerRank`), independent of the recipe. Shops only
-  STORE their recipe for now - the shop flow does not open a local map yet.
-  Scenario maps skip
-  crafted assignment entirely; the Virtual Playtester's world runs keep the
-  crafted ENEMIES but fight them on a generated arena (the headless harness
-  does not read recipes yet - a known divergence).
+  from `COMBAT_TAGS` (today: `fire`, `nerveAgentCloud`) and come up PERMANENT - an
+  authored brazier is terrain, it does not gutter out like a cast's fire. `!` pins
+  one bestiary enemy (by id or display name) to the tile; the pinned enemies ARE
+  the fight's enemies. `#` comments. The parser (`parseMapCode` / `buildRecipe` /
+  `recipeFromCode`) validates everything against the config and reports readable
+  per-line errors; a broken code is skipped with a console warning, never crashes
+  a run.
+* **Authoring rules** (the engine's, not conventions): a ground unit cannot step
+  across a height gap of more than ONE level (`reach()` in the engine), so a
+  plateau at 4 needs a ramp of 3s and a pit at 0 needs a rim of 1s, or nothing
+  walks in or out. Every pinned ground enemy must be able to walk to where the
+  party can stand, and every free ground tile should be walkable to, because a
+  fatigue-forced fight drops the party on random tiles (a sealed tile is a stuck
+  unit; the harness guards its own spawns, the live game does not). Flying
+  creatures (Ether Leviathan, Ether Spawn, Stasis Mote) are exempt - leviathan-deep
+  keeps its boss on a one-tile island for exactly that reason. Fire does not block
+  walking (a tag blocks only while it has `hp`); it burns. Keep radius 4..7: the
+  arena camera does not zoom. The 45 maps written on 2026-09-16 were built by
+  `tools/maps/build_maps.py` and checked against these rules by
+  `tools/maps/validate.mjs` (parse + walkable-component + stranded-tile check;
+  `render.mjs` prints an ASCII preview) - run the validator before adding a map.
+* **Storage** (`config/encounters.js craftedMaps.combat.maps`): a plain list of
+  code strings, indexed by the `id:` in each code (`craftedMapIndex` in
+  src/battle.js, cached per list). 47 combat maps ship: the two originals
+  (the-causeway r4, ember-hollow r6) plus ten each for the inner, middle and outer
+  rings and the Stasis Colonies and five for the Stasis Seed, every one with its
+  own line-up pinned to its own tiles - the old enemy GROUPS (loneRaider ...
+  twinStalkers) were dissolved into them, so the rosters per band are what they
+  were (1-5 weak creatures inner, 3-6 middle, 8-12 outer, garrisons of 3-7 for the
+  Colonies, the five boss courts for the Seed) but each now stands on terrain built
+  for it. `craftedMaps.shop` keeps its `rate` + list: shops do not open a local
+  map yet and only store the recipe (the last place a crafted-map RATE exists).
+* **Which map a fight rolls** (`config/encounters.js battleMaps`, wired onto
+  `CONFIG.battle.maps`; Settings > Encounters > Battles edits it): a row per kind
+  of fight (`inner` / `middle` / `outer` by the tile's ring band, `colonies`,
+  `seed`) and a column per layer 0-6, map ids in the cells, a map listed twice
+  rolling twice as often. An empty cell plays the nearest FILLED layer of the same
+  row (`arenaPool`), so only layer 3 is filled today and every other layer plays
+  its maps until given its own. This is the repurposed enemy-group spawn table
+  (`battleSpawns` until 2026-09-16).
+* **Assignment** (`Game` constructor, `makeArena` in src/battle.js): every battle
+  tile and the Seed roll their map at world generation on the world rng (the map
+  IS the enemy roll, so a revealed tile's hover, its chevrons' band and the fight
+  all read one code); a Colony rolls its map when it spawns; a fight conjured onto
+  a bare tile (tests, events) rolls in `prepareCombat`. `hex.recipe` carries the
+  map, `hex.enemies` its line-up (`renameDuplicates`: "Husk 2"), `enemies.title`
+  / `.mapId` the name for the log and the report. A withered tile drops both.
+  Scenario maps are authored already and skip this: their fights bring scripted
+  enemies and play on the recipe the script gives, else on FLAT ground (the
+  tutorials do not author arenas yet - tutorial2's guard fight is the one that
+  does). The Virtual Playtester now fights on the real recipe too (`runArena`
+  takes it; the enemies stand on their authored tiles).
 * **Engine support**: `createBattle` takes `wallKeys` / `etherKeys`
   (impassable for walking AND flying; wall = crash on shove, ether = death on
   shove) and `startTags` (pre-lit tile tags, made permanent). Placement,
@@ -612,8 +652,8 @@ everything downstream (renderer, HUD, combat) sees an ordinary, just small, map.
   walkthrough in the smoke test and cannot break silently (the old seeded NPE
   broke whenever worldgen changed).
 * **Arena recipes are LIVE**: a battle encounter's `recipe` now really shapes
-  its arena - `tiles: { 'q,r': { elevation } }` authors the heights (the random
-  elevation wave stays off when a recipe brings its own), and
+  its arena - `tiles: { 'q,r': { elevation } }` authors the heights (since
+  2026-09-16 there is no random wave at all: no recipe = flat ground), and
   `spawns: { party: [keys], enemies: [keys] }` pins units to authored tiles
   positionally (extras fall back to random). Flows through the existing
   `hex.recipe` -> flyIn -> localview path, so normal runs can use recipes too.
@@ -649,7 +689,8 @@ Data shapes:
 ```
 unit   = { name, icon, hp, maxHp, upgrades: ['ability:node'], power (sim proxy only), alive }
 hex    = { q, r, ring, key, type, biome, passable, supplyCost, encounter, isStart,
-           isSeed, isColony, revealed, visited, x, y }
+           isSeed, isColony, revealed, visited, x, y,
+           recipe (the fight's handcrafted map), enemies (its pinned line-up) }
 state  = { status, party, supplies, maxSupplies, turn, position, shortestPathLength,
            fatigueSteps, fatigue, coloniesCleared, endReason }
 stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }], witherCharge }
@@ -1341,6 +1382,82 @@ stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }
     `commitRoster()`, so there is only one rule. It listens for pointerdown on
     the backdrop itself, so a drag that starts inside the window and ends outside
     it is not mistaken for a click outside.
+* 2026-09-16 **Only handcrafted arenas; enemy groups are gone; the spawn table
+  now names maps.** Three decisions of the owner, one change.
+  * **No procedural local maps for combat.** `applyElevationWave` (the three
+    seeded sine waves that rolled random heights over a battle arena) is deleted
+    from `src/local/localmap.js`; `LocalMapView.build` lays the recipe over the
+    bare grid and nothing else. A fight without a recipe - the campfire, a
+    scenario fight whose script authors none - is FLAT ground at the neutral
+    step, and the smoke test asserts exactly that on a conjured recipe-less
+    fight (it used to assert the wave). `craftedMaps.combat.rate` is gone with
+    it: there is nothing for a rate to choose between. `craftedMaps.shop` keeps
+    its rate because shops do not open a local map yet.
+  * **Enemy groups are gone as a concept.** `battle.enemyGroups`
+    (config/entities.js), `makeGroup` / `makeEnemies` / `spawnPool`
+    (src/battle.js), the Groups table on Settings > Units and its locale
+    strings are all removed. A fight's line-up is pinned tile by tile in its map
+    code (`!Enemy` lines): `enemiesOfRecipe` turns the recipe's
+    `enemyTypeIds` into live units, numbered as before, carrying the map's
+    `title` and `mapId` where the group's title used to travel (battle log, the
+    Local Map Info panel, the report). Map codes gained an optional `title:`
+    header for that (default: the id, dashes to spaces, capitalised); the
+    parser exports `mapCodeId` / `mapCodeTitle` / `titleFromId`.
+  * **The spawn table is repurposed.** `ENCOUNTERS.battleSpawns` is now
+    `ENCOUNTERS.battleMaps`, wired onto `CONFIG.battle.maps` (was
+    `battle.spawns`): the same rows (inner / middle / outer / colonies / seed)
+    x layers 0-6, but the cells hold crafted combat map IDS. `makeArena(rng,
+    config, ring, pool, layer)` in src/battle.js replaces `makeEnemies`: it
+    picks the cell (`arenaPool`, same nearest-filled-layer fallback), rolls ONE
+    id, and only if that code is broken walks the rest of the cell in order -
+    a bad code costs a console warning, not a different roll for every tile -
+    and returns `{ recipe, enemies }`. `Game` stores both on the hex at
+    generation (battles and the Seed), `spawnColony` at arrival,
+    `prepareCombat` for a fight conjured onto a bare tile; `witherNear` drops
+    both. `assignCraftedMaps` shrank to `assignShopMaps`. Settings > Encounters
+    > Battles is the same grid with map chips (unknown ids in red) and a picker
+    over `craftedMapIndex`; the Units tab lost its Groups table.
+  * **45 new maps for layer 3** (`craftedMaps.combat.maps`): ten each for the
+    inner rings, the middle rings, the outer rings and the Stasis Colonies,
+    five for the Stasis Seed, plus the two originals kept (the-causeway ->
+    inner, ember-hollow -> middle). Every map carries its own line-up - the
+    old groups' rosters redistributed over terrain built for them: hills with
+    one ramp, sunken creeks, palisades with gates, ether chasms with a single
+    bridge, a rampart with ether behind it for the Warden of the Rim, a
+    one-tile island in an ether lake for the Leviathan. All 45 were generated
+    from a builder script and checked with the game's own parser plus a
+    walkability pass (every pinned ground enemy inside the main walkable
+    component, no free ground tile a forced spawn could be stuck on; flyers
+    exempt) - the rules are written down under "Handcrafted local maps". Layer
+    3 only; layers 0-2 and 4-6 stay empty and play layer 3's cells.
+  * **Tools.** The playtester harness (`headless.mjs`) fights on the real recipe
+    now (grid, heights, walls, ether, braziers; enemies on their authored
+    tiles; the party random inside the main walkable component) and takes
+    `radius` off the map; `runFight` takes a `mapId`; the gym sweeps `--maps`;
+    `worldrun` passes `ctx.hex.recipe`; the report's ladder is per map, sorted
+    by the line-up's total HP (the `enemyPower` column was already dead). The
+    harness's stale `COMBAT_CONFIG` import (config/abilities.js) was also
+    pointed at config/localmap.js - it had not run since the 09-12 split. A
+    3-seed gym over all 47 maps at 0 and 8 upgrades ran 282 fights with no
+    errors and no timeouts; the shape of the ladder (inner trivial, outer
+    hard for a fresh party, colonies easier than the outer rings, bosses
+    winnable at 8 upgrades) is a balance note, not a target.
+  * **Verified**: `tools/smoke-test.cjs` in headless Chromium against the
+    built app - the 8 problems it reports are the same 8 the untouched
+    sources report (status table description, party panel badges and sockets,
+    party view columns, roster grid, unit detail trees, stale-settings
+    healing), none of them touched by this change; its new checks (every
+    battle tile has a recipe from its own band's row, the Seed from the seed
+    row, enemies equal to the pinned spawns, the map table's ids all declared
+    and layer 3 holding 10/10/10/10/5, a forced fight on a recipe, a
+    recipe-less arena flat, the preview tool) pass. `tools/engine-test.mjs`
+    was already crashing before this change (it fixtures a `poison` status the
+    09-13 vocabulary pass renamed) and is untouched.
+  * **Open**: the tutorials' fights (except tutorial2's guard) are flat now -
+    they should get authored arenas; the fatigue-forced clustered spawn does not
+    check walkability (the maps are built so it does not have to); the
+    `log.battle.stasis` key still fronts every titled fight with "Stasis:" as
+    it did for every titled group.
 
 
 ## The Hack encounter - an EXPERIMENT (src/local/hack/, since 2026-09-15)
@@ -1537,8 +1654,9 @@ owner-approved request.
   enemy phase resolves before `endTurn()` returns. Rules untouched; the game
   itself never passes the flag. This is the one game-side hook the harness
   needed.
-* **The harness** (`headless.mjs`): one fight = the live arena recipe (local
-  map + elevation wave), seeded random-distinct-tile placement, resolved
+* **The harness** (`headless.mjs`): one fight = the live arena recipe (the
+  handcrafted map's grid, heights, walls, ether and braziers; enemies on their
+  authored tiles), seeded random-distinct-tile party placement, resolved
   party abilityDefs, an engine in instant mode and a bot on the sticks.
   Everything is reproducible from (seed, group, party spec, bot); the bot
   rolls its own seeded rng, separate from the game's. `buildParty` unlocks N
@@ -1551,12 +1669,13 @@ owner-approved request.
   ground as a tie-break, heal real wounds. `random` - the lower bound and
   crash-finder. Bot numbers are COMPARATIVE (before vs after a patch), not
   absolute difficulty.
-* **The gym** (`gym.mjs`, `npm run gym`): sweeps enemy groups x party
+* **The gym** (`gym.mjs`, `npm run gym`): sweeps the crafted combat maps
+  (`--maps`, each a fight: arena + enemies) x party
   progression points x N seeds, one JSON line per fight (plus a header that
   makes the log self-describing), `--patch file.json` applies dotted-path
   CONFIG overrides for A/B experiments on identical seeds. Roughly 20-50
   fights/s single-process. **The report** (`report.mjs`, `npm run gym:report`)
-  aggregates a log into the bestiary difficulty ladder (win rate with a 95%
+  aggregates a log into the combat-map difficulty ladder (win rate with a 95%
   margin, rounds, HP left) as report.md; two logs = an experiment diff with
   noise-aware markers. The harness guards its own spawns (everyone in one
   walkable height component) so soft-locks do not pollute the statistics.
@@ -1571,9 +1690,10 @@ owner-approved request.
   blackMarketDeal). Every upgrade screen also writes a per-decision 'pick'
   record (offered refs vs the taken one) - the Slay-the-Spire lesson. Known
   divergences from the live game, both cosmetic to the rules: no deployment
-  step (spawns are random, walkable-component guarded) and no scripted void
-  edges. The engine's rng is seeded now, so a whole campaign replays
-  identically from its seed.
+  step (the party spawns on random tiles, walkable-component guarded; the
+  enemies stand on their map's authored tiles as in the live game) and no
+  scripted void edges. The engine's rng is seeded now, so a whole campaign
+  replays identically from its seed.
 * **The personas** (`worldbot.mjs`): the overworld policy plus three
   parameter sets - `cautious` (fights only what looks safe, camps early,
   hoards, grinds before the Seed), `bold` (the intended baseline: calculated
