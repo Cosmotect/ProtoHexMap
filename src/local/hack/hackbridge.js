@@ -10,8 +10,8 @@
 //    * calls bridge.abort() where it aborts a fight (restart / new map).
 //  The hack runs on the ORDINARY combat engine (createBattle) since
 //  2026-09-15: no enemies, the node / mine tags dropped into its tag table,
-//  and a `rules` object (hackrules.js) supplying the progress bar, the mine
-//  and overkill effects and the end condition. Aim locks, the volley and the
+//  and a `rules` object (hackrules.js) supplying the node count, the badge
+//  grading, the mines and the end condition. Aim locks, the volley and the
 //  damage billboards are the engine's and the arena's own.
 // =====================================================================
 import { HACK_CONFIG } from './hackconfig.js';
@@ -152,19 +152,22 @@ export function createHackBridge({ config, getGame, getUi, cinematic, renderer, 
     ui.setBattleMode(null);
     cinematic.localView.endBattle();
     const rounds = h.state.round;
-    const hx = h.state.ext.hack ?? { progress: 0, lostBy: null };
-    if (won) {
-      // The regular reward path: the battle dialog with an upgrade pick.
-      ctx.opts.intro = { title: H.text.wonTitle, text: H.text.wonText };
-      game.finishHack(ctx, { won: true, rounds });
+    const hx = h.state.ext.hack ?? { cleared: 0, badges: 0, total: 0 };
+    const fill = (text) => text
+      .replace('{cleared}', hx.cleared).replace('{s}', hx.cleared === 1 ? '' : 's')
+      .replace('{badges}', hx.badges).replace('{bs}', hx.badges === 1 ? '' : 's');
+    if (won && hx.badges > 0) {
+      // The regular reward path: the battle dialog with an upgrade pick - as
+      // many OPTIONS to pick from as badges earned (game.finishHack passes it on).
+      ctx.opts.intro = { title: H.text.wonTitle, text: fill(H.text.wonText) };
+      game.finishHack(ctx, { won: true, rounds, badges: hx.badges, cleared: hx.cleared });
     } else {
-      game.finishHack(ctx, { won: false, rounds });
+      game.finishHack(ctx, { won: false, rounds, badges: 0, cleared: hx.cleared });
       // Our own small window; closing it flies the party back out (main.js
       // onDialogClosed does that for any dialog closed inside the arena).
-      const text = hx.lostBy === 'mines' ? H.text.lostTextMines : H.text.lostTextTurns;
       ui.openDialog({
         title: H.text.lostTitle,
-        html: `<p>${esc(text)}</p><div class="effect">${esc(`Hack progress ended at ${hx.progress > 0 ? '+' : ''}${hx.progress} after ${rounds} turn${rounds === 1 ? '' : 's'}.`)}</div>`,
+        html: `<p>${esc(fill(H.text.lostText))}</p><div class="effect">${esc(`${hx.cleared} of ${hx.total} nodes down after ${rounds} turn${rounds === 1 ? '' : 's'}; the first badge needs ${H.badges[0]}.`)}</div>`,
         actions: [{ label: 'Continue', onClick: () => ui.closeDialog() }],
       });
     }

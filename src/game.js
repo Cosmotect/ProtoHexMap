@@ -842,6 +842,9 @@ export class Game {
       result.reward = 'upgrade';
       // Clearing a Colony grants several picks (config.stasis.rewardPicks).
       result.rewardPicks = hex.isColony ? this.config.stasis.rewardPicks : 1;
+      // How many OPTIONS each pick offers (null = one per living unit, the
+      // default). Set by an encounter that grades its reward (the Hack's badges).
+      result.rewardOptions = ctx.rewardOptions ?? null;
     }
     if (result.won) result.lore = this.pickFlavour('battle');
     // Winners salvage supplies from the field (battle and Stasis fights alike).
@@ -924,8 +927,10 @@ export class Game {
     this.consume(hex, 'hack', false);
     return true;
   }
-  finishHack(ctx, { won, rounds }) {
-    if (won) return this.finishCombat(ctx, { won: true, rounds, interactive: true });
+  finishHack(ctx, { won, rounds, badges = 0 }) {
+    // The hack's reward is GRADED: as many upgrade options as badges earned
+    // (finishCombat reads ctx.rewardOptions; the chooser shows only that many).
+    if (won) { ctx.rewardOptions = badges > 0 ? badges : null; return this.finishCombat(ctx, { won: true, rounds, interactive: true }); }
     this.addLog('log.hack.failed');
     this.consume(ctx.hex, 'hack', false);
     return true;
@@ -1076,7 +1081,9 @@ export class Game {
   // everything currently unlockable across the unit's ability trees; the
   // player picks one offer to actually unlock. Newly opened children join the
   // pool on the NEXT reward, because the pool is re-read every time.
-  upgradeOffers() {
+  // `limit` (optional) caps how many offers come back - a random subset, so a
+  // graded reward (the Hack's badges) can offer one, two or three options.
+  upgradeOffers(limit = null) {
     const out = [];
     this.state.party.forEach((u, index) => {
       if (!u.alive) return;
@@ -1084,6 +1091,7 @@ export class Game {
       if (!pool.length) return;
       out.push({ index, ...this.rng.pick(pool) });
     });
+    if (limit != null && limit < out.length) return this.shuffle(out).slice(0, Math.max(0, limit));
     return out;
   }
   hasUpgradeOffers() {

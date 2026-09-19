@@ -3,8 +3,9 @@
 //
 //  What the hack shows that a fight does not, layered ON TOP of the ordinary
 //  arena (LocalMapView) without changing it:
-//    * the HACK PROGRESS bar at the top of the screen (-max .. 0 .. +max),
-//      a DOM element with its own <style> block - style.css is untouched;
+//    * the HACK panel at the top of the screen - the turn counter and the
+//      three BADGES that light up as nodes go down - a DOM element with its
+//      own <style> block - style.css is untouched;
 //    * NODE bodies: a short hex column per node with its hp as a FLAT DECAL on
 //      the column's top face (the emoji sprite the arena would draw for the
 //      tag is hidden; mines keep theirs). Nothing of the hack's floats: the
@@ -24,26 +25,32 @@ export function createHackView({ view, hack, H }) {
   const colors = H.colors;
   const hx = () => hack.state.ext.hack;
 
-  // ----- the progress bar (DOM) -------------------------------------------
+  // ----- the hack panel (DOM): turn counter + badges -------------------------
+  // No progress bar (gone 2026-09-19): the turn counter, and under it the three
+  // BADGES with their node thresholds, lighting up one by one as nodes go down
+  // - the three stars of a mobile level.
   const style = document.createElement('style');
   style.id = 'hack-style';
   style.textContent = `
-    #hack-bar { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); width: min(560px, 60vw);
+    #hack-bar { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); width: min(420px, 60vw);
       padding: 8px 14px 10px; pointer-events: none; text-align: center; }
     #hack-bar .hack-title { font-family: var(--display); letter-spacing: 0.14em; font-size: 12px; color: var(--muted); text-transform: uppercase; }
     #hack-bar .hack-title b { color: var(--accent); letter-spacing: 0.06em; }
-    #hack-bar .hack-track { position: relative; height: 16px; margin-top: 6px; border-radius: 8px;
-      background: rgba(255,255,255,0.06); border: 1px solid var(--panel-border); overflow: hidden; }
-    #hack-bar .hack-fill { position: absolute; top: 0; bottom: 0; left: 50%; width: 0; transition: width .35s ease, left .35s ease; }
-    #hack-bar .hack-fill.pos { background: linear-gradient(90deg, rgba(143,224,184,0.55), var(--good)); }
-    #hack-bar .hack-fill.neg { background: linear-gradient(270deg, rgba(255,107,107,0.55), var(--danger)); }
-    #hack-bar .hack-mid { position: absolute; top: -2px; bottom: -2px; left: 50%; width: 2px; background: rgba(255,255,255,0.7); }
-    #hack-bar .hack-ends { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 3px; }
-    #hack-bar .hack-ends span.val { color: var(--text); }
-    #hack-bar .hack-turns { font-family: var(--mono); font-size: 12px; color: var(--text); margin-top: 2px; }
+    #hack-bar .hack-turns { font-family: var(--mono); font-size: 15px; color: var(--text); margin-top: 4px; }
     #hack-bar .hack-turns.last { color: var(--danger); }
-    #hack-bar .hack-delta { font-family: var(--mono); font-size: 12px; margin-left: 8px; }
-    #hack-bar .hack-delta.up { color: var(--good); } #hack-bar .hack-delta.down { color: var(--danger); }
+    #hack-bar .hack-turns.over { color: var(--accent); }
+    #hack-bar .hack-badges { display: flex; justify-content: center; gap: 14px; margin-top: 8px; }
+    #hack-bar .badge { position: relative; width: 58px; height: 58px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      border-radius: 50%; border: 2px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.05); color: var(--muted);
+      font-family: var(--mono); font-size: 13px; transition: transform .25s ease, border-color .25s ease, background .25s ease, color .25s ease, box-shadow .25s ease; }
+    #hack-bar .badge .star { font-size: 20px; line-height: 1; filter: grayscale(1) opacity(0.35); transition: filter .25s ease; }
+    #hack-bar .badge .n { margin-top: 1px; }
+    #hack-bar .badge.lit { border-color: var(--accent); background: rgba(255, 209, 102, 0.18); color: var(--accent);
+      box-shadow: 0 0 18px rgba(255, 209, 102, 0.45); animation: hack-badge-pop .5s ease; }
+    #hack-bar .badge.lit .star { filter: none; }
+    @keyframes hack-badge-pop { 0% { transform: scale(0.7); } 55% { transform: scale(1.25); } 100% { transform: scale(1); } }
+    #hack-bar .hack-cleared { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 6px; }
+    #hack-bar .hack-cleared b { color: var(--text); }
     body.hack-mode #battle-bar .battle-round { color: var(--accent); }
     /* No enemy in a hack: the info panel's roster block and its separator go. */
     body.hack-mode #local-info .li-roster-label, body.hack-mode #local-info #enemy-roster, body.hack-mode #local-info .li-sep { display: none; }
@@ -53,32 +60,27 @@ export function createHackView({ view, hack, H }) {
   bar.id = 'hack-bar';
   bar.className = 'panel';
   bar.innerHTML = `
-    <div class="hack-title"><b>HACK PROGRESS</b></div>
-    <div class="hack-track"><div class="hack-fill pos"></div><div class="hack-mid"></div></div>
-    <div class="hack-ends"><span>-${H.progressMax}</span><span class="val">0</span><span>+${H.progressMax}</span></div>
-    <div class="hack-turns"></div>`;
+    <div class="hack-title"><b>HACK</b></div>
+    <div class="hack-turns"></div>
+    <div class="hack-badges">${H.badges.map((n, i) => `<div class="badge" data-badge="${i + 1}"><span class="star">★</span><span class="n">${n}</span></div>`).join('')}</div>
+    <div class="hack-cleared"></div>`;
   (document.getElementById('hud') ?? document.body).appendChild(bar);
   document.body.classList.add('hack-mode');
-  const fillEl = bar.querySelector('.hack-fill');
-  const valEl = bar.querySelector('.hack-ends .val');
   const turnsEl = bar.querySelector('.hack-turns');
+  const clearedEl = bar.querySelector('.hack-cleared');
+  const badgeEls = [...bar.querySelectorAll('.badge')];
 
   function refreshBar() {
     const sb = hack.state;
     const h = hx();
     if (!h) return;
-    const p = h.progress, max = H.progressMax;
-    const pct = Math.min(100, Math.abs(p) / max * 100) / 2;   // half the track each way
-    fillEl.className = 'hack-fill ' + (p >= 0 ? 'pos' : 'neg');
-    fillEl.style.width = pct + '%';
-    fillEl.style.left = p >= 0 ? '50%' : (50 - pct) + '%';
-    valEl.textContent = (p > 0 ? '+' : '') + p;
     const left = H.turns - sb.round + (sb.over ? 0 : 1);
-    const delta = h.lastTurn ? (h.lastTurn.gained - h.lastTurn.lost) : null;
-    turnsEl.className = 'hack-turns' + (left <= 1 && !sb.over ? ' last' : '');
-    turnsEl.innerHTML = sb.over
-      ? (sb.over === 'win' ? 'HACK COMPLETE' : 'HACK FAILED')
-      : `Turn ${sb.round} / ${H.turns}` + (delta != null ? `<span class="hack-delta ${delta >= 0 ? 'up' : 'down'}">last turn ${delta >= 0 ? '+' : ''}${delta}</span>` : '');
+    turnsEl.className = 'hack-turns' + (sb.over ? ' over' : left <= 1 ? ' last' : '');
+    turnsEl.textContent = sb.over
+      ? (sb.over === 'win' ? `HACK COMPLETE - ${h.badges} BADGE${h.badges === 1 ? '' : 'S'}` : 'HACK FAILED')
+      : `Turn ${sb.round} / ${H.turns}`;
+    badgeEls.forEach((el, i) => el.classList.toggle('lit', h.badges > i));
+    clearedEl.innerHTML = `nodes down <b>${h.cleared}</b> / ${h.total}` + (h.lastTurn ? ` - last volley +${h.lastTurn.cleared}` : '');
     // The battle bar's round counter reads "Turn n / N" in this mode.
     const roundEl = document.getElementById('battle-round');
     if (roundEl) roundEl.textContent = sb.over ? (sb.over === 'win' ? 'Hack complete' : 'Hack failed') : `Turn ${sb.round} / ${H.turns}`;

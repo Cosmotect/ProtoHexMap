@@ -64,13 +64,15 @@ fs.mkdirSync(OUT, { recursive: true });
       flat: new Set(Object.values(sb.heights)).size === 1,
       bar: !!document.getElementById('hack-bar'), battleBar: !document.getElementById('battle-bar').classList.contains('hidden'),
       round: document.getElementById('battle-round').textContent, active: sb.activeUid, abilities: document.querySelectorAll('#battle-abilities button').length,
-      progress: sb.ext.hack.progress, turns: h.hackConfig.turns, lockedAim: sb.lockedAim,
+      cleared: sb.ext.hack.cleared, total: sb.ext.hack.total, badges: document.querySelectorAll('#hack-bar .badge').length, lit: document.querySelectorAll('#hack-bar .badge.lit').length, turns: h.hackConfig.turns, lockedAim: sb.lockedAim,
     };
   });
   check(s0.units === 3, `three party units on the board (${s0.units})`);
   check(s0.nodes > 0 && s0.mines > 0, `nodes and mines placed (${s0.nodes} / ${s0.mines})`);
   check(s0.flat, 'the board is flat');
-  check(s0.bar && s0.battleBar, 'hack progress bar and battle bar are shown');
+  check(s0.bar && s0.battleBar, 'hack panel and battle bar are shown');
+  check(s0.badges === 3 && s0.lit === 0 && s0.cleared === 0 && s0.total === s0.nodes, `three unlit badges, ${s0.total} nodes to clear`);
+  check(s0.turns === 5, `five turns (${s0.turns})`);
   check(/Turn 1 \/ \d+/.test(s0.round), `battle bar reads the turn (${s0.round})`);
   check(!!s0.active && s0.abilities >= 2, `a unit is selected with its ability buttons (${s0.abilities})`);
   check(s0.lockedAim, 'aim locks are on (config.combat.lockedAim)');
@@ -149,21 +151,23 @@ fs.mkdirSync(OUT, { recursive: true });
   // Fire.
   const fired = await page.evaluate(async () => {
     const h = window.__hack; const sb = h.state;
-    const p0 = sb.ext.hack.progress; const r0 = sb.round;
+    const node = Object.keys(sb.tags).find((k) => sb.tags[k].defId === 'node' && h.previewTotals(null).has(k));
+    const hp0 = node ? sb.tags[node].hp : null;
+    const pv = node ? h.previewTotals(null).get(node) : null;
+    const r0 = sb.round;
     h.endTurn();
     await new Promise((r) => setTimeout(r, 2400));
-    return { p0, p1: sb.ext.hack.progress, r0, r1: sb.round, lastTurn: sb.ext.hack.lastTurn, busy: sb.busy, over: sb.over, locks: h.lockedUnits().length, bar: document.querySelector('#hack-bar .hack-ends .val')?.textContent, round: document.getElementById('battle-round').textContent };
+    return { node, hp0, expected: pv ? pv.dealt : null, hp1: node ? (sb.tags[node] ? sb.tags[node].hp : 0) : null, r0, r1: sb.round, lastTurn: sb.ext.hack.lastTurn, busy: sb.busy, over: sb.over, locks: h.lockedUnits().length, turnsText: document.querySelector('#hack-bar .hack-turns')?.textContent, round: document.getElementById('battle-round').textContent };
   });
   console.log('  fired:', JSON.stringify(fired));
-  const expectedGain = Math.min(turn.preview?.total ?? 0, turn.nodeHpBefore);
-  check(fired.p1 - fired.p0 === expectedGain - (fired.lastTurn?.lost ?? 0), `progress moved by the dealt damage minus mine losses (${fired.p0} -> ${fired.p1}, expected +${expectedGain} -${fired.lastTurn?.lost ?? 0})`);
+  check(fired.node && fired.hp0 - fired.hp1 === fired.expected, `the node took what the billboard promised (${fired.hp0} -> ${fired.hp1}, promised ${fired.expected})`);
   check(fired.r1 === fired.r0 + 1 && !fired.busy && !fired.over, 'a new turn started');
   check(fired.locks === 0, 'locks are cleared after firing');
-  check(fired.bar === (fired.p1 > 0 ? '+' : '') + String(fired.p1), `the bar shows the progress (${fired.bar})`);
+  check(/Turn 2 \/ 5/.test(fired.turnsText ?? ''), `the panel counts the turn (${fired.turnsText})`);
   await page.screenshot({ path: path.join(OUT, 'hack-3-fired.png') });
 
-  // OVERKILL: a node cut down to 2 hp, hit by one ability of damage d > 2.
-  // With H.overkill 'hurts' the bar must move by 2 - (d - 2).
+  // CLEARING a node counts: cut one to 2 hp, hit it with one ability, and the
+  // cleared count goes up by one (badges only from H.badges[0] on).
   const over = await page.evaluate(async () => {
     const h = window.__hack; const sb = h.state; const H = h.hackConfig;
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -185,7 +189,6 @@ fs.mkdirSync(OUT, { recursive: true });
           const tiles = ab.dmgZone.map((o) => add(anchor, rot(o, rk)));
           const node = tiles.find((t) => nodes.includes(t));
           if (!node) continue;
-          // Only one node and no mine under the pattern, so the sum is clean.
           if (tiles.filter((t) => sb.tags[t]).length !== 1) continue;
           if (from !== u.pos) { h.clickTile(from); await wait(1200); }
           h.selectAbility(id); await wait(30);
@@ -193,20 +196,19 @@ fs.mkdirSync(OUT, { recursive: true });
           sb.tags[node].hp = 2;
           const pv = h.previewTotals(anchor).get(node);
           h.clickTile(anchor); await wait(60);
-          const p0 = sb.ext.hack.progress;
+          const c0 = sb.ext.hack.cleared;
           h.endTurn(); await wait(2400);
-          return { found: true, dmg: ab.damage, p0, p1: sb.ext.hack.progress, pvDealt: pv?.dealt, pvOver: pv?.over, nodeGone: !sb.tags[node], last: sb.ext.hack.lastTurn, mode: H.overkill };
+          return { found: true, dmg: ab.damage, c0, c1: sb.ext.hack.cleared, pvDealt: pv?.dealt, pvOver: pv?.over, nodeGone: !sb.tags[node], last: sb.ext.hack.lastTurn, badges: sb.ext.hack.badges, lit: document.querySelectorAll('#hack-bar .badge.lit').length };
         }
       }
     }
     return { found: false };
   });
-  console.log('  overkill:', JSON.stringify(over));
+  console.log('  clear:', JSON.stringify(over));
   if (over.found) {
-    const expect = over.mode === 'hurts' ? 2 - (over.dmg - 2) : over.mode === 'counts' ? over.dmg : 2;
-    check(over.p1 - over.p0 === expect, `overkill rule '${over.mode}': bar moved ${over.p1 - over.p0} (expected ${expect})`);
+    check(over.c1 === over.c0 + 1 && over.nodeGone, `a node brought down counts as cleared (${over.c0} -> ${over.c1})`);
     check(over.pvDealt === 2 && over.pvOver === over.dmg - 2, `preview split the hit into dealt ${over.pvDealt} + over ${over.pvOver}`);
-    check(over.nodeGone, 'the node went down');
+    check(over.lit === over.badges, `badges lit match badges earned (${over.lit})`);
   } else console.log('  (no clean single-node aim available - skipped)');
 
   // A mine hit: lock an aim on a mine tile directly and fire.
@@ -231,11 +233,11 @@ fs.mkdirSync(OUT, { recursive: true });
             if (from !== u.pos) { h.clickTile(from); await wait(1200); }
             h.selectAbility(id); await wait(30);
             if (!sb.aimMap || sb.aimMap[anchor] === undefined) { h.cancel(); continue; }
-            const hp0 = u.hp, p0 = sb.ext.hack.progress;
+            const hp0 = u.hp;
             h.clickTile(anchor); await wait(60);
             const lock = sb.units.find((x) => x.uid === u.uid).lock;
             h.endTurn(); await wait(2400);
-            return { found: true, hp0, hp1: sb.units.find((x) => x.uid === u.uid).hp, p0, p1: sb.ext.hack.progress, mineGone: !sb.tags[anchor], lock: !!lock, over: sb.over };
+            return { found: true, hp0, hp1: sb.units.find((x) => x.uid === u.uid).hp, mineGone: !sb.tags[anchor], lock: !!lock, over: sb.over };
           }
         }
       }
@@ -246,7 +248,6 @@ fs.mkdirSync(OUT, { recursive: true });
   if (mine.found) {
     const H = await page.evaluate(() => window.__hack.hackConfig);
     check(mine.hp1 === Math.max(1, mine.hp0 - H.mineDamage), `the aiming unit took mine damage (${mine.hp0} -> ${mine.hp1})`);
-    check(mine.p1 <= mine.p0 - H.minePenalty || mine.over, `the bar dropped by the mine penalty (${mine.p0} -> ${mine.p1})`);
     check(mine.mineGone === !!H.mineDetonates, 'the mine detonated');
   } else console.log('  (no reachable mine for a plain aim this layout - skipped)');
 
@@ -311,21 +312,35 @@ fs.mkdirSync(OUT, { recursive: true });
   await page.waitForTimeout(600);
   await startEnter();
 
-  // ----- 4. win -> the regular reward window ---------------------------------
-  await page.evaluate(() => window.__hack.debugResolve(true));
+  // ----- 4. the graded reward: ONE badge -> one option -----------------------
+  // Fake a run that cleared exactly H.badges[0] nodes, then let the last
+  // volley end the encounter.
+  const oneBadge = await page.evaluate(async () => {
+    const h = window.__hack; const sb = h.state; const H = h.hackConfig;
+    const x = sb.ext.hack;
+    x.cleared = H.badges[0]; x.badges = 1; x.firedRound = H.turns - 1; sb.round = H.turns;
+    sb.units.forEach((u) => { u.lock = null; });
+    await new Promise((r) => setTimeout(r, 50));
+    h.endTurn();
+    await new Promise((r) => setTimeout(r, 1500));
+    return { over: sb.over, badges: x.badges };
+  });
+  check(oneBadge.over === 'win' && oneBadge.badges === 1, `the last volley ends the hack as a win with one badge (${JSON.stringify(oneBadge)})`);
   await page.waitForFunction(() => !document.getElementById('dialog').classList.contains('hidden'), null, { timeout: 15000 });
   const winTitle = await dialogTitle();
   const winHtml = await page.evaluate(() => document.getElementById('dialog').textContent);
-  check(/Hack complete/i.test(winHtml), `victory window opened (${winTitle.trim().slice(0, 40)})`);
-  check(/upgrade|reward|Continue/i.test(winHtml), 'victory window offers the reward continue');
+  check(/Hack complete/i.test(winHtml) && /1 badge/.test(winHtml), `victory window opened (${winTitle.trim().slice(0, 40)})`);
   const hackGoneAfterWin = await page.evaluate(() => !window.__hack && !document.getElementById('hack-bar'));
-  check(hackGoneAfterWin, 'the hack engine and bar are torn down on the win');
+  check(hackGoneAfterWin, 'the hack engine and panel are torn down on the win');
   await page.screenshot({ path: path.join(OUT, 'hack-4-won.png') });
   await dismissDialog();
-  // The upgrade chooser (if offered) - take the first.
   await page.waitForTimeout(300);
-  if (await dialogOpen()) {
-    await page.evaluate(() => { const c = document.querySelector('#dialog .upgrade-card, #dialog .offer, #dialog-actions button'); if (c) c.click(); });
+  const chooser = await page.evaluate(() => ({ open: !document.getElementById('dialog').classList.contains('hidden'), buttons: [...document.querySelectorAll('#dialog-actions button')].map((b) => b.textContent.trim().slice(0, 30)) }));
+  console.log('  chooser:', JSON.stringify(chooser));
+  check(chooser.open && chooser.buttons.length === 2, `the chooser offers exactly one upgrade (plus skip): ${chooser.buttons.length} buttons`);
+  await page.screenshot({ path: path.join(OUT, 'hack-4b-choice.png') });
+  if (chooser.open) {
+    await page.evaluate(() => { const c = document.querySelector('#dialog-actions button'); if (c) c.click(); });
     await page.waitForTimeout(300);
     if (await dialogOpen()) await dismissDialog();
   }
@@ -341,7 +356,7 @@ fs.mkdirSync(OUT, { recursive: true });
   await page.evaluate(() => window.__hack.debugResolve(false));
   await page.waitForFunction(() => !document.getElementById('dialog').classList.contains('hidden'), null, { timeout: 15000 });
   const loseHtml = await page.evaluate(() => document.getElementById('dialog').textContent);
-  check(/Hack failed/i.test(loseHtml), 'failure window opened');
+  check(/Hack failed/i.test(loseHtml) && /not enough/i.test(loseHtml), 'failure window opened (no badge, no reward)');
   await page.screenshot({ path: path.join(OUT, 'hack-5-lost.png') });
   await dismissDialog();
   await page.waitForFunction(() => window.__cinematic.mode() === 'idle', null, { timeout: 30000 }).catch(() => problems.push('did not fly back out after the loss'));

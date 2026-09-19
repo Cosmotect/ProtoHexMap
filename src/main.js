@@ -869,8 +869,9 @@ function startRun(seed, opts = {}) {
 // The upgrade reward chooser: one RANDOM available upgrade per living unit is
 // offered (game.upgradeOffers()); the player unlocks exactly one of them.
 // `left` picks run back to back; onDone runs after the last (or a skip).
-function askUpgradePick(left, onDone) {
-  const offers = game.upgradeOffers();
+// `options` (optional) caps how many offers each pick shows (a graded reward).
+function askUpgradePick(left, onDone, options = null) {
+  const offers = game.upgradeOffers(options);
   if (!offers.length) { onDone(); return; }
   ui.chooseUpgrade({
     game,
@@ -878,7 +879,7 @@ function askUpgradePick(left, onDone) {
     left,
     onPick: (offer) => {
       game.applyUpgradePick(offer);
-      if (left > 1) askUpgradePick(left - 1, onDone); else onDone();
+      if (left > 1) askUpgradePick(left - 1, onDone, options); else onDone();
     },
     onSkip: onDone,
   });
@@ -962,7 +963,7 @@ function showDialog(d) {
     // sees the children the first pick opened.
     const picksNow = () => (r.reward ? (r.rewardPicks ?? 1) : 0);
     const picks = picksNow();
-    const askPick = (left, onDone = () => ui.closeDialog()) => askUpgradePick(left, onDone);
+    const askPick = (left, onDone = () => ui.closeDialog()) => askUpgradePick(left, onDone, r.rewardOptions ?? null);
     const flavour = r.won && r.lore ? `<p class="flavour">${escapeHtml(t(r.lore))}</p>` : '';
     const salvage = r.won && r.supplies
       ? `<div class="effect">${escapeHtml(r.supplies < r.suppliesFull ? t('battle.supplies.partial', { got: r.supplies, n: r.suppliesFull }) : t('battle.supplies', { n: r.supplies }))}</div>`
@@ -970,7 +971,7 @@ function showDialog(d) {
     ui.openDialog({
       title: d.intro ? d.intro.title : r.stasis ? (r.title ? t('battle.stasis.title', { title: tn(r.title) }) : t('battle.stasis.untitled')) : t('battle.title'),
       html: `${intro}<div class="battle-sum ${r.won ? 'won' : 'lost'}">${t(r.won ? 'battle.victory' : 'battle.defeat', { n: r.rounds })} ${t(r.partyFirst ? 'battle.partyFirst' : 'battle.enemiesFirst')}</div>
-             ${debuffs}${flavour}${salvage}<p class="muted">${escapeHtml(t('battle.enemies', { list: enemies }))}</p><div class="battle-lines">${lines.join('')}</div>`,
+             ${debuffs}${flavour}${salvage}${enemies ? `<p class="muted">${escapeHtml(t('battle.enemies', { list: enemies }))}</p>` : ''}<div class="battle-lines">${lines.join('')}</div>`,
       actions: [{
         label: picks ? t('dialog.continueReward', { n: picks }) : t('dialog.continue'),
         onClick: () => {

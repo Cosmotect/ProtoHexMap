@@ -1493,9 +1493,11 @@ must keep them:
 Instead of enemies, the board holds static NODES with hp. Units aim their
 abilities - the same hex-pattern abilities they fight with - and on End turn
 everything fires at once. A tile covered by two abilities takes its combined
-damage DOUBLED, by three TRIPLED. Damage dealt to nodes fills a HACK PROGRESS
-bar; some tiles are MINES, and an ability hex landing on one drains the bar and
-hurts the caster. The player has a limited number of turns to fill the bar. The
+damage DOUBLED, by three TRIPLED. The party has five volleys; every node brought
+down counts, and the REWARD IS GRADED by that count through three BADGES (the
+stars of a mobile level). Some tiles are MINES, and an ability hex landing on
+one hurts the caster. (Until 2026-09-19 the goal was a progress bar filled by
+node damage and drained by mines and overkill; the badges replaced it.) The
 synergy of overlapping patterns is meant to become the foundation of a
 progression where rewards are upgrades installed into INDIVIDUAL HEXES of an
 ability, changing how that hex behaves when it overlaps a hex of another unit's
@@ -1528,28 +1530,34 @@ ability. (Not built yet: v1 is the play mode itself.)
   walking; fliers glide over, never stop on one); mines are HAZARD tags,
   walkable, ticking nothing. Every ability locks, as in a fight, and every
   effect of a fired ability applies (a charge lands, a shove shoves); only
-  damaging abilities count for the stack multiplier. A NODE loses the total;
-  the bar rises by the hp ACTUALLY removed. OVERKILL - damage past the node's
-  remaining hp - is a toggle, `overkill`: **'hurts'** (the default since
-  2026-09-15) DRAINS the bar by the excess, so a sloppy stack costs you;
-  'wasted' drops it; 'counts' fills the bar with it. The preview label on a
-  targeted node splits the hit accordingly ("-2 x3 -16!" - two land, sixteen
-  spill, in red when they hurt). A node at 0 hp vanishes. A MINE hit by n hexes drains the bar by
-  `minePenalty` (15) x n and costs each aiming unit `mineDamage` (3) hp per hex,
-  never below 1 hp (`mineLethal` false); a hit mine detonates (`mineDetonates`).
-  Wounds carry back to the world-map party like a fight's.
-* **The bar** runs -`progressMax` .. +`progressMax` (100), starting at 0. +100 =
-  the hack succeeds: the party wins and gets the REGULAR reward screen (the
-  battle report window with an upgrade pick and victory supplies, through
-  `finishCombat` itself). -100, or the last of `turns` (7) ending short = the
-  hack fails: the encounter is consumed, no reward, the run continues (a small
-  "Hack failed" window, then the flight back out). A hack, won or lost, resets
-  fatigue (`fatigue.resetOn.hack = 'always'`). Mines never kill.
+  damaging abilities count for the stack multiplier. A NODE at 0 hp vanishes
+  and counts as CLEARED (overkill is simply wasted - nothing reads it any
+  more). A MINE under a hex of a fired ability costs the aiming unit
+  `mineDamage` (3) hp per hex, never below 1 hp (`mineLethal` false); a hit
+  mine detonates once the volley has landed (`mineDetonates`). Wounds carry
+  back to the world-map party like a fight's.
+* **The turn budget and the badges** (since 2026-09-19): `turns` (5) volleys,
+  after which the encounter ENDS BY ITSELF (or earlier, once every node is
+  down). Under the turn counter sit three BADGES with node thresholds
+  (`badges`, [4, 5, 6]); each lights up the moment the cleared count reaches
+  it. The badges earned are the reward: the party gets the REGULAR reward
+  screen (the battle report window through `finishCombat` itself, with the
+  victory supplies) and its upgrade chooser offers AS MANY OPTIONS AS BADGES -
+  one badge is no choice at all (take what was rolled), two a choice of two,
+  three the usual choice of three. No badge = the hack fails: the encounter is
+  consumed, no reward of any kind, the run continues (a small "Hack failed"
+  window, then the flight back out). A hack, won or lost, resets fatigue
+  (`fatigue.resetOn.hack = 'always'`). Mines never kill.
+  Plumbing: `game.finishHack` puts the badge count on the context as
+  `rewardOptions`; `finishCombat` copies it onto the result; main.js's
+  `askUpgradePick` passes it to `game.upgradeOffers(limit)`, which returns a
+  random subset of that size of the usual one-offer-per-living-unit draft.
+  LATER: better upgrades should also turn up more often with more badges - the
+  offer draft is the place (`upgradeOffers`), once upgrades carry a quality.
 * **Preview**: while aiming, hovering a castable tile paints the pattern (the
-  arena's own aim preview) AND every node / mine shows the number it would take
-  if the turn fired now - the standing locks plus the hovered aim, which stands
-  in for the hovering unit's own lock. After locking, the numbers stay. A node's
-  label shows its hp otherwise. Mines show their penalty in red.
+  arena's own aim preview) AND every covered node / mine shows the arena's
+  damage billboard (hp, arithmetic, outcome); a mine's reads what it costs the
+  caster in hp. A node's own hp sits as a flat decal on its top.
 * **Reaching it**: `hack` is an ordinary encounter type rolled at world
   generation (`encounters.weights.hack`, 1.5 - set 0 to keep it off generated
   maps), a lime box marker. Enter it like a battle: the same cloud dive, no
@@ -1561,17 +1569,19 @@ Until 2026-09-15 the hack ran on a SEPARATE duck-typed engine (`hackengine.js`,
 gone now). It runs on `createBattle` itself: no enemies, the node / mine tag
 instances dropped into the engine's tag table through its `tags` option
 (`makeHackTags`), and a `rules` object (`hackrules.js`, `createHackRules`)
-supplying what the engine does not know: `onBarrierHit` (a node lost hp -> the
-bar, and the overkill rule), `onHazardHit` (a mine under a hex -> the bar, the
-caster's hp, detonation once the volley has landed), `onTurnFired` (the turn's
-tally), `checkEnd` (the bar's ends and the turn budget replace
-last-side-standing), `decoratePreview` (the billboard's overkill / mine note)
-and `debugResolve`. The rules' state is `sb.ext.hack` (`progress`, `lastTurn`,
-`lostBy`). Aim locks, the volley, stacking and the billboards are the engine's
+supplying what the engine does not know: `onBarrierHit` (a node brought to 0
+hp counts as cleared, and lights a badge when a threshold is reached),
+`onHazardHit` (a mine under a hex -> the caster's hp, detonation once the
+volley has landed), `onTurnFired` (the turn's tally), `checkEnd` (the turn
+budget - or every node down - ends it: a win with a badge, a loss without;
+replaces last-side-standing), `decoratePreview` (the billboard's mine note)
+and `debugResolve`. The rules' state is `sb.ext.hack` (`cleared`, `badges`,
+`total`, `lastTurn`). Aim locks, the volley, stacking and the billboards are the engine's
 and the arena's own.
 
 `hackview.js` layers the rest on top of the arena without touching it: the
-progress bar (a DOM panel with its own injected `<style>` - style.css is
+HACK panel - the turn counter and the three badges, lit with a pop as they
+are earned (a DOM panel with its own injected `<style>` - style.css is
 untouched), node bodies with the hp as a FLAT DECAL on the column's top (turned
 to the camera's bearing; nothing of the hack's floats, so the arena's billboard
 is the only floating reading), and the "Turn n / N" counter written into the
@@ -1590,7 +1600,11 @@ the x3 preview, fire, a mine hit, win -> reward window, lose -> consumed).
   `game.combatDelegate`.
 * `src/game.js`: `case 'hack'` in `enter()`; the `startHack()` / `finishHack()`
   methods (a combat-shaped context with no enemies; a win goes through
-  `finishCombat`, a loss just consumes).
+  `finishCombat`, a loss just consumes); the `rewardOptions` line in
+  `finishCombat` and the `limit` argument of `upgradeOffers` (both generic:
+  any graded reward could use them).
+* `src/main.js` (again): the `options` argument of `askUpgradePick`, and the
+  battle window not printing an "Enemies:" line when the list is empty.
 * `src/config/encounters.js`: `weights.hack`, `visuals.hack`, `fatigue.resetOn.hack`.
 * `src/local/battle/engine.js`: nothing hack-specific - the `rules` / `tags`
   options and their hooks are generic and stay (see "Rules hooks" above).
@@ -1601,10 +1615,10 @@ the x3 preview, fire, a mine hit, win -> reward window, lose -> consumed).
 
 ### Open questions for the experiment
 
-* Balance is a first guess: 14-18 nodes x 20 hp against 7 turns, with the
-  starter trio's 2-4 damage abilities, makes stacking mandatory - which is the
-  point - but whether 20 hp / x3 / overkill-hurts is the right tension, and
-  which of the twenty layouts play well, is for play to tell. Every number is
+* Balance is a first guess: 14-18 nodes x 20 hp against 5 volleys and badge
+  thresholds of 4 / 5 / 6 nodes, with the hack abilities the owner gave the
+  starter trio; whether those thresholds sit right, and which of the twenty
+  layouts play well, is for play to tell. Every number is
   in `hackconfig.js`, every layout in `hacklayouts.js`.
 * Should walking spend the turn budget too, or a per-unit action budget?
   (v1: turns only.)
