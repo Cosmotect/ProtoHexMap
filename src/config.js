@@ -30,9 +30,24 @@ export const CONFIG = {
 
   // ----- Run rules ---------------------------------------------------
   run: {
-    // Supplies are the currency: camps (rest.cost), shop options (shop.*Cost); treasure gives treasure.supplies.
-    // This is also the maximum: gains never exceed it.
+    // Supplies are the currency AND the run's clock: camps (rest.cost), shop
+    // options (shop.*Cost) and every step spend them; treasure (treasure.supplies)
+    // and won fights (battle.victorySupplies) restock them.
+    // RUN END (2026-09-22): the run is over the moment supplies reach 0. The step
+    // that empties the pack is allowed to happen - and if it lands the party on a
+    // forced encounter, the verdict WAITS for that encounter, because winning it
+    // may restock them (see game.js checkEndOfRun / encounterInFlight).
     startSupplies: 60,
+    // The ceiling, its own knob since 2026-09-22 - it used to be implicitly equal
+    // to startSupplies, so a full pack could never grow. Gains never exceed it
+    // (game.js addSupplies); the overflow dialog offers a camp first.
+    maxSupplies: 100,
+    // Spent on EVERY step, on top of the tile type's climb cost (config/world.js
+    // tileTypes.*.supplyCost, which is only charged when climbing). This is the
+    // dial that decides how long a run lasts; 0 turns the walking clock off and
+    // leaves supplies draining only through terrain, camps and shops (the
+    // behaviour before 2026-09-22).
+    stepSupplyCost: 1,
     revealRadius: 0,          // how many rings around the player get uncovered (0 = only the tile you stand on)
     seedAlwaysVisible: false, // false = the Stasis Seed hides under the fog like everything else
     revealStartRadius: 1,     // rings uncovered around the start tile at the beginning

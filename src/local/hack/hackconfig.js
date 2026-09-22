@@ -25,7 +25,8 @@
 export const HACK_CONFIG = {
   // ----- the board ---------------------------------------------------
   radius: 5,          // rings of local hexes (the arena is completely flat)
-  nodeHp: 20,         // hp of every node
+  nodeHpMin: 15,       // every node's hp is drawn (seeded, per node) from this range
+  nodeHpMax: 30,
   // WHERE nodes and mines go is a LAYOUT (hacklayouts.js): twenty of them,
   // each with its own counts, spacing and party start. A terminal draws one
   // by seed. forceLayout pins one by id for playtesting ('citadel', 'veins',

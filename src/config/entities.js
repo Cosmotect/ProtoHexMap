@@ -103,11 +103,9 @@ export const ENTITIES = {
     //             drives its own upgrade tree (config/upgrades.js), and the roster
     //             window and the party panel are laid out for the pair.
     roster: [
-      { name: 'Gorm', icon: '🪲', hp: 40, speed: 3, flying: false, abilities: ['clawSwipe', 'chargeHeadbutt'], story: 'Gorm is as tough as he is not patient. His clawed swipes can be lethal close up, and he knows how to get close up.' },
-      { name: 'Feren', icon: '🦋', hp: 30, speed: 5, flying: true, abilities: ['glaive', 'plasmaBolt'], story: 'Disappointed by the conduct of her brethren, she intends to use all of the help her new family can provide, to learn the truth about their world.' },
-      { name: 'Viridi', icon: '🦗', hp: 34, speed: 4, flying: false, abilities: ['glaive', 'plasmaBolt'], story: 'Disappointed by the conduct of her brethren, she intends to use all of the help her new family can provide, to learn the truth about their world.' },
-
-      { name: 'Hacker Valery', icon: '🇷🇺', hp: 34, speed: 4, flying: false, abilities: ['hackKite', 'hackflurry'], story: 'Hacks into governmental databases for juicy info to sell.' },
+      { name: 'Gorm', icon: '🪲', hp: 8, speed: 3, flying: false, abilities: ['clawSwipe', 'chargeHeadbutt'], story: 'Gorm is as tough as he is not patient. His clawed swipes can be lethal close up, and he knows how to get close up.' },
+      { name: 'Feren', icon: '🦋', hp: 5, speed: 5, flying: true, abilities: ['glaive', 'plasmaBolt'], story: 'Disappointed by the conduct of her brethren, she intends to use all of the help her new family can provide, to learn the truth about their world.' },
+      { name: 'Viridi', icon: '🦗', hp: 6, speed: 4, flying: false, abilities: ['glaive', 'plasmaBolt'], story: 'Disappointed by the conduct of her brethren, she intends to use all of the help her new family can provide, to learn the truth about their world.' },
 
       { name: 'Archer', icon: '🏹', hp: 28, speed: 4, flying: false, abilities: ['volley', 'lance'], story: 'Counts distance the way merchants count coin. Keeps one arrow set aside for an old debt and never says whose name is on it.' },
       { name: 'Mystic', icon: '🔮', hp: 22, speed: 3, flying: false, abilities: ['burst', 'mend'], story: 'Talks to the ember at the heart of things. What the fire answers is rarely comforting and has never yet been wrong.' },

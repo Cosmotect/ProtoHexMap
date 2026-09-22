@@ -608,10 +608,22 @@ export class MapRenderer {
     // Every reachable tile is the SAME next step, so they all share the colour
     // of the box that step will fill in the fatigue bar: green while the walk
     // is free, then yellow and on into red.
-    const hue = fatigueStepHue(this.config, game.state.fatigueSteps + 1);
+    // With fatigue DISABLED (2026-09-22) there is no box and no rising risk, so
+    // the rings fall back to the flat reachableRing - except on a tile whose step
+    // would empty the pack, which wears the bar's danger hue (per tile, below).
+    const fatigueOn = this.config.fatigue?.enabled !== false;
+    const hue = fatigueOn ? fatigueStepHue(this.config, game.state.fatigueSteps + 1) : null;
     this.reachHue = hue;
     if (!this.reachColor) this.reachColor = new THREE.Color();
-    this.reachColor.setHSL(hue / 360, 0.72, 0.55);   // matches the fbox border
+    if (hue !== null) this.reachColor.setHSL(hue / 360, 0.72, 0.55);   // matches the fbox border
+    else this.reachColor.set(this.config.colors.reachableRing);
+    if (!this.lastStepColor) this.lastStepColor = new THREE.Color();
+    this.lastStepColor.setHSL((this.config.fatigueBar.hueHigh ?? 2) / 360, 0.78, 0.55);
+    // The flat per-step charge (run.stepSupplyCost) is the same on every
+    // neighbour, so it is left OFF the cost decals: a number every tile wears
+    // says nothing about the choice in front of the player. The decal goes on
+    // meaning "this tile costs extra".
+    const flatStep = this.config.run.stepSupplyCost ?? 0;
     // Pools the step costs are measured against: the supplies on hand, and the
     // unit closest to dying (climb damage hits everybody, so that unit decides
     // whether the climb is survivable).
@@ -623,7 +635,12 @@ export class MapRenderer {
         rec.mesh.material.color.copy(this.targetColorFor(rec.hex));
       }
       rec.ring.visible = this.reachable.has(rec.hex.key);
-      this.syncCostDecal(rec, game.stepCost(rec.hex), game.state.supplies, lowHp);
+      // Painted red when this step is the run's last one - the only per-tile
+      // difference between the rings, and only while fatigue is off (with it on,
+      // the shared fatigue hue is the thing the rings are saying).
+      rec.ringColor = (!fatigueOn && rec.ring.visible && game.stepEndsRun(rec.hex)) ? this.lastStepColor : null;
+      const cost = game.stepCost(rec.hex);
+      this.syncCostDecal(rec, { ...cost, supplyCost: Math.max(0, (cost.supplyCost ?? 0) - flatStep) }, game.state.supplies, lowHp);
       // The marker on the party's own tile floats up so the token does not cut through it.
       rec.markerLiftTarget = rec.hex === game.state.position ? 1.1 : 0;
       // Danger chevrons above revealed battles: how much stronger the enemies are.
@@ -903,9 +920,10 @@ export class MapRenderer {
       if (rec.ring.visible) {
         const isHover = rec.hex.key === hoverKey;
         // Not the flat `reachableRing` any more: the ring wears the colour of
-        // the fatigue box this step will fill (syncState works it out).
+        // the fatigue box this step will fill, or - while fatigue is off - red
+        // on the step that would end the run (syncState works both out).
         if (isHover) rec.ring.material.color.set(c.hoverRing);
-        else rec.ring.material.color.copy(this.reachColor ?? new THREE.Color(c.reachableRing));
+        else rec.ring.material.color.copy(rec.ringColor ?? this.reachColor ?? new THREE.Color(c.reachableRing));
         rec.ring.material.opacity = isHover ? 1 : 0.45 + 0.35 * (0.5 + 0.5 * Math.sin(this.elapsed / 260 + rec.phase));
         const targetLift = isHover ? 0.12 : 0;
         rec.lift += (targetLift - rec.lift) * Math.min(1, dt / 60);

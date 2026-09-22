@@ -40,7 +40,7 @@ export function pickLayout(H, rng) {
  * @param seed       run seed (mixed with the world tile so every terminal differs)
  * @param hex        the world tile being entered ({ q, r })
  * @param partySize  living party members to seat
- * Returns { radius, tiles, spawns: { party, enemies }, nodeKeys, mineKeys, layout }.
+ * Returns { radius, tiles, spawns: { party, enemies }, nodeKeys, mineKeys, nodeHp, layout }.
  */
 export function buildHackRecipe(H, seed, hex, partySize) {
   const R = H.radius;
@@ -134,12 +134,19 @@ export function buildHackRecipe(H, seed, hex, partySize) {
   const mineKeys = draw(layout.mines, all.filter(free), (k) => layout.mineW(ctx, k, nodeKeys), 1);
   for (const k of mineKeys) used.add(k);
 
+  // Each node's hp is its own seeded roll in [nodeHpMin, nodeHpMax], drawn
+  // here (not by the rules/tags code) so it stays part of the same seeded
+  // stream as the rest of the board - same seed, same hp per node.
+  const nodeHp = {};
+  for (const k of nodeKeys) nodeHp[k] = rng.int(H.nodeHpMin, H.nodeHpMax);
+
   return {
     radius: R,
     tiles,
     spawns: { party, enemies: [] },
     nodeKeys,
     mineKeys,
+    nodeHp,
     layout: { id: layout.id, name: layout.name, desc: layout.desc },
     hack: true,
   };

@@ -89,7 +89,7 @@ export function createHack({ config, hack: H, radius, heights, party, partyKeys,
   let tidc = 1;
   const makeTag = (kind, k) => {
     const d = H.tags[kind];
-    const hp = kind === 'node' ? H.nodeHp : 0;
+    const hp = kind === 'node' ? Math.round(((H.nodeHpMin ?? 20) + (H.nodeHpMax ?? 20)) / 2) : 0;
     return { tid: tidc++, defId: kind, kind, k, name: d.name, icon: d.icon, color: d.color, desc: d.desc,
       hp, maxHp: hp, dmg: 0, heal: 0, life: 0, pushable: false, collectible: false, passPickup: false };
   };

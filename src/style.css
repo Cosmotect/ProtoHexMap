@@ -725,6 +725,12 @@ input:focus-visible {
   padding: 14px 18px 16px;
 }
 
+/* The upgrade reward chooser (chooseUpgrade) needs room for a row of big
+   cards rather than the usual list of text rows. */
+.dialog.dialog-wide {
+  width: min(760px, 94vw);
+}
+
 .dialog-head {
   display: flex;
   justify-content: space-between;
@@ -1962,6 +1968,85 @@ button.small {
 
 .rc-abs {
   letter-spacing: 0.1em;
+}
+
+/* ----- upgrade reward chooser (chooseUpgrade) ---------------------------
+   Big squares, one per offered upgrade, in the roster card's own visual
+   language (portrait chip + name + a stats-style line) so the reward reads
+   as a real choice instead of a plain list of text rows. Each card fades and
+   slides up a beat after the last (staggered animation-delay set inline per
+   card), replayed every time the grid is rebuilt. */
+.upg-grid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.upg-card {
+  width: 200px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  padding: 18px 14px 16px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  cursor: pointer;
+  transition: background 0.12s ease, transform 0.12s ease, border-color 0.12s ease;
+  animation: upg-card-in 0.4s ease both;
+}
+
+.upg-card:hover {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: var(--accent);
+  transform: translateY(-3px);
+}
+
+@keyframes upg-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.upg-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 38px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.upg-name {
+  font-weight: 700;
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.upg-unit {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+.upg-desc {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text);
 }
 
 /* ----- unit detail window (below the roster grid) ----------------------- */

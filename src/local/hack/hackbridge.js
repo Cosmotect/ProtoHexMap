@@ -92,7 +92,7 @@ export function createHackBridge({ config, getGame, getUi, cinematic, renderer, 
       noFlee: true,
       rules,
       // The board: nodes (barriers) and mines (hazards) as ordinary tags.
-      tags: makeHackTags(H, recipe.nodeKeys, recipe.mineKeys),
+      tags: makeHackTags(H, recipe.nodeKeys, recipe.mineKeys, recipe.nodeHp),
       onChange: () => {
         view.syncBattle();
         ui.updateBattle();

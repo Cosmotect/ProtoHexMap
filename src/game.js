@@ -84,11 +84,18 @@ export class Game {
       party: (scenario?.party ?? (config.party.roster ?? []).slice(0, config.party.size ?? 3))
         .map((u) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.hp, upgrades: [], alive: true, isPlayer: true })),
       supplies,
-      maxSupplies: scenario?.maxSupplies ?? supplies,
+      // The ceiling is its own config knob since 2026-09-22 (run.maxSupplies); a
+      // scenario may still fix its own, and the `?? supplies` tail keeps an old
+      // scenario that set only `supplies` behaving as it always did.
+      maxSupplies: scenario?.maxSupplies ?? run.maxSupplies ?? supplies,
       turn: 0,
       position: this.map.start,   // the hex the player stands on
       shortestPathLength: pathLength,
       // Fatigue: steps taken since the last encounter, and the resulting chance (%).
+      // While fatigue is DISABLED (config.fatigue.enabled === false, the current
+      // experiment) `fatigue` stays 0 and is never rolled on, but `fatigueSteps`
+      // keeps counting: it is also the clock the tutorial scenarios time their
+      // scripted ambushes off (nextScenarioAmbush).
       fatigueSteps: 0,
       fatigue: 0,
       encountersCleared: 0,
@@ -101,6 +108,11 @@ export class Game {
     this.log = [];
     this.listeners = [];
     this.pendingArrival = null;   // set while the guide holds what happens on the tile just reached
+    // True from the moment an interactive fight is handed to the arena until
+    // finishCombat comes back with its result. The out-of-supplies verdict reads
+    // it (encounterInFlight): a party that walks its last ration onto a forced
+    // fight is not dead yet - the salvage from winning may refill the pack.
+    this.combatInFlight = false;
 
     // Shops: each one rolls its stock now (seeded), so a revealed and visited shop can
     // show what it sells before the party walks back to it. Done last, so the rolls do
@@ -175,25 +187,39 @@ export class Game {
   // ridge-walking mountain-to-mountain or hill-to-hill, or coming back down
   // mountain-to-hill, costs nothing. A biome's own flat HP cost (wither) is
   // NOT height-gated - it hurts every step regardless of where you came from.
+  // On top of the terrain price, EVERY step costs run.stepSupplyCost (added
+  // 2026-09-22): walking itself is what empties the pack, and an empty pack ends
+  // the run.
   stepCost(hex) {
     const from = this.state.position;
     const type = this.config.tileTypes[hex.type] ?? {};
     const biome = this.config.biomes[hex.biome] ?? {};
     const climbing = (hex.terrainHeight ?? 0) > (from?.terrainHeight ?? 0);
     return {
-      supplyCost: climbing ? (type.supplyCost ?? 0) : 0,
+      supplyCost: (this.config.run.stepSupplyCost ?? 0) + (climbing ? (type.supplyCost ?? 0) : 0),
       hpCost: (climbing ? (type.hpCost ?? 0) : 0) + (biome.hpCost ?? 0),
     };
   }
 
-  // Hexes the player could step to right now.
+  // Would stepping onto `hex` empty the pack? The step is still LEGAL - running
+  // out of supplies is how a run ends, not something the rules forbid - but the
+  // HUD paints the tile as the last one and the hover tip says so.
+  stepEndsRun(hex) {
+    if (!hex || this.state.status !== 'playing') return false;
+    return this.state.supplies - this.stepCost(hex).supplyCost <= 0;
+  }
+
+  // Hexes the player could step to right now. Affordability is NOT a filter any
+  // more (it was until 2026-09-22, when supplies could not go below 0): a step
+  // the party cannot pay for is the last step of the run, and they are allowed
+  // to take it - see checkEndOfRun.
   reachable() {
     if (this.state.status !== 'playing') return [];
     const { q, r } = this.state.position;
     const out = [];
     for (const [nq, nr] of neighbors(q, r)) {
       const h = this.hexAt(nq, nr);
-      if (h && h.passable && this.stepCost(h).supplyCost <= this.state.supplies) out.push(h);
+      if (h && h.passable) out.push(h);
     }
     return out;
   }
@@ -203,7 +229,8 @@ export class Game {
     const pos = this.state.position;
     if (hexDistance(pos.q, pos.r, hex.q, hex.r) !== 1) return false;
     if (!hex.passable) return false;
-    if (this.stepCost(hex).supplyCost > this.state.supplies) return false;
+    // No affordability check: the step that empties the pack is the run's last
+    // step, not an illegal one (see reachable / checkEndOfRun).
     return true;
   }
 
@@ -247,9 +274,19 @@ export class Game {
     return this.enterAction().enabled;
   }
 
+  // Is the fatigue mechanic switched on? DISABLED as an experiment on 2026-09-22
+  // (config/encounters.js, the "Fatigue" section): with it off nothing is rolled,
+  // state.fatigue stays 0, the bar is hidden, and every forceable encounter fires
+  // on arrival. Every fatigue-shaped branch in this file asks here first, so the
+  // whole mechanic comes back by flipping one boolean.
+  fatigueEnabled() {
+    return this.config.fatigue?.enabled !== false;
+  }
+
   // Fatigue % the party will have after one more step (the step raises it AFTER the
   // arrival roll, which uses the current value shown in the HUD).
   fatigueAfterNextStep() {
+    if (!this.fatigueEnabled()) return 0;
     return lerpTable(this.config.fatigue.byStep, this.state.fatigueSteps + 1);
   }
 
@@ -264,10 +301,17 @@ export class Game {
     return this.config.fatigue.resetOn?.[type] === 'optional' ? t(`reset.note.${type}`) : '';
   }
 
-  // Chance (%) of being forced into something if the party steps onto `hex` now:
-  // the CURRENT fatigue, and only if the tile holds (or may hide) a forceable encounter.
-  // Returns null when the tile is revealed and cannot force anything.
+  // Chance (%) of being forced into something if the party steps onto `hex` now.
+  // Returns null when nothing can be forced there.
+  // With fatigue ON: the CURRENT fatigue, for a tile that holds - or may still
+  // hide - a forceable encounter.
+  // With fatigue OFF (the experiment): a revealed forceable encounter is a flat
+  // 100%, and an unrevealed tile promises nothing, because whether it forces
+  // anything depends entirely on what is under the fog.
   forcedChanceFor(hex) {
+    if (!this.fatigueEnabled()) {
+      return hex.revealed && hex.encounter && this.isForceable(hex.encounter) ? { chance: 100 } : null;
+    }
     const f = this.state.fatigue;
     if (!hex.revealed) return { chance: f };
     if (hex.encounter && this.isForceable(hex.encounter)) return { chance: f };
@@ -317,14 +361,17 @@ export class Game {
     hex.visited = true;
 
     // The arrival roll uses the fatigue you could see before stepping; then the step
-    // raises it (every step, encounter or not).
+    // raises it (every step, encounter or not). With fatigue DISABLED the counter
+    // still ticks (the tutorial ambushes read it) but the chance stays 0 and
+    // onEnter forces regardless - see fatigueEnabled().
     const rollChance = s.fatigue;
     s.fatigueSteps += 1;
-    s.fatigue = lerpTable(this.config.fatigue.byStep, s.fatigueSteps);
+    if (this.fatigueEnabled()) s.fatigue = lerpTable(this.config.fatigue.byStep, s.fatigueSteps);
 
-    // Terrain costs (mountains, hills): supplies and HP, only when climbing
-    // (see stepCost above).
-    if (cost.supplyCost > 0) s.supplies -= cost.supplyCost;
+    // The walking cost (run.stepSupplyCost) plus the terrain cost of a climb.
+    // Supplies floor at 0 rather than going negative: 0 IS the end of the run,
+    // and the end is decided in checkEndOfRun, after the arrival has played out.
+    if (cost.supplyCost > 0) s.supplies = Math.max(0, s.supplies - cost.supplyCost);
 
     const radius = this.config.run.revealRadius + (hex.revealBonus || 0);
     const newlyRevealed = this.reveal(hex.q, hex.r, radius, false);
@@ -333,7 +380,14 @@ export class Game {
     const costs = [];
     if (cost.supplyCost > 0) costs.push(t('log.cost.supplies', { n: cost.supplyCost }));
     if (cost.hpCost > 0) costs.push(t('log.cost.hp', { n: cost.hpCost }));
-    this.addLog('log.moved', { turn: s.turn, where: { hex: { type: hex.type, biome: hex.biome, q: hex.q, r: hex.r, encounter: hex.encounter } }, fatigue: s.fatigue });
+    // The step's line names the number that now paces the run: fatigue while the
+    // mechanic is on, supplies while it is off.
+    this.addLog(this.fatigueEnabled() ? 'log.moved' : 'log.moved.supplies', {
+      turn: s.turn,
+      where: { hex: { type: hex.type, biome: hex.biome, q: hex.q, r: hex.r, encounter: hex.encounter } },
+      fatigue: s.fatigue,
+      supplies: s.supplies,
+    });
     if (costs.length) this.addLog('log.moved.costs', { costs: costs.join(', ') });
     if (cost.hpCost > 0) this.damageParty(cost.hpCost, 'log.climb');
     if (!this.livingUnits().length) {
@@ -473,8 +527,13 @@ export class Game {
     return [];
   }
 
-  // What happens when stepping on a hex: the party is NOT pulled into the encounter
-  // automatically, unless fatigue rolls against them.
+  // What happens when stepping on a hex.
+  //   fatigue ON:  the party is NOT pulled into the encounter automatically -
+  //                only if the fatigue roll goes against them.
+  //   fatigue OFF: (the experiment, 2026-09-22) walking onto a FORCEABLE
+  //                encounter always drags the party in, no roll, chance 100.
+  //                Everything not in config.fatigue.forceable - a shop, a cache,
+  //                the Acolyte, the gate - is still entered by choice.
   // In SCENARIO mode there are no random forces at all: the only forced fights
   // are the scripted ambushes, which fire at their exact step on an empty tile.
   onEnter(hex, rollChance) {
@@ -495,9 +554,14 @@ export class Game {
     }
     if (!hex.encounter) return;
     const label = this.labelFor(hex.encounter);
-    if (this.isForceable(hex.encounter) && rollChance > 0 && this.rng.chance(rollChance / 100)) {
-      this.addLog('log.forced', { label: { key: `visual.${hex.encounter}.label` }, chance: rollChance });
-      this.emit('forced', { hex, type: hex.encounter, label, chance: rollChance });
+    const forceable = this.isForceable(hex.encounter);
+    // Fatigue off: certain. Fatigue on: rolled against the chance the HUD showed
+    // before the step.
+    const forced = forceable && (!this.fatigueEnabled() || (rollChance > 0 && this.rng.chance(rollChance / 100)));
+    if (forced) {
+      const chance = this.fatigueEnabled() ? rollChance : 100;
+      this.addLog('log.forced', { label: { key: `visual.${hex.encounter}.label` }, chance });
+      this.emit('forced', { hex, type: hex.encounter, label, chance });
       this.enter(true);
       return;
     }
@@ -611,6 +675,10 @@ export class Game {
     this.applyRest();
     this.resetFatigue();
     this.emit('camp', {});
+    // Supplies buy the camp, so a camp can be the thing that empties the pack.
+    // (Held back while a cache's overflow dialog is open - claimSupplies, which
+    // is what asked for this camp, gives the verdict once the find is taken.)
+    this.checkEndOfRun();
     this.emit('change');
     return true;
   }
@@ -688,7 +756,7 @@ export class Game {
 
     if (item === 'rest') {
       s.supplies -= cost;
-      this.addLog('log.shop.rested', { cost });
+      this.addLog(this.fatigueEnabled() ? 'log.shop.rested' : 'log.shop.rested.nofatigue', { cost });
       this.applyRest();
       this.resetFatigue();
     } else if (item === 'map') {
@@ -727,6 +795,9 @@ export class Game {
     // open window - and the tile's hover text - can still list what was here.
     // Fatigue is untouched: shop's reset rule is 'optional', not 'always'.
     if (this.shopSoldOut(hex)) this.consume(hex, 'shop', false);
+    // A purchase spends supplies, and spending the last of them ends the run the
+    // same way walking them off does.
+    this.checkEndOfRun();
     this.emit('change');
     return true;
   }
@@ -802,6 +873,10 @@ export class Game {
   finishCombat(ctx, result) {
     const s = this.state;
     const { hex, forced, opts, enemies, debuffs, saved } = ctx;
+    // The fight is back from the arena: the out-of-supplies verdict is free to
+    // read the pack again (see encounterInFlight). Cleared here, before the
+    // salvage below, so the re-check at the end of this method sees the truth.
+    this.combatInFlight = false;
 
     // Undo the temporary debuffs (wounds and deaths remain).
     for (let i = 0; i < s.party.length; i++) {
@@ -882,6 +957,11 @@ export class Game {
         this.emit('stasis', {});
       }
     }
+    // The verdict this fight may have been holding back: the party walked their
+    // last ration onto a forced fight, and what they salvaged from it (or failed
+    // to) decides the run. A no-op when the pack is not empty, and when the run
+    // already ended above.
+    this.checkEndOfRun();
     this.emit('change');
     return true;
   }
@@ -901,7 +981,12 @@ export class Game {
   startCombat(hex, forced, opts = {}) {
     if (this.combatDelegate) {
       const ctx = this.prepareCombat(hex, forced, opts);
+      // The fight is about to leave for the arena and will not report back until
+      // finishCombat. Flagged BEFORE the delegate runs, because a delegate that
+      // finishes synchronously clears it on the way out.
+      this.combatInFlight = true;
       if (this.combatDelegate(ctx)) return true;
+      this.combatInFlight = false;
       // Delegate refused: fall through to the simulation on the SAME context.
       const result = simulateBattle(this.rng, this.config.battle, this.state.party, ctx.enemies, !forced, ctx.damageMod);
       return this.finishCombat(ctx, result);
@@ -1032,7 +1117,7 @@ export class Game {
       case 'rest': {
         this.applyRest();
         this.resetFatigue();
-        effect = t('effect.rest', { pct: `${Math.round(this.config.rest.healFraction * 100)}%` });
+        effect = t(this.fatigueEnabled() ? 'effect.rest' : 'effect.rest.nofatigue', { pct: `${Math.round(this.config.rest.healFraction * 100)}%` });
         break;
       }
     }
@@ -1072,6 +1157,10 @@ export class Game {
     s.pendingSupplies = null;
     const got = this.addSupplies(p.amount);
     this.addLog(got < p.amount ? 'log.collected.partial' : 'log.collected', { got, amount: p.amount });
+    // The find may have been the last thing standing between an empty pack and
+    // the end of the run (see encounterInFlight): now that it is taken - or
+    // turned out not to be enough - the verdict can be given.
+    this.checkEndOfRun();
     this.emit('change');
     return true;
   }
@@ -1245,6 +1334,19 @@ export class Game {
     return `flavour.${kind}.${this.rng.int(1, FLAVOUR_POOL[kind] ?? 1)}`;
   }
 
+  // Is something the party was dragged into still resolving, and still able to
+  // hand them supplies? Two cases, and both are the reason the out-of-supplies
+  // verdict below can be held back:
+  //   * an interactive fight is out on the arena (combatInFlight) - winning it
+  //     salvages battle.victorySupplies;
+  //   * a cache or an event has offered supplies the player has not taken yet
+  //     (state.pendingSupplies, the overflow dialog).
+  // Both clear themselves (finishCombat, claimSupplies), and both call
+  // checkEndOfRun again on the way out, so the verdict is never simply dropped.
+  encounterInFlight() {
+    return this.combatInFlight || !!this.state.pendingSupplies;
+  }
+
   checkEndOfRun() {
     const s = this.state;
     if (s.status !== 'playing') return;
@@ -1253,6 +1355,19 @@ export class Game {
       s.status = 'won';
       s.endReason = ['end.scenario', { turn: s.turn }];
       this.addLog('log.scenarioDone');
+      this.emit('end', { status: s.status });
+      return;
+    }
+    // OUT OF SUPPLIES (2026-09-22): an empty pack ends the run. The step that
+    // empties it is allowed to happen, so this is checked AFTER the arrival has
+    // played out - and if that arrival forced the party into something that can
+    // still pay them (a fight on the arena, a cache waiting to be claimed), the
+    // verdict waits for it. finishCombat / claimSupplies come back here.
+    if (s.supplies <= 0) {
+      if (this.encounterInFlight()) return;
+      s.status = 'lost';
+      s.endReason = ['end.supplies', { turn: s.turn }];
+      this.addLog('log.outOfSupplies', { turn: s.turn });
       this.emit('end', { status: s.status });
       return;
     }

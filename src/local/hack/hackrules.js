@@ -104,12 +104,16 @@ export function createHackRules(H, { onFloater } = {}) {
 // The node / mine tag instances the bridge drops into the engine's tag table.
 // Same shape the engine's own tagInst builds, so every rule that reads a tag
 // (walking, sHit, the round's expiry pass) treats them as ordinary tags.
-export function makeHackTags(H, nodeKeys, mineKeys) {
+// `nodeHp` is the { key -> hp } map buildHackRecipe rolled (one seeded draw
+// per node, in [nodeHpMin, nodeHpMax]); a node missing from it falls back to
+// the middle of that range.
+export function makeHackTags(H, nodeKeys, mineKeys, nodeHp = {}) {
   const tags = {};
   let n = 1;
+  const fallbackHp = Math.round(((H.nodeHpMin ?? 20) + (H.nodeHpMax ?? 20)) / 2);
   const inst = (kind, k) => {
     const d = H.tags[kind];
-    const hp = kind === 'node' ? H.nodeHp : 0;
+    const hp = kind === 'node' ? (nodeHp[k] ?? fallbackHp) : 0;
     return { tid: 'h' + (n++), defId: kind, kind, k, name: d.name, icon: d.icon, color: d.color, desc: d.desc,
       dmg: 0, heal: 0, life: 0, hp, maxHp: hp,
       pushable: false, collectible: false, passPickup: false,

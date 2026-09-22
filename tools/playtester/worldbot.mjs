@@ -133,9 +133,16 @@ function pathTo(game, persona, targetKey, avoid) {
 }
 
 // What to avoid standing on while merely passing through.
+// The fatigue test is what a persona used to weigh: a forceable tile became a
+// wall only once the bar was high enough for the roll to bite. With fatigue
+// DISABLED (2026-09-22) there is no roll - every forceable tile drags the party
+// in, every time - so one merely being passed through is a wall unconditionally,
+// however brave the persona. Reading this off game.fatigueEnabled() keeps both
+// worlds honest, instead of leaving every bot permanently "not tired" and
+// strolling into everything on the map.
 function makeAvoid(game, persona) {
   const courage = courageOf(game, persona);
-  const fatigued = game.state.fatigue > persona.fatigueCaution;
+  const fatigued = !game.fatigueEnabled() || game.state.fatigue > persona.fatigueCaution;
   return (h) => {
     if (!h.encounter) return false;
     if (COMBAT_ENCOUNTERS.has(h.encounter) && game.dangerRank(h) > courage) return true;

@@ -66,7 +66,22 @@ void and the balance must be re-measured against interactive play.
   `run.revealRadius` (0) + their `terrainHeight`; `run.revealStartRadius` (1) rings
   open around the start. The Seed hides under the fog like everything else.
 * **Movement**: one step per turn to a neighbouring walkable tile, paying the tile's
-  costs. Supplies are the only currency, capped at `run.startSupplies` (60).
+  costs. Supplies are the only currency: the run starts with `run.startSupplies` (60)
+  and is capped at `run.maxSupplies` (100) - its OWN knob since 2026-09-22, so a full
+  pack can still grow.
+* **Supplies are the run's clock (2026-09-22)**: every step costs
+  `run.stepSupplyCost` (1) on top of any terrain charge, and **the run ends the moment
+  supplies reach 0**. The step that empties the pack is LEGAL - affordability is no
+  longer a movement filter, and `game.stepEndsRun(hex)` is what the HUD uses to paint
+  that tile's ring red and warn in the hover tip. One exception decides the verdict:
+  if that last step landed the party on a FORCED encounter, the end is held back until
+  the encounter reports back, because winning it may restock them
+  (`game.encounterInFlight`, checked by `checkEndOfRun`; `finishCombat` and
+  `claimSupplies` call the check again on their way out). A cache or a shop the party
+  merely stands next to is NOT a reprieve - only a forced encounter is. Spending the
+  last supplies on a camp or a purchase ends the run the same way. Set
+  `stepSupplyCost` to 0 to go back to the pre-2026-09-22 economy, where only climbs,
+  camps and shops drained the pack.
 * **Party**: `party.size` (3) units, taken from the top of `party.roster` (10
   characters; name, icon, hp - the character's ABILITIES live in
   `config/abilities.js`, exactly TWO per character). Party units have NO power
@@ -77,17 +92,41 @@ void and the balance must be re-measured against interactive play.
   (the start tile stays empty), type by weight: battle 5, event 2, treasure 0.8,
   shop 0.75, acolyte 0.15 (min 1 acolyte per map). Standing on one enables **Enter**
   (E); on an empty tile the same button makes camp: `rest.cost` (20) supplies, heals
-  each living unit `rest.healFraction` (50%) of max HP, resets fatigue. Encounter
+  each living unit `rest.healFraction` (50%) of max HP (and resets fatigue, while the
+  mechanic is on). Encounter
   windows have no close button; choices that abandon a reward ask for confirmation.
-* **Fatigue** (`config.fatigue`): a step counter since the last reset maps through
-  `byStep` (interpolated, clamped: step 4 = 0%, 5 = 5, 6 = 15, 7 = 30, 8 = 50,
-  9 = 75) to the chance that arriving on a tile with a FORCEABLE encounter (battle,
-  Stasis fights, event) forces the party in; the roll uses the value shown before the
-  step. A forced fight opens with an enemy AMBUSH phase. `resetOn` per type: battle /
-  Stasis / acolyte / camp always reset, shop / event optionally, treasure never.
-  The **fatigue bar** (top centre) draws one box per step, coloured by its percentage,
-  filling as the party walks and emptying on a reset; hovering a reachable tile shows
-  the forced chance and the fatigue after the step.
+* **Forced encounters - fatigue DISABLED as an experiment (2026-09-22)**: stepping
+  onto a tile that holds a FORCEABLE encounter (`config.fatigue.forceable`: battle,
+  Stasis Seed, Stasis Colony, event) now **always** drags the party into it - no roll,
+  no percentage. A forced fight still opens with an enemy AMBUSH phase. Everything
+  outside that list (shop, cache, Acolyte, gate, hack) is still entered by choice with
+  **Enter**. What paces a run is no longer the risk of being caught but the supply
+  clock above.
+  * The switch is `config.fatigue.enabled` (false). Nothing was deleted: with it true
+    the old behaviour returns whole - the roll, the bar, the tips. Every branch asks
+    `game.fatigueEnabled()` (mirrored in `ui.js` as `fatigueOn()` and read directly by
+    `render.js` and `text.js`), so the mechanic lives behind one boolean.
+  * While off: `state.fatigue` stays 0, the **fatigue bar** is hidden, the hover tip
+    drops its percentages and shows the step's supply cost and what is left instead,
+    the reachable rings go back to the flat `colors.reachableRing`, and the legend,
+    the movement log, the shop header and the "resets fatigue" lines all switch to
+    their fatigue-free wording (`text.js` `tFatigue` + the `.nofatigue` locale twins;
+    `encounterInfo` now GENERATES the "can you be forced in here" sentence from the
+    config instead of it being hand-written into each `visual.*.info`).
+  * `state.fatigueSteps` keeps counting even while the mechanic is off: it is also the
+    clock the tutorial scenarios time their scripted ambushes off
+    (`nextScenarioAmbush`). `resetOn` still fires and still resets it.
+  * **Tutorials**: all three switch `run.stepSupplyCost` back to 0 through their
+    `configPatch` (their supply budgets were hand-tuned when walking was free), and
+    tutorial 2 additionally switches fatigue back ON for itself, because two of its
+    cards point at the fatigue bar. Both are marked TODO in the scenario files: if the
+    experiment sticks, those maps need re-authoring around the supply clock.
+  * *(For reference, the mechanic as it stands when enabled: a step counter since the
+    last reset maps through `byStep` - interpolated, clamped: step 4 = 0%, 5 = 5,
+    6 = 15, 7 = 30, 8 = 50, 9 = 75 - to the chance that arriving on a forceable tile
+    forces the party in, rolled against the value shown BEFORE the step. `resetOn` per
+    type: battle / Stasis / acolyte / camp always, shop / event optionally, treasure
+    never. The bar draws one box per step, coloured by its percentage.)*
 * **The Stasis** (`config.stasis`) - the win condition and the clock:
   * One **Seed** on ring >= `seedMinRing` ('half' = floor(radius/2)); destroying it
     wins the run. `colonyCount` (4) future **Colony** sites; their only placement rule
@@ -122,8 +161,10 @@ void and the balance must be re-measured against interactive play.
     5 `colonies` variants (leader + chaff, or an equal-power swarm). Victory: one
     ability upgrade pick (x`rewardPicks` after a Colony),
     +`battle.victorySupplies` (5) supplies, a lore line.
-  * *Treasure*: +`treasure.supplies` (40); if it overflows the cap on an empty tile,
-    the dialog offers "make camp first, then collect".
+  * *Treasure*: +`treasure.supplies` (40); if it overflows `run.maxSupplies` on an
+    empty tile, the dialog offers "make camp first, then collect". Not forceable - a
+    cache the party is standing on does nothing for them until they press Enter, which
+    also means it cannot save a run that has just run out of supplies.
   * *Event*: one of `events.js` - reveal effects (nearest shop / a blob of tiles /
     hidden battles / a vantage), a supply find (10-20), a scholar (a random unit
     unlocks a random available upgrade), the black market (pick a unit, then pick
@@ -131,7 +172,8 @@ void and the balance must be re-measured against interactive play.
     max HP; decline allowed at either step), Nomads (a battle through the same
     combat path), or a merchant caravan (acts as a free camp). (Pure-lore events with
     no effect were removed.)
-  * *Shop*: stays on its tile, revisitable; entering does not reset fatigue. Stock =
+  * *Shop*: stays on its tile, revisitable; never forceable, and entering does not
+    reset fatigue. Stock =
     2 guaranteed options (Training = one upgrade pick for 25, reveal 8 tiles for 15)
     + 2 random from (rest 15, relic 25 = same as Training, rumours 15, spare parts
     30 = revive at 50%). Each option sells once; hovering a visited shop lists its
@@ -145,7 +187,8 @@ void and the balance must be re-measured against interactive play.
     line from their pool (`FLAVOUR_POOL` in game.js; texts in the locale table).
 * **Camera**: perspective only, follows the player with a glide
   (`camera.followPlayer`). Left-drag pan, right-drag orbit, wheel zoom, arrows pan.
-* **HUD**: one top-centre bar (supplies | fatigue boxes | turn), a bottom-centre bar
+* **HUD**: one top-centre bar (supplies | fatigue boxes, hidden while fatigue is
+  disabled | turn), a bottom-centre bar
   holding just the Enter button (the battle bar replaces it during a fight), the party
   panel left, a collapsible legend bottom-right (entries expand with config-generated
   info texts), a menu top-right (M: seed, load, copy link, new map, restart, reveal,
@@ -420,7 +463,7 @@ void and the balance must be re-measured against interactive play.
     def + unlocked upgrade nodes (`def.abilityDefs`, from src/upgrades.js; the
     engine's `abilityFor(unit, id)` serves them, the battle bar reads them too).
     The Stasis "damage" debuff arrives as `partyDamageMod`, a flat penalty to
-    party ability damage. A fatigue-forced fight opens with an AMBUSH - one extra
+    party ability damage. A forced fight opens with an AMBUSH - one extra
     enemy phase before round 1 (no tag ticks, no round counter).
   * **Deployment - the player places the party** (`local.deploy`): a fight the party
     WALKED INTO opens with a placement step. The arena keeps the party off the board
@@ -429,7 +472,7 @@ void and the balance must be re-measured against interactive play.
     map's cost-decal idea, an icon instead of numbers, red over an occupied tile),
     left click locks that unit in, right click takes the last one back, and the
     fight is built the moment the last unit is down (`#deploy-bar` shows who is
-    being placed). A FORCED fight (fatigue ambush) gets no choice: the party is
+    being placed). A FORCED fight (an ambush) gets no choice: the party is
     scattered at random, but as a GROUP - no two units further than
     `deploy.maxSpread` (6) apart (`pickClusteredTiles`). Arenas whose recipe
     authors party spawns, and "Restart battle", skip the step.
@@ -495,7 +538,7 @@ around.
   plateau at 4 needs a ramp of 3s and a pit at 0 needs a rim of 1s, or nothing
   walks in or out. Every pinned ground enemy must be able to walk to where the
   party can stand, and every free ground tile should be walkable to, because a
-  fatigue-forced fight drops the party on random tiles (a sealed tile is a stuck
+  forced fight drops the party on random tiles (a sealed tile is a stuck
   unit; the harness guards its own spawns, the live game does not). Flying
   creatures (Ether Leviathan, Ether Spawn, Stasis Mote) are exempt - leviathan-deep
   keeps its boss on a one-tile island for exactly that reason. Fire does not block
@@ -622,7 +665,7 @@ everything downstream (renderer, HUD, combat) sees an ordinary, just small, map.
   map): explicit tile table (type / biome / revealed), encounters with exact enemy
   groups, shop stock, fixed event ids and treasure amounts, an optional fixed party
   and supplies, scripted `ambushes` (a forced fight fires at an exact step count on
-  an empty tile - fatigue stops rolling dice entirely in scenario mode), a `goal`
+  an empty tile - nothing is ever forced at random in scenario mode), a `goal`
   (`{ type: 'reach', tile }` with the hidden waypoint marker, or `{ type: 'seed' }` -
   destroying the scripted Seed wins) and an optional `configPatch` (per-run CONFIG
   overrides, applied and undone by main.js). A scripted Stasis: a `stasisSeed`
@@ -692,7 +735,7 @@ hex    = { q, r, ring, key, type, biome, passable, supplyCost, encounter, isStar
            isSeed, isColony, revealed, visited, x, y,
            recipe (the fight's handcrafted map), enemies (its pinned line-up) }
 state  = { status, party, supplies, maxSupplies, turn, position, shortestPathLength,
-           fatigueSteps, fatigue, coloniesCleared, endReason }
+           fatigueSteps, fatigue, coloniesCleared, endReason }   // maxSupplies from run.maxSupplies
 stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }], witherCharge }
 ```
 * 2026-09-02 Shield deadlock fixed (see the AI scoring note above), the **retreat
@@ -899,6 +942,15 @@ stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }
     through, not where the victim ends up. Collisions, crushes and falls resolve in
     waves against everything else the same cast moves, and playing that out would
     mean simulating the cast to draw a hint about it.
+* 2026-09-22 **`tools/worldmap-test.mjs`** (`npm run test:worldmap`): the
+  world-map twin of the engine test - the same idea (headless, seconds, no
+  browser), pointed at the rules in `src/game.js` rather than at a fight. It pins
+  the 2026-09-22 rework: fatigue disabled means forceable encounters always fire,
+  an empty pack ends the run, a FORCED encounter holds that verdict until it
+  reports back (won and paid / won and paid nothing / lost), a cache the party
+  never entered does NOT hold it, and `run.maxSupplies` is the ceiling. Each case
+  builds its own tile by hand (`clearAround`) so nothing depends on what the
+  generator happened to roll.
 * 2026-09-10 **`tools/engine-test.mjs`** (`npm run test:engine`): headless rules
   checks that run in seconds. The smoke test drives the real browser and stays the
   authority on anything the player can see, but some rules are far easier to state
@@ -1510,7 +1562,8 @@ ability. (Not built yet: v1 is the play mode itself.)
   elevation wave off) of `radius` 5. WHERE nodes and mines go is one of TWENTY
   LAYOUTS, drawn by seed per terminal (`forceLayout` pins one by id for
   playtesting, `layoutPool` narrows the draw). A layout is data: node and mine
-  counts (14-18 nodes, 14-30 mines - dense on purpose, since 2026-09-15), the
+  counts (14-18 nodes, 7-15 mines - halved from the original 14-30 once
+  playtesting found the boards too dense, since 2026-09-22), the
   minimum node spacing (1 = nodes may touch), where the party starts ('centre'
   or a cluster on one random side of the rim, 'edge'), and two WEIGHT functions
   over the free tiles - one for nodes, one (seeing the placed nodes) for mines;
@@ -1561,7 +1614,7 @@ ability. (Not built yet: v1 is the play mode itself.)
 * **Reaching it**: `hack` is an ordinary encounter type rolled at world
   generation (`encounters.weights.hack`, 1.5 - set 0 to keep it off generated
   maps), a lime box marker. Enter it like a battle: the same cloud dive, no
-  deployment step (the recipe seats the party). Not forceable by fatigue.
+  deployment step (the recipe seats the party). Not forceable - it is entered by choice.
 
 ### How it is built - a rules plug-in on the combat engine
 
@@ -1615,10 +1668,11 @@ the x3 preview, fire, a mine hit, win -> reward window, lose -> consumed).
 
 ### Open questions for the experiment
 
-* Balance is a first guess: 14-18 nodes x 20 hp against 5 volleys and badge
-  thresholds of 4 / 5 / 6 nodes, with the hack abilities the owner gave the
-  starter trio; whether those thresholds sit right, and which of the twenty
-  layouts play well, is for play to tell. Every number is
+* Balance is a first guess: 14-18 nodes at 15-30 hp each (seeded per node,
+  since 2026-09-22 - was a flat 20) against 5 volleys and badge thresholds of
+  4 / 5 / 6 nodes, with the hack abilities the owner gave the starter trio;
+  whether those thresholds sit right, and which of the twenty layouts play
+  well, is for play to tell. Every number is
   in `hackconfig.js`, every layout in `hacklayouts.js`.
 * Should walking spend the turn budget too, or a per-unit action budget?
   (v1: turns only.)
@@ -1634,6 +1688,16 @@ the x3 preview, fire, a mine hit, win -> reward window, lose -> consumed).
 
 1. Should fog ever re-cover tiles (line of sight), or stay permanent? Currently permanent.
 2. Is "supplies" the resource we want, or days / food / something tied to combat?
+   Since 2026-09-22 supplies also END the run, so this question now decides the
+   pacing of the whole map rather than just what camps cost.
+2a. The fatigue experiment (2026-09-22): does "every forceable encounter always
+   fires, and supplies are the clock" read better than a rising risk of ambush?
+   If it sticks, delete the mechanic properly and re-author tutorial 2, which
+   still teaches it. If it does not, `config.fatigue.enabled: true` brings it
+   back whole.
+2b. Should a cache the party is STANDING on be able to save a run that just ran
+   out of supplies? Today it cannot - only a forced encounter holds the verdict -
+   so it is possible to die on top of 40 supplies.
 3. Party HP never grows, only abilities do (through the upgrade trees). Is that the
    pacing we want, or should HP / healing scale too?
 4. Map variants: branching lanes? Bigger fields? Multiple Seeds?

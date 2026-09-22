@@ -1516,15 +1516,17 @@ export class LocalMapView {
     const party = this.battle.state.units.filter((x) => !x.isEnemy).sort((a, b) => a.idx - b.idx);
     return Math.max(0, party.indexOf(u));
   }
-  // Thin aim outlines for the tiles an aim covers (plus the aim tile itself),
-  // in the unit's slot colour. `list` collects the meshes.
+  // Thin aim outlines for the tiles an aim actually covers, in the unit's
+  // slot colour. `anchor` (the aimed-at tile) is NOT added on its own - for
+  // a pattern that doesn't cover its own anchor (e.g. the hack's flurry/kite/
+  // splay-hex abilities), the anchor tile is not in the damage zone and must
+  // not be outlined as if it were. `list` collects the meshes.
   addAimOutlines(u, tiles, anchor, list, lift = 0) {
     const slot = this.partySlot(u);
     const colors = this.config.colors.lockColors ?? [0xff3b3b];
     const color = colors[slot % colors.length];
     const geo = this.lockRingGeo(slot);
     const keys = new Set(tiles);
-    if (anchor) keys.add(anchor);
     for (const k of keys) {
       const tile = this.map.hexes.get(k); if (!tile) continue;
       const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95, depthWrite: false, side: THREE.DoubleSide }));

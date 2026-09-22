@@ -937,18 +937,41 @@ fs.mkdirSync(OUT, { recursive: true });
   }
   await waitIdle();
   await recenter();
-  const probe = await page.evaluate(() => { const g = window.game; const n = g.reachable()[0]; return n ? [n.q, n.r, g.fatigueAfterNextStep()] : null; });
-  if (probe && probe[2] > 0) {
-    const p = await screenPos(probe[0], probe[1]);
+  // The hover popup. What it is expected to say depends on whether fatigue is
+  // switched on (config.fatigue.enabled) - it was DISABLED as an experiment on
+  // 2026-09-22, and the popup then talks about supplies instead of percentages.
+  // Both readings are checked here so the test follows the config rather than
+  // pinning one era's wording.
+  const probe = await page.evaluate(() => {
+    const g = window.game; const n = g.reachable()[0];
+    if (!n) return null;
+    return { q: n.q, r: n.r, fatigueOn: g.fatigueEnabled(), next: g.fatigueAfterNextStep(), spend: g.stepCost(n).supplyCost };
+  });
+  if (probe && (probe.fatigueOn ? probe.next > 0 : probe.spend > 0)) {
+    const p = await screenPos(probe.q, probe.r);
     await page.mouse.move(p.x, p.y); await page.waitForTimeout(250);
     const tip = await page.evaluate(() => { const t = document.getElementById('fatigue-tip'); return t.classList.contains('hidden') ? null : t.textContent; });
     // (The single HUD fatigue number is gone - the fatigue bar replaced it - so the
     // popup is checked on its own.)
-    if (!tip) problems.push('fatigue popup did not appear on hover');
-    const nextOk = await page.evaluate(() => { const t = document.getElementById('fatigue-tip').textContent; return t.includes(`after this step: ${window.game.fatigueAfterNextStep()}%`); });
-    if (!nextOk) problems.push('popup does not show the next-step fatigue value');
+    if (!tip) problems.push('hover popup did not appear');
+    if (probe.fatigueOn) {
+      const nextOk = await page.evaluate(() => { const t = document.getElementById('fatigue-tip').textContent; return t.includes(`after this step: ${window.game.fatigueAfterNextStep()}%`); });
+      if (!nextOk) problems.push('popup does not show the next-step fatigue value');
+    } else if (tip && !/supplies/i.test(tip)) {
+      problems.push('popup does not show the step\'s supply cost: ' + tip);
+    }
     await page.screenshot({ path: path.join(OUT, '02b-fatigue-tip.png') });
   }
+  // The fatigue bar follows the same switch: boxes while it is on, hidden while
+  // it is off.
+  const barOk = await page.evaluate(() => {
+    const bar = document.getElementById('fatigue-bar');
+    const on = window.game.fatigueEnabled();
+    const hidden = bar.classList.contains('hidden');
+    const boxes = document.querySelectorAll('#fatigue-boxes .fbox').length;
+    return { ok: on ? (!hidden && boxes > 0) : (hidden && boxes === 0), on, hidden, boxes };
+  });
+  if (!barOk.ok) problems.push('fatigue bar does not match config.fatigue.enabled: ' + JSON.stringify(barOk));
   // Forced encounter: banner first, dialog later.
   await page.evaluate(() => { const g = window.game; g.emit('forced', { label: 'Battle', chance: 50 }); g.emit('dialog', { kind: 'event', title: 'Forced test', text: 't', effect: 'e' }); });
   await page.waitForTimeout(150);
@@ -1029,8 +1052,11 @@ fs.mkdirSync(OUT, { recursive: true });
   const unblurred = await page.evaluate(() => !document.getElementById('scene').classList.contains('blurred'));
   if (!unblurred) problems.push('blur stayed after closing settings');
 
-  // A fatigue-forced fight on a plain run: the dive starts by itself and the
-  // battle opens with the AMBUSH enemy phase.
+  // A FORCED fight on a plain run: the dive starts by itself and the battle opens
+  // with the AMBUSH enemy phase. Pinning the fatigue to 100 is what made the roll
+  // certain while fatigue was on; with it off (the 2026-09-22 experiment) every
+  // forceable tile forces anyway, so the line is harmless either way and the rest
+  // of the check is unchanged.
   await page.evaluate(() => { const g = window.game; g.state.fatigueSteps = 9; g.state.fatigue = 100; g.emit('change'); });
   {
     const n = await page.evaluate(() => { const g = window.game; const h = g.reachable().find((x) => !x.encounter) ?? g.reachable()[0]; h.encounter = 'battle'; h.enemies = [{ name: 'Test', hp: 10, maxHp: 10, power: 9, alive: true }]; window.__renderer.loadGame(g); return [h.q, h.r]; });

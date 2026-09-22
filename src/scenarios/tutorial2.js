@@ -70,7 +70,24 @@ export const TUTORIAL_2 = {
   maxSupplies: 60,
   // Fatigue, compressed so its lesson fits a ten-tile island: the bar fills
   // fast and the scripted ambush lands right where the bar says it should.
+  //
+  // 2026-09-22: fatigue is DISABLED in the main game as an experiment
+  // (config/encounters.js). This scenario switches it back on FOR ITSELF, because
+  // two of its cards ("The road wears you down" and the ambush card) point at the
+  // fatigue bar and the map's whole lesson is built on it. Nothing is at risk in
+  // doing so: a scenario never rolls for a forced encounter anyway (game.js
+  // onEnter returns early in scenario mode), so here the bar is pure teaching.
+  // TODO if the experiment sticks: re-author this map around supplies as the
+  // clock, and drop this line together with the two fatigue cards below.
+  // 2026-09-22: the main game now charges run.stepSupplyCost for EVERY step and
+  // ends the run on an empty pack. This map's supply budget was hand-tuned when
+  // walking was free, so the walking clock is switched off here rather than
+  // silently re-balancing a teaching map.
+  // TODO if the experiment sticks: re-tune this map's `supplies` around the
+  // walking cost and drop this override, so the tutorial teaches the real rule.
   configPatch: {
+    'run.stepSupplyCost': 0,
+    'fatigue.enabled': true,
     'fatigue.byStep': { 2: 0, 3: 30, 4: 70, 5: 100 },
   },
   ambushes: [

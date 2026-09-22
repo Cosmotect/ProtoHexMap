@@ -20,7 +20,7 @@ import { recipeFromCode } from './local/mapcode.js';
 import { createHackBridge, HACK_TYPE } from './local/hack/hackbridge.js';
 import { makeEnemyOfType } from './battle.js';
 import { t, tn, initLanguage, applyStaticTexts, onLanguageChange } from './i18n.js';
-import { tc } from './text.js';
+import { tc, tFatigue } from './text.js';
 import { initAudio } from './audio.js';
 
 initLanguage();
@@ -900,7 +900,7 @@ function showDialog(d) {
     if (d.canCamp) {
       actions.push({
         label: t('dialog.campFirst', { cost: d.campCost }),
-        sub: t('dialog.campFirst.sub', { fit: Math.min(d.amount, d.amount - d.overflow + d.campCost), amount: d.amount, partial: d.amount - d.overflow }),
+        sub: tFatigue('dialog.campFirst.sub', CONFIG, { fit: Math.min(d.amount, d.amount - d.overflow + d.campCost), amount: d.amount, partial: d.amount - d.overflow }),
         onClick: () => { game.claimSupplies(true); ui.closeDialog(); },
       });
     }
@@ -1014,14 +1014,23 @@ function showDialog(d) {
     };
     const build = (g) => ({
       title: t('shop.title'),
-      html: `${d.lore ? `<p class="flavour">${escapeHtml(t(d.lore))}</p>` : ''}<p>${t('shop.text', { supplies: g.state.supplies, fatigue: g.state.fatigue })}</p><span class="muted">${t('shop.note')}</span>`,
+      // The header names the two numbers a purchase is weighed against. With
+      // fatigue off (the 2026-09-22 experiment) the second one is no longer
+      // fatigue but how much of the pack's ceiling is still unfilled.
+      html: `${d.lore ? `<p class="flavour">${escapeHtml(t(d.lore))}</p>` : ''}<p>${g.fatigueEnabled()
+        ? t('shop.text', { supplies: g.state.supplies, fatigue: g.state.fatigue })
+        : t('shop.text.supplies', { supplies: g.state.supplies, max: g.state.maxSupplies })
+      }</p><span class="muted">${t(g.fatigueEnabled() ? 'shop.note' : 'shop.note.supplies')}</span>`,
       actions: [
         ...stock.options.map((id) => {
           const blocker = g.shopBlocker(hex, id);
           const sold = blocker === 'sold';
           return {
             label: sold ? t('shop.option.sold', { label: t(`shop.${id}.name`) }) : t('shop.option', { label: t(`shop.${id}.name`), cost: g.shopCost(id) }),
-            sub: sold ? t('shop.sold.sub') : blocker === 'useless' ? t(`shop.${id}.useless`) : t(`shop.${id}.sub`, subParams),
+            // A rest's description ends with "resets fatigue", so it goes through
+            // tFatigue; the other options say nothing about fatigue and do not.
+            sub: sold ? t('shop.sold.sub') : blocker === 'useless' ? t(`shop.${id}.useless`)
+              : id === 'rest' ? tFatigue('shop.rest.sub', CONFIG, subParams) : t(`shop.${id}.sub`, subParams),
             disabled: !!blocker,
             cls: sold ? 'sold' : '',
             onClick: clickFor[id] ?? (() => {}),

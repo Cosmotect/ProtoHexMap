@@ -1,6 +1,7 @@
 // =====================================================================
 //  ENCOUNTER CONFIG - what sits on the tiles and what engaging it does,
-//  plus fatigue (the rule that forces encounters on a tired party).
+//  plus fatigue (the rule that forced encounters on a tired party -
+//  DISABLED as an experiment on 2026-09-22, see the "Fatigue" section).
 //  (Part of the config split: world.js / encounters.js / entities.js / config.js)
 // =====================================================================
 
@@ -37,12 +38,16 @@ export const ENCOUNTERS = {
       battle: { color: 0xe2474b, shape: 'octahedron' },
       event: { color: 0xa56cf5, shape: 'icosahedron' },
       rest: { color: 0xff9f43, shape: 'cone' },
-      shop: { color: 0x45c7d1, shape: 'box' },
+      // neverForced: the legend spells out that this tile can never drag the
+      // party in (text.js encounterInfo). Only for the types where that is a
+      // real reassurance - everything simply absent from fatigue.forceable is
+      // safe too, and says nothing.
+      shop: { color: 0x45c7d1, shape: 'box', neverForced: true },
       treasure: { color: 0xf5c542, shape: 'dodecahedron' },
       stasisSeed: { color: 0x9b1c31, shape: 'cone' },
       stasisColony: { color: 0x6e2c8f, shape: 'cone' },
       acolyte: { color: 0xfff3b0, shape: 'icosahedron' },
-      gate: { color: 0x35d17a, shape: 'pyramid' },   // the green pyramid
+      gate: { color: 0x35d17a, shape: 'pyramid', neverForced: true },   // the green pyramid
       hack: { color: 0x7dff5f, shape: 'box' },       // EXPERIMENT: the hack terminal (src/local/hack/)
       // The waypoint that completes a scenario (tutorial) map. Never generated on
       // normal maps, so it is hidden from the legend.
@@ -81,7 +86,7 @@ export const ENCOUNTERS = {
   // a ramp of 3s and a pit at 0 needs a rim of 1s, or nothing walks in or
   // out; every pinned ground enemy must be able to walk to where the party
   // can stand, and every free ground tile should be walkable to, because a
-  // fatigue-forced fight drops the party on random tiles (a sealed tile is a
+  // forced fight drops the party on random tiles (a sealed tile is a
   // stuck unit). Flying creatures (Leviathan, Ether Spawn, Stasis Mote) are
   // exempt. Keep radius 4..7: the arena camera does not zoom.
   craftedMaps: {
@@ -2005,14 +2010,32 @@ radius: 3
   },
 
   // ----- Fatigue -----------------------------------------------------
-  // Fatigue = chance (in %) that arriving on a tile WITH a forceable encounter forces
-  // the party into it. It rises with the number of steps taken since the last reset.
-  // The chance rolled on arrival is the fatigue shown in the HUD at the moment you
-  // click (the value BEFORE the step); the step then raises it.
-  // "byStep" maps a step number -> fatigue %. Steps missing from the table are
-  // interpolated linearly between their neighbours; steps outside the table are
-  // clamped to the first / last entry.
+  // *** DISABLED AS AN EXPERIMENT, 2026-09-22 ***
+  // Fatigue is switched off (enabled: false below) to see how the world map plays
+  // without a probability gate on encounters. While it is off:
+  //   * stepping onto a tile holding a forceable encounter ALWAYS drags the party
+  //     into it - `forceable` below still says WHICH encounters do that, but the
+  //     roll is gone and the chance is flat 100%;
+  //   * `byStep` is not consulted, state.fatigue stays 0, the fatigue bar at the
+  //     top of the screen is hidden and the hover tip drops its fatigue lines;
+  //   * `resetOn` still fires (it also resets state.fatigueSteps, which the
+  //     tutorial scenarios time their scripted ambushes off), but resets nothing
+  //     the player can see.
+  // NOTHING has been deleted: flip `enabled` back to true and the old rolled
+  // behaviour, the bar and the tips all come back exactly as they were. The
+  // pacing job fatigue used to do is now carried by supplies (config.js `run`:
+  // stepSupplyCost drains the pack every step, and 0 supplies ends the run).
+  //
+  // (For when it is switched back on: fatigue = chance (in %) that arriving on a
+  // tile WITH a forceable encounter forces the party into it. It rises with the
+  // number of steps taken since the last reset. The chance rolled on arrival is
+  // the fatigue shown in the HUD at the moment you click (the value BEFORE the
+  // step); the step then raises it. "byStep" maps a step number -> fatigue %.
+  // Steps missing from the table are interpolated linearly between their
+  // neighbours; steps outside the table are clamped to the first / last entry.)
   fatigue: {
+    // The experiment switch. false = no rolls, forceable encounters always fire.
+    enabled: false,
     // What engaging each encounter does to fatigue:
     //   'always'   resets it to 0
     //   'optional' may reset it (see the note), e.g. the shop only if you buy a rest
@@ -2031,7 +2054,9 @@ radius: 3
       hack: 'always',     // EXPERIMENT (src/local/hack/): a hack, won or lost, is a rest of sorts
     },
     // Notes for the 'optional' ones are in the locale tables (reset.note.<type>).
-    // Which encounters fatigue can force the party into on arrival.
+    // Which encounters the party can be FORCED into on arrival. With fatigue
+    // enabled this is the set the roll applies to; with fatigue disabled (the
+    // current experiment) every one of them fires on arrival, always.
     forceable: ['battle', 'stasisSeed', 'stasisColony', 'event'],
     byStep: {
       4: 0,

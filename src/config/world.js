@@ -45,8 +45,8 @@ export const WORLD = {
     ether: { passable: false, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 0, color: 0x0d1020, height: 0, biomeTint: false },
     water: { passable: false, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 1, color: 0x23479c, height: 0.1, biomeTint: false },
     ground: { passable: true, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 0, color: 0x4d4f46, height: 0.25, biomeTint: true },
-    hill: { passable: true, supplyCost: 3, hpCost: 0, revealBonus: 1, terrainHeight: 1, color: 0x8f8d74, height: 0.55, biomeTint: true },
-    mountain: { passable: true, supplyCost: 10, hpCost: 5, revealBonus: 2, terrainHeight: 2, color: 0xb0bbc8, height: 0.95, biomeTint: true },
+    hill: { passable: true, supplyCost: 2, hpCost: 0, revealBonus: 1, terrainHeight: 1, color: 0x8f8d74, height: 0.55, biomeTint: true },
+    mountain: { passable: true, supplyCost: 5, hpCost: 0, revealBonus: 2, terrainHeight: 2, color: 0xb0bbc8, height: 0.95, biomeTint: true },
   },
 
   // ----- Biomes ---------------------------------------------------------

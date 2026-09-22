@@ -41,6 +41,15 @@ export const TUTORIAL_1 = {
   // Tight pockets: the treasure exists to afford the camp, and the point is felt.
   supplies: 10,
   maxSupplies: 60,
+  // 2026-09-22: the main game now charges run.stepSupplyCost for EVERY step and
+  // ends the run on an empty pack. This map's supply budget was hand-tuned when
+  // walking was free, so the walking clock is switched off here rather than
+  // silently re-balancing a teaching map.
+  // TODO if the experiment sticks: re-tune this map's `supplies` around the
+  // walking cost and drop this override, so the tutorial teaches the real rule.
+  configPatch: {
+    'run.stepSupplyCost': 0,
+  },
   goal: { type: 'reach', tile: '9,-4' },
   next: 'tutorial2',
   // Short hint cards (texts: scenario.tutorial1.card.<id>.* in the locales).
