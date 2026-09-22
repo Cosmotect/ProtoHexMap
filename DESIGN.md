@@ -262,17 +262,45 @@ clicking a target does not fire immediately - it stores a lock (`ability id, anc
 tiles, damage`) on the unit and hands the turn to the next unlocked unit. Any unit
 can walk freely during the player phase (measured from its position at the start of
 the round) and hold one lock at a time; re-aiming replaces the lock, walking clears
-it. **End Turn** fires every standing lock in party-panel order, one at a time with a
-short delay between casts (`combat.volleyStepMs`), not simultaneously.
+it. **End Turn** fires every standing lock in party-panel order (the cards are
+numbered and can be dragged to reorder; the order carries to the next fight), one at
+a time with a short delay between casts (`combat.volleyStepMs`), not simultaneously.
+Combat therefore reads as the units acting one after another, as they originally
+did - except that the player lays the whole turn out first, sees its result, and
+can rearrange it before committing.
 
-**Damage pre-calculation and ghosts.** Before firing, the engine plays every
-standing lock plus the currently hovered aim out on a scratch copy of the board, in
-firing order, applying the overlap bonus for stacked hits, and returns a per-tile
-breakdown (parts, raw, total, dealt, overkill, target, kind) that the arena renders
-as damage billboards. Anything the play-out actually relocates or kills - a shove, a
-crash, a fall, a chain crush, a charge landing, a corpse push, a void death - is
-reported the same way and drawn as a translucent ghost body at its destination with
-a line back to origin.
+**The overlap bonus is ordered.** A damaging ability gets `combat.stack
+.bonusPerOverlap` (1) extra BASE damage on every hex that an earlier ability of the
+same volley already hit, once per such ability: the first blow on a hex gets
+nothing, the second +1, the third +2 (Gorm's headbutt then Viridi's glaive on one
+tick: the headbutt plain, the glaive +1). The engine keeps a per-tile ledger while
+the volley fires (`st.overlap`); only the party's own casts count. This replaced the
+x2/x3 multipliers and, briefly, a flat +1 for every overlapping ability regardless of
+order (both 2026-09-22).
+
+**The forecast on the overhead cards, and ghosts.** Before firing, the engine plays
+every standing lock plus the currently hovered aim out on a scratch copy of the
+board, in firing order, and `previewState()` reports two boards: the one the
+SELECTED unit will find (after the casts of the units before it in the order) and
+the one the volley leaves. The arena shows both on the units' overhead cards
+(`local.unitPlaques`, back on): each card hangs over the tile its unit will stand on
+when the selected unit acts - with Viridi selected after Gorm, the tick his headbutt
+shoves is already carded over its new tile, and Gorm's card is over his post-charge
+tile - and reads the unit's hp now -> after the whole volley: the bar keeps its
+card's frame colour throughout (party green, enemy red - no red-below-half switch)
+and the part about to go is that colour, much darker (a heal's return, lighter). A
+unit the volley kills simply reads "8 -> 0"; there are no damage billboards, no
+"will die" marker and no greying. A walk does not disturb any of this - only the
+volley itself (`sb.firing`) takes the forecast down. When a ghost, or a card, lands
+on a tile another unit is still standing on (one that leaves or dies earlier in
+the volley), it rides a storey higher (`PLAQUE.stackLift`), so bodies and cards
+never sit in each other. Anything the play-out
+actually relocates - a shove, a crash, a fall, a chain crush, a charge landing, a
+corpse push - is drawn as a translucent ghost body at its destination with a line
+back to origin (`previewMoves()`); VOID marks a drop over the edge, a burst a barrier
+breaking. `previewTotals()` (the per-tile arithmetic: parts with their ordered bonus,
+total, dealt, overkill, target) is still there for the tests and for
+`rules.decoratePreview`, but nothing draws it.
 
 **Aim outlines.** The highlighted tile outline for a locked or hovered ability shows
 only the tiles actually in its damage zone. The tile a player aims *at* is not added
@@ -419,10 +447,11 @@ it and double as the rip-out checklist:
    the cost of duplication.
 
 **The idea.** Instead of enemies, the board holds static NODES with hp. Units aim
-their ordinary abilities and, on End Turn, everything fires at once; a tile covered
-by two abilities takes combined damage doubled, by three tripled. The party has a
-turn budget of volleys; nodes cleared are graded into BADGES, and the badge count
-sets how many upgrade choices the reward screen offers.
+their ordinary abilities and End Turn fires the locks in order; a tile hit by a
+second ability takes +1 base from it, by a third +2 (the engine's ordered overlap
+bonus - it began here as x2/x3 stacking). The party has a turn budget of volleys;
+nodes cleared are graded into BADGES, and the badge count sets how many upgrade
+choices the reward screen offers.
 
 **The board** (`hackmap.js` + `hacklayouts.js`): a flat arena, radius 5, no
 elevation wave. Where nodes and mines go is one of 20 seeded layouts (data: node
@@ -450,8 +479,9 @@ but never forceable; it is entered only by choice.
 **Architecture.** It runs as a rules plug-in on the shared `createBattle` engine, not
 a separate engine: node/mine tag instances go in through the `tags` option
 (`makeHackTags`), and `hackrules.js`'s `createHackRules` supplies `attach`,
-`onBarrierHit`, `onHazardHit`, `onTurnFired`, `checkEnd`, `decoratePreview` and
-`debugResolve`. `hackview.js` layers a turn/badge panel and per-node hp decals onto
+`onBarrierHit`, `onHazardHit`, `onTurnFired`, `checkEnd`, `decoratePreview` (a
+mine's cost on a `previewTotals` entry - read by the tests, drawn by nothing since
+the billboards went) and `debugResolve`. `hackview.js` layers a turn/badge panel and per-node hp decals onto
 the arena without touching shared rendering code. `hackbridge.js` is the hack's own
 copy of the main combat bridge (dive in, build the engine with its rules, bind,
 finish, abort). `hackengine.js`, an earlier standalone duck-typed engine, is dead

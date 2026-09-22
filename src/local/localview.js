@@ -149,7 +149,7 @@ const PLAQUE = {
   worldWidth: 1.9,          // how wide the whole plaque is in world units
   worldY: 1.05,             // how high above the token's base it floats (clears the head)
   plateFill: 'rgba(10, 14, 24, 0.78)',
-  plateStroke: 'rgba(255, 209, 102, 0.75)',      // the party's gold frame
+  plateStroke: 'rgba(127, 184, 95, 0.85)',       // the party's green frame (gold until 2026-09-22)
   plateStrokeEnemy: 'rgba(226, 71, 75, 0.9)',    // enemies get a red one, readable at a glance
   badge: 20,                // a status icon's box on the numbers row
   badgeGap: 3,
@@ -162,9 +162,24 @@ const PLAQUE = {
   textColor: '#94a0b8',     // --muted
   trackFill: 'rgba(255, 255, 255, 0.10)',
   trackStroke: 'rgba(255, 255, 255, 0.12)',
-  fillOk: '#7fb85f',
-  fillHurt: '#ff6b6b',      // --danger, as `.unit.hurt` uses below half HP
+  // The bar ALWAYS wears its card's frame colour (since 2026-09-22 - it used
+  // to turn red below half hp like the party panel's, and with the forecast's
+  // colours on top that was too much colour to read): green for the party, red
+  // for an enemy. The forecast's about-to-go band is the same colour, much
+  // darker; what a heal brings back, the same colour, lighter.
+  fillParty: '#7fb85f',
+  fillEnemy: '#e2474b',
+  loseParty: '#2f4a22',
+  loseEnemy: '#5a1b1e',
+  gainParty: '#b7e39a',
+  gainEnemy: '#f29396',
   segColor: 'rgba(0, 0, 0, 0.55)',
+  // The forecast's "-> after" reading (the number itself).
+  forecastLose: '#ff6b6b',
+  forecastGain: '#8fe0b8',
+  // A ghost (and its card) over a tile somebody still stands on rides this
+  // much higher (world units) - a storey above the body and card below.
+  stackLift: 1.45,
   monoFont: '"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace',
   emojiFont: '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif',
 };
@@ -667,10 +682,11 @@ export class LocalMapView {
   // sprite is what guarantees the whole thing is centred over the unit - two
   // sprites of different widths stacked on top of each other never quite were.
   //
-  // The bar is a faithful copy of the party panel's (src/style.css, `.unit .bar`):
-  // same track, same green, the same switch to the danger red below half HP, and
-  // the same dark segment line every `party.hpSegment` HP, so one bar is read the
-  // same way in both places.
+  // The bar is laid out like the party panel's (src/style.css, `.unit .bar`):
+  // same track, the same dark segment line every `party.hpSegment` HP - but it
+  // keeps its card's frame colour throughout (party green, enemy red; no switch
+  // to the danger red below half HP), so the forecast's darker band reads
+  // against a steady colour.
   makeUnitPlaque(glyph, { enemy = false } = {}) {
     const cv = document.createElement('canvas');
     const tex = new THREE.CanvasTexture(cv);
@@ -747,8 +763,21 @@ export class LocalMapView {
     return { w, h };
   }
 
-  // Redraws a plaque for the given hp/maxHp - a no-op if neither changed since
-  // the last call, so this is safe to call from every syncBattle().
+  // THE FORECAST on a plaque (aim locks, see applyPlaqueForecast): `forecast`
+  // is { hp, dead } - the unit's hp once the planned volley has fired - or
+  // null for none. Kept on the sprite, so a plain syncBattle() redraw keeps it.
+  setPlaqueForecast(plaque, forecast, unit = null) {
+    if (!plaque) return;
+    const cur = plaque.userData.forecast || null;
+    if ((cur ? `${cur.hp}:${cur.dead ? 1 : 0}` : '') === (forecast ? `${forecast.hp}:${forecast.dead ? 1 : 0}` : '')) return;
+    plaque.userData.forecast = forecast ? { hp: forecast.hp, dead: !!forecast.dead } : null;
+    this.updateUnitPlaque(plaque, unit?.hp ?? plaque.userData.hp, unit?.maxHp ?? plaque.userData.maxHp, unit);
+  }
+
+  // Redraws a plaque for the given hp/maxHp - a no-op if nothing changed since
+  // the last call, so this is safe to call from every syncBattle(). With a
+  // forecast on the sprite (setPlaqueForecast) the numbers read "hp -> after"
+  // and the bar shows the part about to go; a unit the volley kills is greyed.
   updateUnitPlaque(plaque, hp, maxHp, unit = null) {
     if (!plaque) return;
     const clampedHp = Math.max(0, hp ?? 0);
@@ -757,15 +786,21 @@ export class LocalMapView {
     // One string standing for the whole status row: cheap to compare, so the
     // canvas is only redrawn when something the player can see actually changed.
     const statusKey = statuses.map((s2) => `${s2.id}:${s2.turns}:${s2.amount ?? ''}`).join(',');
+    const fc = plaque.userData.forecast || null;
+    const fcKey = fc ? `${fc.hp}:${fc.dead ? 1 : 0}` : '';
     // Out of combat a unit's plaque is just its portrait: HP and statuses are
     // combat readings, and the campfire is not a fight. `inCombat` is the local
     // map's sub-state (see setCombat / body.in-combat).
     const mode = this.inCombat ? 'full' : 'icon';
     if (plaque.userData.hp === clampedHp && plaque.userData.maxHp === safeMax
-        && plaque.userData.statusKey === statusKey && plaque.userData.mode === mode) return;
+        && plaque.userData.statusKey === statusKey && plaque.userData.mode === mode
+        && plaque.userData.fcKey === fcKey) return;
     plaque.userData.hp = clampedHp;
     plaque.userData.maxHp = safeMax;
     plaque.userData.statusKey = statusKey;
+    plaque.userData.fcKey = fcKey;
+    // (A unit the volley kills reads "8 -> 0" and nothing more - no grey wash,
+    // no fading: 0 of max is indicator enough. 2026-09-22.)
 
     const P = PLAQUE;
     if (plaque.userData.mode !== mode) { this.sizePlaque(plaque, mode); plaque.userData.mode = mode; }
@@ -813,7 +848,16 @@ export class LocalMapView {
     g.font = `600 ${P.textSize}px ${P.monoFont}`;
     g.textAlign = 'left';
     g.textBaseline = 'alphabetic';
-    g.fillText(`${clampedHp} / ${safeMax}`, cx, iy + P.textSize);
+    const fcHp = fc ? Math.max(0, Math.min(safeMax, fc.hp)) : null;
+    if (fc) {
+      // "8 -> 3": the present in the usual grey, the outcome in red (or green
+      // for a heal). The max is on the bar; the row is short enough for badges.
+      const now = `${clampedHp} `;
+      g.fillText(now, cx, iy + P.textSize);
+      g.fillStyle = fcHp < clampedHp || fc.dead ? P.forecastLose : P.forecastGain;
+      g.fillText(`→ ${fcHp}`, cx + g.measureText(now).width, iy + P.textSize);
+      g.fillStyle = P.textColor;
+    } else g.fillText(`${clampedHp} / ${safeMax}`, cx, iy + P.textSize);
 
     // Status icons, right-aligned on the same row as the numbers. Each one
     // records its box so a hover can find it (see statusAt / the tooltip).
@@ -857,17 +901,25 @@ export class LocalMapView {
 
     const by = iy + iw - P.barH;            // bar bottom-aligned with the icon box
     const frac = safeMax > 0 ? Math.max(0, Math.min(1, clampedHp / safeMax)) : 0;
+    // With a forecast the solid fill is what STAYS (hp after the volley) and
+    // a translucent band covers what goes (or, for a heal, what comes back).
+    const keep = fc ? (safeMax > 0 ? Math.max(0, Math.min(1, fcHp / safeMax)) : 0) : frac;
     // Track.
     g.fillStyle = P.trackFill;
     roundRect(g, cx, by, cw, P.barH, 3);
     g.fill();
-    // Fill - the party panel turns it red below half HP (`.unit.hurt`).
-    if (frac > 0) {
+    // Fill, in the card's frame colour (never the party panel's red-below-half).
+    if (keep > 0 || (fc && frac > 0)) {
       g.save();
       roundRect(g, cx, by, cw, P.barH, 3);
       g.clip();
-      g.fillStyle = frac < 0.5 ? P.fillHurt : P.fillOk;
-      g.fillRect(cx, by, Math.max(2, cw * frac), P.barH);
+      const enemy = plaque.userData.enemy;
+      if (keep > 0) {
+        g.fillStyle = enemy ? P.fillEnemy : P.fillParty;
+        g.fillRect(cx, by, Math.max(2, cw * keep), P.barH);
+      }
+      if (fc && keep < frac) { g.fillStyle = enemy ? P.loseEnemy : P.loseParty; g.fillRect(cx + cw * keep, by, Math.max(2, cw * (frac - keep)), P.barH); }
+      else if (fc && keep > frac) { g.fillStyle = enemy ? P.gainEnemy : P.gainParty; g.fillRect(cx + cw * frac, by, Math.max(2, cw * (keep - frac)), P.barH); }
       g.restore();
     }
     // Segment lines: one every hpSegment HP, drawn over the fill.
@@ -1262,8 +1314,9 @@ export class LocalMapView {
     // changes, so hovering costs nothing while the cursor sits still.
     this.aimFx = [];
     this.aimFxKey = null;
-    // AIM LOCKS: every unit's locked aim painted on the board, and the damage
-    // pre-calculation billboards over whatever the locks cover (syncLockFx).
+    // AIM LOCKS: every unit's locked aim painted on the board, the ghosts of
+    // whatever the volley moves, and the forecast on the overhead cards
+    // (syncLockFx). lockLabels holds the ghosts' VOID / burst marks.
     this.lockFx = [];
     this.lockLabels = [];
     this.lockSig = null;
@@ -1487,16 +1540,20 @@ export class LocalMapView {
     if (p.dash) fill(p.dash, c.aimDashFill, Math.min(1, baseOpacity * 1.4));
   }
 
-  // ----- AIM LOCKS: lock marks + the damage pre-calculation billboards --------
-  // (config.combat.lockedAim; the engine's u.lock and previewTotals()). Every
-  // unit's locked aim is painted in that unit's own colour (config.colors
-  // .lockColors): a fill on each covered tile, a ring on the aim tile. Over
-  // every unit, barrier or hazard the locks cover - plus the aim under the
-  // cursor - floats ONE billboard reading, in three colours: the target's hp
-  // (white), the arithmetic ((2+5)x2=14, gold) and the outcome (-> 6, green
-  // while it survives, red when it goes down); an encounter's rules may add a
-  // note (the Hack's overkill / mine penalty). Rebuilt only when something in
-  // the reading changes (see the signature), so hovering costs nothing.
+  // ----- AIM LOCKS: lock marks, the overhead cards' forecast, the ghosts ------
+  // (config.combat.lockedAim; the engine's u.lock, previewState() and
+  // previewMoves()). Every unit's locked aim is painted in that unit's own
+  // colour (config.colors.lockColors): a thin outline on each covered tile.
+  // The RESULT of the planned volley is read off the units' overhead cards
+  // (the plaques): each card hangs over the tile its unit will stand on when
+  // the SELECTED unit gets to act (after the casts before it in the firing
+  // order - Gorm's headbutt shoves the tick, so with Viridi selected the
+  // tick's card is already over its new tile and Viridi aims there), reads
+  // the unit's hp now -> after the whole volley, and greys out when the
+  // volley kills it. Whatever the volley moves is also drawn as a ghost where
+  // it ends up (syncGhosts). Rebuilt only when something in the reading
+  // changes (see the signature), so hovering costs nothing. The damage
+  // billboards that used to float over every covered tile went on 2026-09-22.
   // The thin hex outline for party slot i: red outermost, then green, then blue,
   // each a step smaller so they nest on a tile covered by several aims.
   lockRingGeo(i) {
@@ -1543,50 +1600,97 @@ export class LocalMapView {
     for (const l of this.lockLabels ?? []) { this.scene?.remove(l); l.material.dispose(); }
     this.lockLabels = [];
     this.lockSig = null;
+    this.applyPlaqueForecast(null);
   }
   syncLockFx(hoverKey) {
     const b = this.battle;
-    if (!b || !b.previewTotals || !this.scene) return;
+    if (!b || !b.previewState || !this.scene) return;
     const sb = b.state;
     if (!sb.lockedAim) return;
     const key = sb.over || sb.phase !== 'player' ? null : hoverKey;
     const locks = sb.units.map((u) => (u.lock ? `${u.uid}:${u.lock.abId}@${u.lock.anchor}` : '')).join(';');
     const hp = sb.units.reduce((n, u) => n + u.hp, 0) + Object.values(sb.tags).reduce((n, t) => n + (t.hp || 0), 0);
-    const sig = `${locks}|${key ?? ''}|${sb.selAb ?? ''}|${sb.activeUid ?? ''}|${sb.phase}|${sb.over ?? ''}|${sb.busy ? 1 : 0}|${hp}|${Object.keys(sb.tags).length}`;
+    const where = sb.units.map((u) => u.pos).join(',');
+    const order = (sb.fireOrder ?? []).join(',');
+    // A WALK (sb.busy without sb.firing) leaves the forecast standing - the
+    // other units' locks are untouched by it, and the walker's own lock is
+    // already gone. Only the volley itself (sb.firing) takes it down.
+    const sig = `${locks}|${key ?? ''}|${sb.selAb ?? ''}|${sb.activeUid ?? ''}|${sb.phase}|${sb.over ?? ''}|${sb.firing ? 1 : 0}|${hp}|${Object.keys(sb.tags).length}|${where}|${order}`;
     if (sig === this.lockSig) return;
     this.lockSig = sig;
     for (const m of this.lockFx) { this.scene.remove(m); m.material.dispose(); if (m.isLine) m.geometry.dispose(); }
     this.lockFx = [];
     for (const l of this.lockLabels) { this.scene.remove(l); l.material.dispose(); }
     this.lockLabels = [];
-    if (sb.over || sb.phase !== 'player') return;
+    if (sb.over || sb.phase !== 'player' || sb.firing) { this.applyPlaqueForecast(null); return; }
     for (const u of sb.units) {
       if (u.isEnemy || u.hp <= 0 || !u.lock) continue;
       // While the active unit hovers a new aim, that aim (syncAimFx) replaces
-      // its standing lock on the board, as it does in the billboards.
+      // its standing lock on the board, as it does in the forecast.
       if (key && u.uid === sb.activeUid) continue;
       this.addAimOutlines(u, u.lock.tiles, u.lock.anchor, this.lockFx);
     }
-    // The billboards.
-    const totals = b.previewTotals(key);
-    for (const [k, e] of totals) {
-      const segs = this.previewSegments(e);
-      if (!segs.length) continue;
-      const tile = this.map.hexes.get(k); if (!tile) continue;
-      const label = this.makeSegmentLabel(segs);
-      label.position.set(tile.x, tile.top + 1.05, -tile.y);
-      this.scene.add(label); this.lockLabels.push(label);
-    }    // The GHOSTS: everything the volley would move, drawn where it ends up.
+    // The forecast on the overhead cards, and the GHOSTS: everything the
+    // volley would move, drawn where it ends up.
+    this.applyPlaqueForecast(b.previewState(key));
     this.syncGhosts(b.previewMoves ? b.previewMoves(key) : []);
+  }
+  // ----- the forecast on the overhead cards ---------------------------------
+  // `ps` is the engine's previewState() ({ before, after } by uid) or null.
+  // Each unit's plaque is told where to hang (the unit's `before` tile - it
+  // stays a child of the token, update() keeps it over that tile) and what to
+  // read (hp after the volley, dead or not). Null puts every card back over
+  // its own unit with nothing but the present on it.
+  applyPlaqueForecast(ps) {
+    if (!this.battleTokens) return;
+    const sb = this.battle?.state;
+    for (const [uid, tok] of this.battleTokens) {
+      const pl = tok.userData.plaque;
+      if (!pl) continue;
+      const u = sb ? sb.units.find((x) => x.uid === uid) : null;
+      const b = ps && ps.before ? ps.before[uid] : null;
+      const a = ps && ps.after ? ps.after[uid] : null;
+      const forecast = u && a && (a.hp !== u.hp || a.dead) ? { hp: a.hp, dead: a.dead } : null;
+      pl.userData.hangAt = b && u && b.pos !== u.pos ? b.pos : null;
+      // Over a tile another unit stands on right now (the one about to leave
+      // it, or to die on it): the card rides a storey up, as its ghost does.
+      pl.userData.hangLift = !!(pl.userData.hangAt && this.unitStandsOn(pl.userData.hangAt, uid));
+      this.setPlaqueForecast(pl, forecast, u);
+      this.placePlaque(tok);
+    }
+  }
+  // Where a plaque hangs this frame: over its own token (bobbing with it), or,
+  // while the forecast has the unit somewhere else by the time the selected
+  // unit acts, over THAT tile - still as a child of the token, so the sprite
+  // is placed in the token's local space (the token turns slowly; a plain
+  // offset would swing around it).
+  placePlaque(tok) {
+    const pl = tok.userData.plaque;
+    if (!pl) return;
+    const at = pl.userData.hangAt;
+    const tile = at ? this.map.hexes.get(at) : null;
+    if (!tile) {
+      if (pl.position.x !== 0 || pl.position.z !== 0 || pl.position.y !== PLAQUE.worldY) pl.position.set(0, PLAQUE.worldY, 0);
+      return;
+    }
+    tok.updateMatrixWorld(true);
+    const lift = pl.userData.hangLift ? PLAQUE.stackLift : 0;
+    pl.position.copy(tok.worldToLocal(new THREE.Vector3(tile.x, tile.top + lift + PLAQUE.worldY, -tile.y)));
+  }
+  // Is a living unit (other than `exceptUid`) standing on tile `k` right now?
+  unitStandsOn(k, exceptUid = null) {
+    const sb = this.battle?.state;
+    return !!sb && sb.units.some((o) => o.uid !== exceptUid && o.hp > 0 && !o.fled && o.pos === k);
   }
   // ----- ghost previews ----------------------------------------------------
   // For every unit or barrier the volley would move (a shove, a crash, a fall,
   // a crush chain, a charge, a corpse pushed along - the engine plays the whole
   // volley out and reports the RESULT, so whatever moved it, it shows here): a
   // translucent copy of its body on the tile it ends up on, a faint line from
-  // where it stands, a ring under the ghost; a skull over whatever dies,
-  // "VOID" where something goes over the edge, a burst where a barrier
-  // breaks. Same idea as hex-box's prediction ghosts, in the arena's 3D.
+  // where it stands, a ring under the ghost; "VOID" where something goes over
+  // the edge, a burst where a barrier breaks. (A unit's death is on its
+  // overhead card, greyed out - no skull here.) Same idea as hex-box's
+  // prediction ghosts, in the arena's 3D.
   syncGhosts(moves) {
     for (const m of moves) {
       const fromTile = this.map.hexes.get(m.from);
@@ -1608,8 +1712,12 @@ export class LocalMapView {
           ghost.material.transparent = true; ghost.material.opacity = 0.45;
           ghost.scale.setScalar(0.5);
         }
+        // A destination somebody is still standing on (they leave it, or die
+        // on it, earlier in the volley): the ghost floats a storey above them,
+        // so body, ghost and their two cards never sit in each other.
+        const lift = m.kind === 'unit' && this.unitStandsOn(m.to, m.uid) ? PLAQUE.stackLift : 0;
         if (ghost) {
-          ghost.position.set(toTile.x, toTile.top + (m.kind === 'unit' ? 0 : 0.35), -toTile.y);
+          ghost.position.set(toTile.x, toTile.top + lift + (m.kind === 'unit' ? 0 : 0.35), -toTile.y);
           ghost.renderOrder = 8;
           this.scene.add(ghost); this.lockFx.push(ghost);
         }
@@ -1618,13 +1726,13 @@ export class LocalMapView {
         ring.position.set(toTile.x, toTile.top + 0.07, -toTile.y);
         ring.renderOrder = 5;
         this.scene.add(ring); this.lockFx.push(ring);
-        const pts = [new THREE.Vector3(fromTile.x, fromTile.top + 0.4, -fromTile.y), new THREE.Vector3(toTile.x, toTile.top + 0.4, -toTile.y)];
+        const pts = [new THREE.Vector3(fromTile.x, fromTile.top + 0.4, -fromTile.y), new THREE.Vector3(toTile.x, toTile.top + lift + 0.4, -toTile.y)];
         const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0xe8eef8, transparent: true, opacity: 0.6, depthWrite: false }));
         line.renderOrder = 9;
         this.scene.add(line); this.lockFx.push(line);
       }
       // What happens to it, over where it ends up.
-      const mark = m.voided ? { text: 'VOID', color: '#c66dff' } : m.dead ? { text: '☠', color: '#ff5d73' } : m.destroyed ? { text: '✸', color: '#ff9950' } : null;
+      const mark = m.voided ? { text: 'VOID', color: '#c66dff' } : m.destroyed ? { text: '✸', color: '#ff9950' } : null;
       if (mark) {
         const at = moved ? toTile : fromTile;
         const label = this.makeSegmentLabel([mark]);
@@ -1633,45 +1741,14 @@ export class LocalMapView {
       }
     }
   }
-  // The reading over one covered tile, as coloured segments (see syncLockFx).
-  previewSegments(e) {
-    const white = '#ffffff', gold = '#ffd75f', green = '#8fe0b8', red = '#ff5d73', cyan = '#5fc7e0';
-    const segs = [];
-    const t = e.target;
-    if (t && (t.kind === 'party' || t.kind === 'enemy' || t.kind === 'barrier')) {
-      if (!e.parts.length && !e.note) return segs;   // a heal or a buff: nothing to add up
-      segs.push({ text: String(t.hp), color: white, row: 0 });
-      if (e.parts.length) {
-        // One term per ability: base, "+bonus" for the overlap, "xN" for its
-        // hits - "(2+1)x4+(5+1)=18". A lone single hit stays a plain "-5".
-        const term = (p) => {
-          const base = p.bonus > 0 ? `(${p.dmg}+${p.bonus})` : `${p.dmg}`;
-          return p.times > 1 ? `${base}x${p.times}` : base;
-        };
-        const simple = e.parts.length === 1 && e.parts[0].times <= 1 && !(e.parts[0].bonus > 0);
-        const calc = simple ? `-${e.total}` : `${e.parts.map(term).join('+')}=${e.total}`;
-        segs.push({ text: calc, color: gold, row: 1 });
-      }
-      const left = Math.max(0, t.hp - e.dealt);
-      if (t.blocked && e.dealt < e.total) segs.push({ text: `-> ${left} SHIELD`, color: cyan, row: 0 });
-      else segs.push({ text: `-> ${left}`, color: left > 0 ? green : red, row: 0 });
-      if (e.note) segs.push({ ...e.note, row: 2 });
-    } else if (t && t.kind === 'hazard') {
-      segs.push({ text: t.name.toUpperCase(), color: red, row: 0 });
-      if (e.n > 1 || e.parts.length > 1) segs.push({ text: `x${Math.max(e.n, e.parts.length, 1)}`, color: white, row: 0 });
-      if (e.note) segs.push({ ...e.note, row: 2 });
-    }
-    return segs;
-  }
-  // One canvas billboard for the coloured segments, cached by content. Compact:
-  // the hp and the outcome on the top row, the arithmetic (and any note) below,
-  // and the whole card scaled so it never gets wider than its own hex.
+  // One canvas billboard for coloured text segments, cached by content (the
+  // ghosts' VOID / burst marks; it drew the damage billboards until
+  // 2026-09-22). Rows by the segment's `row`; the whole card is scaled so it
+  // never gets wider than its own hex.
   makeSegmentLabel(segs) {
     const key = segs.map((s) => s.text + '|' + s.color + '|' + (s.row ?? 0)).join('#');
     let tex = this.labelTexCache.get(key);
     if (!tex) {
-      // Rows by the segment's `row` (see previewSegments): 0 hp + outcome,
-      // 1 the arithmetic, 2 an encounter's note. Empty rows are dropped.
       const rows = [0, 1, 2].map((r) => segs.filter((z) => (z.row ?? 0) === r)).filter((r) => r.length);
       const ROW = 58, PAD = 14, GAP = 12, FONT = 'bold 44px "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace';
       const cv = document.createElement('canvas');
@@ -2228,6 +2305,8 @@ export class LocalMapView {
       m.position.y = m.userData.baseY + Math.sin(this.elapsed / 620 + m.userData.phase) * 0.05;
       m.rotation.y += dt * 0.0006;
     }
+    // The overhead cards: over their own unit, or where the forecast hangs them.
+    if (this.battle && this.battleTokens) for (const tok of this.battleTokens.values()) if (tok.visible) this.placePlaque(tok);
     // Which tile the cursor is over, resolved once per frame (raycasting on
     // every mousemove would hammer slow machines). Needed by the fight AND by
     // the deployment step before it.

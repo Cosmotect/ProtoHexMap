@@ -143,13 +143,54 @@ fs.mkdirSync(OUT, { recursive: true });
   if (turn.preview) {
     const per = await page.evaluate(() => window.game.config.combat.stack.bonusPerOverlap);
     const parts = turn.preview.parts || [];
-    const expectTotal = parts.reduce((a, p) => a + (p.dmg + (locked - 1) * per) * p.times, 0);
-    check(turn.preview.n === locked && turn.preview.bonus === (locked - 1) * per && turn.preview.total === expectTotal, `overlap: ${locked} abilities give each +${turn.preview.bonus} base -> ${turn.preview.total} (${parts.map((p) => `(${p.dmg}+${p.bonus})x${p.times}`).join('+')})`);
+    // ORDERED overlap: the i-th damaging ability on the hex gets +i x per base.
+    const ordered = parts.every((p, i) => p.bonus === i * per);
+    const expectTotal = parts.reduce((a, p, i) => a + (p.dmg + i * per) * p.times, 0);
+    const expectBonus = parts.reduce((a, p, i) => a + i * per * p.times, 0);
+    check(turn.preview.n === locked && ordered && turn.preview.bonus === expectBonus && turn.preview.total === expectTotal, `ordered overlap: ${locked} abilities, the first +0, then +${per} per earlier hit -> ${turn.preview.total} (${parts.map((p) => `(${p.dmg}+${p.bonus})x${p.times}`).join('+')})`);
   }
   await page.screenshot({ path: path.join(OUT, 'hack-2-locked.png') });
   const fx = await page.evaluate(() => ({ labels: window.__localView.lockLabels.length, marks: window.__localView.lockFx.length, plaques: window.__localView.tokens.filter((t) => t.userData.plaque && t.userData.plaque.visible).length }));
-  check(fx.labels > 0 && fx.marks > 0, `the arena draws lock marks and billboards (${fx.marks} marks, ${fx.labels} billboards)`);
-  check(fx.plaques === 0, 'overhead unit cards are off');
+  check(fx.marks > 0, `the arena draws lock marks (${fx.marks} marks)`);
+  check(fx.labels === 0, 'no damage billboards over the covered tiles');
+  check(fx.plaques > 0, `overhead unit cards are on (${fx.plaques})`);
+  // A card whose unit the volley would kill reads "hp -> 0" and stays as solid
+  // as any other (forced here for the screenshot; the real thing is read off
+  // the engine's previewState).
+  const deadCard = await page.evaluate(async () => {
+    const v = window.__localView; const h = window.__hack;
+    const u = h.state.units.find((x) => !x.isEnemy && x.hp > 0);
+    const tok = v.battleTokens.get(u.uid); const pl = tok && tok.userData.plaque;
+    if (!pl) return null;
+    v.setPlaqueForecast(pl, { hp: 0, dead: true }, u);
+    await new Promise((r) => setTimeout(r, 400));
+    return { fcKey: pl.userData.fcKey, opacity: pl.material.opacity };
+  });
+  await page.screenshot({ path: path.join(OUT, 'hack-2b-dead-card.png') });
+  await page.evaluate(() => { const v = window.__localView; v.applyPlaqueForecast(null); v.lockSig = null; });
+  check(deadCard && deadCard.fcKey === '0:1' && deadCard.opacity === 1, `a card forecasting death reads "-> 0" and is not faded (${JSON.stringify(deadCard)})`);
+  // A WALK by another unit must not take the standing locks' fx down: the lock
+  // outlines stay in the scene throughout the walk.
+  const walk = await page.evaluate(async () => {
+    const v = window.__localView; const h = window.__hack; const sb = h.state;
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const walker = sb.units.find((u) => !u.isEnemy && u.hp > 0 && !u.lock) || sb.units.find((u) => !u.isEnemy && u.hp > 0);
+    h.activate(walker.uid); await wait(50);
+    const reach = h.reachFor();
+    const to = Object.keys(reach.d).filter((k) => !reach.occ.has(k) && !sb.tags[k] && k !== walker.pos).sort((a, b) => reach.d[b] - reach.d[a])[0];
+    if (!to) return { skipped: 'nowhere to walk' };
+    const marksBefore = v.lockFx.filter((o) => o.userData.tile).length;
+    h.clickTile(to);
+    let minMarks = Infinity, samples = 0, sawBusy = false;
+    for (let g = 0; g < 60 && (sb.busy || g < 3); g++) {
+      await wait(50);
+      if (sb.busy) sawBusy = true;
+      minMarks = Math.min(minMarks, v.lockFx.filter((o) => o.userData.tile).length); samples++;
+    }
+    return { from: walker.pos, to, marksBefore, minMarks, samples, sawBusy, locks: h.lockedUnits().length };
+  });
+  console.log('  walk:', JSON.stringify(walk));
+  if (!walk.skipped) check(walk.marksBefore > 0 && walk.minMarks >= walk.marksBefore, `a walk leaves the other units' lock marks standing (${walk.minMarks} of ${walk.marksBefore} throughout)`);
 
   // The panel: cards numbered in firing order and draggable; reordering through
   // the engine flips the numbers.
@@ -331,25 +372,81 @@ fs.mkdirSync(OUT, { recursive: true });
       const at = sb.aimMap && sb.aimMap[enemy.pos] !== undefined ? enemy.pos : null;
       if (at) {
         const moves = b.previewMoves(at);
-        b.clickTile(at); await wait(800);
+        b.clickTile(at);
+        // The arena rebuilds its lock fx on its next rendered frame - headless
+        // software rendering can take a while per frame, so wait for it.
         const v = window.__localView;
+        for (let g = 0; g < 80 && !(v.lockSig || '').includes(`${gorm.uid}:chargeHeadbutt`); g++) await wait(100);
+        await wait(100);
         ghosts = { moves, fx: v.lockFx.length, sig: v.lockSig, bound: v.battle === b, busy: sb.busy, ghostMeshes: v.lockFx.filter((o) => o.isMesh && o.geometry === (v.battleTokens.get(gorm.uid) || {}).geometry).length };
+        // THE FORECAST ON THE CARDS: the enemy's card reads hp -> after the
+        // volley, and - with a unit later in the order than Gorm selected -
+        // hangs over the tile the headbutt shoves the enemy to.
+        const ps = b.previewState(null);
+        const etok = v.battleTokens.get(enemy.uid);
+        const pl = etok && etok.userData.plaque;
+        const order = b.fireOrder();
+        const cur = b.curPlayer();
+        const enemyMove = moves.find((m) => m.kind === 'unit' && m.uid === enemy.uid) || null;
+        let plaqueWorld = null;
+        if (pl) { const p = new (pl.position.constructor)(); pl.getWorldPosition(p); plaqueWorld = { x: p.x, z: p.z }; }
+        const hangTile = pl && pl.userData.hangAt ? v.map.hexes.get(pl.userData.hangAt) : null;
+        ghosts.forecast = {
+          state: ps && ps.after[enemy.uid], before: ps && ps.before[enemy.uid],
+          card: pl ? { visible: pl.visible, forecast: pl.userData.forecast, hangAt: pl.userData.hangAt, fcKey: pl.userData.fcKey } : null,
+          curAfterGorm: !!cur && order.indexOf(cur.uid) > order.indexOf(gorm.uid),
+          enemyTo: enemyMove ? enemyMove.to : null, enemyHp: enemy.hp,
+          hangs: !!hangTile && !!plaqueWorld && Math.abs(hangTile.x - plaqueWorld.x) < 0.05 && Math.abs(-hangTile.y - plaqueWorld.z) < 0.05,
+        };
+        // STACKING: Gorm's charge lands on the tile the enemy stands on right
+        // now, so his ghost and his card ride a storey above the enemy's.
+        const gtok = v.battleTokens.get(gorm.uid);
+        const gpl = gtok && gtok.userData.plaque;
+        const gmove = moves.find((m) => m.kind === 'unit' && m.uid === gorm.uid) || null;
+        const gghost = gtok && v.lockFx.find((o) => o.isMesh && o.geometry === gtok.geometry) || null;
+        const gtile = gmove ? v.map.hexes.get(gmove.to) : null;
+        let gcard = null;
+        if (gpl) { const p = new (gpl.position.constructor)(); gpl.getWorldPosition(p); gcard = { x: p.x, y: p.y, z: p.z }; }
+        ghosts.stack = gmove && gtile ? {
+          to: gmove.to, onEnemy: gmove.to === enemy.pos,
+          ghostLift: gghost ? gghost.position.y - gtile.top : null,
+          card: gpl ? { hangAt: gpl.userData.hangAt, hangLift: gpl.userData.hangLift, lift: gcard.y - gtile.top } : null,
+        } : null;
       } else { b.cancel(); ghosts = { skipped: 'enemy not in charge range' }; }
     }
-    b.endTurn(); await wait(4500);
-    return { keys: keys.length, atEnemy: !!atEnemy, enemyEntry: enemyEntry && { kind: enemyEntry.kind, hp: enemyEntry.target?.hp, total: enemyEntry.total, dealt: enemyEntry.dealt }, afterLock, ghosts, after: { hp: enemy.hp, round: sb.round, phase: sb.phase, over: sb.over } };
+    return { keys: keys.length, atEnemy: !!atEnemy, enemyEntry: enemyEntry && { kind: enemyEntry.kind, hp: enemyEntry.target?.hp, total: enemyEntry.total, dealt: enemyEntry.dealt }, afterLock, ghosts };
   });
+  await page.screenshot({ path: path.join(OUT, 'hack-3b-forecast.png') });
+  const volley = await page.evaluate(async () => {
+    const b = window.__battle; const sb = b.state;
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const enemy = sb.units.find((u) => u.isEnemy);
+    b.endTurn(); await wait(4500);
+    const v2 = window.__localView;
+    const cleared = [...v2.battleTokens.values()].every((t) => !t.userData.plaque || (!t.userData.plaque.userData.forecast && !t.userData.plaque.userData.hangAt));
+    return { cleared, after: { hp: enemy.hp, round: sb.round, phase: sb.phase, over: sb.over } };
+  });
+  Object.assign(fight, volley);
   console.log('  fight:', JSON.stringify(fight));
   check(fight.afterLock.locked && fight.afterLock.hp === 9, 'in a regular battle a click locks the aim and nothing fires yet');
   if (fight.atEnemy) {
-    check(fight.enemyEntry && fight.enemyEntry.kind === 'enemy' && fight.enemyEntry.hp === 9 && fight.enemyEntry.total > 0, `the billboard reads the enemy (${JSON.stringify(fight.enemyEntry)})`);
+    check(fight.enemyEntry && fight.enemyEntry.kind === 'enemy' && fight.enemyEntry.hp === 9 && fight.enemyEntry.total > 0, `the pre-calculation reads the enemy (${JSON.stringify(fight.enemyEntry)})`);
     check(fight.after.hp < 9, `End turn fired the lock (enemy 9 -> ${fight.after.hp})`);
   } else console.log('  (enemy out of reach on this layout - only the lock flow was checked)');
   if (fight.ghosts && !fight.ghosts.skipped) {
     const mv = fight.ghosts.moves || [];
     check(mv.length > 0 && mv.some((m) => m.kind === 'unit'), `the play-out reports what a charge moves (${mv.map((m) => `${m.name ?? m.kind}:${m.from}->${m.to}${m.dead ? ' dead' : ''}`).join(', ')})`);
     check(fight.ghosts.ghostMeshes > 0, `the arena drew a ghost for the charging unit (${fight.ghosts.ghostMeshes})`);
+    const f = fight.ghosts.forecast || {};
+    console.log('  forecast:', JSON.stringify(f));
+    check(f.state && f.state.hp < f.enemyHp && f.card && f.card.visible && f.card.forecast && f.card.forecast.hp === f.state.hp && f.card.forecast.dead === f.state.dead, `the enemy's card forecasts the volley (${f.enemyHp} -> ${f.state && f.state.hp}${f.state && f.state.dead ? ', dead' : ''})`);
+    if (f.curAfterGorm && f.enemyTo) check(f.before && f.before.pos === f.enemyTo && f.card.hangAt === f.enemyTo && f.hangs, `with a later unit selected the enemy's card hangs where the headbutt leaves it (${f.enemyTo})`);
+    else console.log('  (card placement after a shove not checked: ' + (f.enemyTo ? 'the selected unit fires before Gorm' : 'the headbutt moved nothing') + ')');
+    const st = fight.ghosts.stack;
+    if (st && st.onEnemy) check(st.ghostLift > 1 && st.card && st.card.hangLift && st.card.lift > 2, `Gorm's ghost and card ride a storey above the enemy he charges onto (ghost +${st.ghostLift && st.ghostLift.toFixed(2)}, card +${st.card && st.card.lift.toFixed(2)})`);
+    else console.log('  (stacking not checked: ' + JSON.stringify(st) + ')');
   } else console.log('  (charge preview skipped: ' + (fight.ghosts?.skipped ?? 'no charger') + ')');
+  check(fight.cleared, 'after the volley every card is back over its unit with no forecast on it');
   await page.screenshot({ path: path.join(OUT, 'hack-3c-battle.png') });
   await page.evaluate(() => window.__battle && window.__battle.debugResolve(true));
   await page.waitForFunction(() => !document.getElementById('dialog').classList.contains('hidden'), null, { timeout: 15000 });

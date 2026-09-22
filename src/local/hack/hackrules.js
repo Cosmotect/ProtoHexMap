@@ -11,7 +11,7 @@
 //    onHazardHit(st, tag, caster, k, ab)              a hazard tag was under a hex
 //    onTurnFired(sb, summary)                         the party's locks all fired
 //    checkEnd(sb) -> 'win' | 'lose' | null            replaces last-side-standing
-//    decoratePreview(entry, sb)                       a note on a billboard
+//    decoratePreview(entry, sb)                       a note on a previewTotals entry
 //    debugResolve(sb, won)                            the menu's instant win
 //  Nodes are ordinary BARRIER tags (hp > 0: they block walking, ordinary
 //  damage wears them down); mines are ordinary HAZARD tags (hp 0, walkable,
@@ -84,7 +84,8 @@ export function createHackRules(H, { onFloater } = {}) {
       if (h.firedRound >= H.turns || (!nodesLeft && h.firedRound > 0)) return h.badges > 0 ? 'win' : 'lose';
       return null;
     },
-    // The billboard's extra segment over a mine: what it costs the caster.
+    // A previewTotals entry over a mine: what it costs the caster. (Nothing
+    // draws it since the damage billboards went on 2026-09-22; the tests read it.)
     decoratePreview(entry) {
       const t = entry.target;
       if (t && t.kind === 'hazard' && t.tagKind === 'mine') {

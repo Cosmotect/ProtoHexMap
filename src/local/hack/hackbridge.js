@@ -12,7 +12,7 @@
 //  2026-09-15: no enemies, the node / mine tags dropped into its tag table,
 //  and a `rules` object (hackrules.js) supplying the node count, the badge
 //  grading, the mines and the end condition. Aim locks, the volley and the
-//  damage billboards are the engine's and the arena's own.
+//  forecast on the overhead cards are the engine's and the arena's own.
 // =====================================================================
 import { HACK_CONFIG } from './hackconfig.js';
 import { buildHackRecipe } from './hackmap.js';

@@ -31,19 +31,20 @@
 //  longer buys the enemy an extra opening phase before the player can act).
 //  AIM LOCKS (since 2026-09-15, grown out of the Hack experiment): with
 //  config.combat.lockedAim the party does not cast one by one - picking an
-//  ability and clicking a target LOCKS the unit's aim (u.lock), End turn
-//  fires every lock at once in party order, and a tile covered by several
-//  damaging locks gives each of them +combat.stack.bonusPerOverlap base damage
-//  there per other lock (the x2 / x3 multipliers of 09-15 are gone, 09-22).
-//  Since 2026-09-22 the volley is SEQUENCED: the locks fire one after another
-//  with combat.volleyStepMs between them, in sb.fireOrder - the order of the
-//  party panel's cards, which the player can drag around - so an earlier
-//  shove sets up a later blow. previewTotals() is the "damage
-//  pre-calculation": for every covered tile, what the standing locks (plus the
-//  aim under the cursor) would do, worked out by playing them all out on a
-//  copy of the board in that same order; previewMoves() reads the same
-//  play-out for every unit or barrier that ends up somewhere else (or dead),
-//  for the arena's ghost previews. A `rules` object
+//  ability and clicking a target LOCKS the unit's aim (u.lock), and End turn
+//  fires the locks. Since 2026-09-22 the volley is SEQUENCED: the locks fire
+//  one after another with combat.volleyStepMs between them, in sb.fireOrder -
+//  the order of the party panel's cards, which the player can drag around -
+//  so an earlier shove sets up a later blow; and a damaging ability gets
+//  +combat.stack.bonusPerOverlap base damage on a hex per EARLIER ability of
+//  the volley that hit it (the x2 / x3 multipliers of 09-15 are gone). The
+//  player sees the whole planned turn before committing it: previewState()
+//  is the board as the selected unit will find it (after the casts before it
+//  in the order) and as the volley leaves it, for the arena's overhead cards;
+//  previewMoves() lists everything that ends up somewhere else, for the ghost
+//  previews; previewTotals() is the per-tile arithmetic (tests, rules). All
+//  three read one play-out of the locks (plus the aim under the cursor) on a
+//  copy of the board in that same order. A `rules` object
 //  (optional) lets an encounter type plug its own end condition and tile
 //  hooks in without the engine knowing about it (the Hack does).
 // =====================================================================
@@ -779,9 +780,10 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
           else if (hd <= -2 && CFG.lowPenalty > 0) { dmg = Math.max(0, dmg - CFG.lowPenalty); lbl = 'LOW'; }
         }
         if (u && dealtMul !== 1) { dmg = Math.max(0, Math.round(dmg * dealtMul)); lbl = (lbl ? lbl + ' ' : '') + dealtLabel; }
-        // AIM LOCKS firing together: +bonusPerOverlap base damage on this hex
-        // for every OTHER damaging lock covering it (fireLocks / previewTotals).
-        if (st.stackBonus) { const b = st.stackBonus(dt); if (b > 0) { dmg += b; lbl = (lbl ? lbl + ' ' : '') + '+' + b; } }
+        // AIM LOCKS firing one after another: +bonusPerOverlap base damage on
+        // this hex for every damaging ability that hit it EARLIER in the volley
+        // (st.overlap counts them; this cast adds itself below, after its pass).
+        if (st.overlap) { const b = overlapBonus(st.overlap[dt] || 0); if (b > 0) { dmg += b; lbl = (lbl ? lbl + ' ' : '') + '+' + b; } }
         if (dmg > 0) sHits(st, tgt, dmg, abDmg.times, lbl, '✸ ');
         else if (!st.sim) floater(dt, '✸ 0 ' + lbl, '#9aa7bd');
       } else if (!st.sim) floater(dt, '✸', ab.color);
@@ -791,6 +793,18 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
         // (statusEffect) and its overrides (statusEffectOverride), and the table decides the rest.
         if (ab.statusEffect === 'stun') sStun(st, u);
         else if (ab.statusEffect && statusDef(ab.statusEffect)) applyStatus(st, u, ab.statusEffect, ab.statusEffectOverride);
+      }
+    }
+    // The volley's overlap ledger: this ability now counts as having hit every
+    // hex of its pattern, for whoever fires after it. Only the party's own
+    // casts (depth 0) - a tag's chained cast is not an ability in the order.
+    if (st.overlap && abDmg.base > 0 && depth === 0) {
+      const seen = new Set();
+      for (const off of ab.dmgZone) {
+        const dt = addK(targetK, rotOff(off, rk));
+        if (!tilePass(dt) || seen.has(dt)) continue;
+        seen.add(dt);
+        st.overlap[dt] = (st.overlap[dt] || 0) + 1;
       }
     }
     flushDeaths(st, depth);
@@ -1605,12 +1619,15 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     sb.activeUid = null; sb.selAb = null; sb.aimMap = null; sb.reach = null;
     if (CFG.lockedAim) {
       sb.busy = true;
+      // sb.firing: the volley is on its way - the arena's forecast (locks, ghosts,
+      // the cards) stands down for it, but NOT for a mere walk (also `busy`).
+      sb.firing = true;
       emit();
       fireLocks((fired) => {
         for (const u of sb.units) if (!u.isEnemy && u.hp > 0) u.done = true;
         emit();
         // A beat so the last blow is seen landing before the enemy moves.
-        wait(() => { sb.busy = false; if (checkEnd()) return; startEnemyPhase(); }, fired ? 500 : 0);
+        wait(() => { sb.busy = false; sb.firing = false; if (checkEnd()) return; startEnemyPhase(); }, fired ? 500 : 0);
       });
       return;
     }
@@ -1621,9 +1638,12 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
 
   // ----- AIM LOCKS (config.combat.lockedAim) ---------------------------------
   // OVERLAP BONUS (config.combat.stack.bonusPerOverlap, since 2026-09-22 -
-  // replaces the old x2 / x3 multipliers): a hex covered by n damaging locks
-  // adds (n - 1) x bonus to the BASE damage of each of them there.
-  const stackBonus = (n) => Math.max(0, n - 1) * (CFG.stack?.bonusPerOverlap ?? 1);
+  // replaces the old x2 / x3 multipliers; ORDERED since 2026-09-22 too): an
+  // ability adds bonus x (the number of damaging abilities that hit the hex
+  // BEFORE it in the volley) to its BASE damage there. The first blow on a hex
+  // gets nothing, the second +1, the third +2. The volley's `st.overlap` ledger
+  // ({ tile -> hits so far }) is what resolveCast reads and writes.
+  const overlapBonus = (prior) => Math.max(0, prior) * (CFG.stack?.bonusPerOverlap ?? 1);
   // The tiles a cast from `fromK` aimed at `anchor` would cover with its dmgZone.
   function zoneTiles(ab, fromK, anchor) {
     const rk = abRotFor(ab, fromK, anchor);
@@ -1669,21 +1689,15 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   }
   sb.fireOrder = orderedParty().map((u) => u.uid);
   // End turn: every lock fires, one after another in sb.fireOrder with
-  // combat.volleyStepMs between them, with the overlap bonuses of the tiles
-  // the damaging locks cover together. `done(fired)` runs after the last one.
+  // combat.volleyStepMs between them; a later blow on a hex an earlier one hit
+  // gets the overlap bonus (st.overlap). `done(fired)` runs after the last one.
   function fireLocks(done) {
     const locks = orderedParty().filter((u) => u.hp > 0 && u.lock);
-    const count = {};
-    for (const u of locks) {
-      const ab = abFor(u, u.lock.abId);
-      if (!ab || !hasDamage(ab.damage)) continue;
-      for (const t of u.lock.tiles) count[t] = (count[t] || 0) + 1;
-    }
     const st = liveSt();
-    st.stackBonus = (k) => stackBonus(count[k] || 0);
+    st.overlap = {};
     let fired = 0, i = 0;
     const finish = () => {
-      st.stackBonus = null;
+      st.overlap = null;
       for (const u of locks) u.lock = null;
       if (rules && rules.onTurnFired) rules.onTurnFired(sb, { fired });
       done && done(fired);
@@ -1706,7 +1720,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       if (!cast) { sb.activeUid = null; finish(); return; }
       emit();
       // A decided fight (the last enemy down mid-volley) stops the volley.
-      if (checkEnd()) { st.stackBonus = null; for (const u of locks) u.lock = null; return; }
+      if (checkEnd()) { st.overlap = null; for (const u of locks) u.lock = null; return; }
       wait(step, i < locks.length ? (CFG.volleyStepMs ?? 450) : 0);
     };
     step();
@@ -1731,22 +1745,32 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // THE DAMAGE PRE-CALCULATION. For every tile the standing locks cover -
   // plus the aim under the cursor (hoverKey), which stands in for the hovering
   // unit's own lock - what would happen when End turn fires:
-  //   { n, mult, parts: [{ uid, name, abName, dmg }], raw, total, dealt, over,
+  //   { n, covers, bonus, parts: [{ uid, name, abName, dmg, times, bonus, total }],
+  //     raw, total, dealt, over,
   //     target: { kind: 'party'|'enemy'|'barrier'|'hazard', name, hp, maxHp, ... } | null,
   //     kind, pending, note? }
-  // `parts` and `total` are the arithmetic ((2+1)x4+(5+1) = 18); `dealt` is what the
-  // target actually loses, read back from playing every cast out on a copy of
-  // the board (shields, shoves and crashes included); `over` is the part of the
-  // total past the target's hp. The rules may decorate an entry (`note`).
+  // `parts` and `total` are the arithmetic (2x4+(5+1) = 14: a part's `bonus`
+  // is the ordered overlap bonus, from the damaging parts BEFORE it on the
+  // tile); `dealt` is what the target actually loses, read back from playing
+  // every cast out on a copy of the board (shields, shoves and crashes
+  // included); `over` is the part of the total past the target's hp. The rules
+  // may decorate an entry (`note`). Since 2026-09-22 nothing in the arena draws
+  // these (the overhead cards carry the result, see previewState); the tests
+  // and the rules still read them.
   // The volley as it would go NOW - the standing locks plus the aim under the
   // cursor (which stands in for the hovering unit's own lock) - played out on
-  // a copy of the board in firing order. Shared by previewTotals / previewMoves.
+  // a copy of the board in firing order. Shared by previewTotals / previewMoves
+  // / previewState. `before` is the board as the SELECTED unit finds it: the
+  // sim's units the moment its own cast (or, without one, the first cast after
+  // its place in the order) is about to resolve.
   function simulateVolley(hoverKey = null) {
     if (!CFG.lockedAim) return null;
     const c = curP();
     const hovering = !!(hoverKey && sb.selAb && sb.aimMap && sb.aimMap[hoverKey] !== undefined && c);
     const casts = [];
-    for (const u of orderedParty()) {
+    const order = orderedParty();
+    const cIdx = c ? order.indexOf(c) : -1;
+    for (const u of order) {
       if (u.hp <= 0) continue;
       if (hovering && u.uid === c.uid) {
         const ab = abFor(c, sb.selAb);
@@ -1758,27 +1782,50 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       if (ab) casts.push({ u, ab, anchor: u.lock.anchor, pending: false });
     }
     if (!casts.length) return null;
+    const per = CFG.stack?.bonusPerOverlap ?? 1;
     const tiles = new Map();
     for (const cst of casts) {
       const { tiles: zone } = zoneTiles(cst.ab, cst.u.pos, cst.anchor);
       for (const dt of zone) {
         const e = tiles.get(dt) ?? { parts: [], n: 0, covers: 0, pending: false };
         e.covers++;   // every ability covering the tile, damaging or not
-        if (hasDamage(cst.ab.damage)) { e.n++; e.parts.push({ uid: cst.u.uid, name: cst.u.name, abName: cst.ab.name, dmg: nominalDamage(cst.u, cst.ab, dt), times: parseDamage(cst.ab.damage).times }); }
+        if (hasDamage(cst.ab.damage)) {
+          // In cast order, so e.n is how many damaging abilities hit the hex before this one.
+          e.parts.push({ uid: cst.u.uid, name: cst.u.name, abName: cst.ab.name, dmg: nominalDamage(cst.u, cst.ab, dt), times: parseDamage(cst.ab.damage).times, bonus: e.n * per });
+          e.n++;
+        }
         e.pending = e.pending || cst.pending;
         tiles.set(dt, e);
       }
     }
     // Play the volley out on a copy for the actual result.
     const st = simSt(null);
-    st.stackBonus = (k) => stackBonus(tiles.get(k)?.n || 0);
+    st.overlap = {};
+    const snapshot = () => Object.fromEntries(st.units.map((x) => [x.uid, { pos: x.pos, hp: x.hp }]));
+    let before = null;
     for (const cst of casts) {
+      if (!before && cIdx >= 0 && order.indexOf(cst.u) >= cIdx) before = snapshot();
       const se = st.units.find((x) => x.uid === cst.u.uid);
       if (!se || se.hp <= 0) continue;
       resolveCast(st, se, cst.ab, cst.anchor);
       flushDeaths(st);
     }
-    return { casts, tiles, st };
+    if (!before) before = snapshot();   // the selected unit fires last, or nobody is selected
+    return { casts, tiles, st, before };
+  }
+  // THE BOARD AS THE SELECTED UNIT SEES IT, and as the volley leaves it - what
+  // the overhead cards show while the player aims (config.combat.lockedAim):
+  //   { before: { uid -> { pos, hp } },            after the casts before the selected unit's
+  //     after:  { uid -> { pos, hp, dead } } }     after the whole volley
+  // or null when nothing is locked or hovered. A card hangs over its unit's
+  // `before` tile (where the unit will be when the selected unit acts) and
+  // reads the unit's hp now -> `after`; a unit dead after the volley greys out.
+  function previewState(hoverKey = null) {
+    const sim = simulateVolley(hoverKey);
+    if (!sim) return null;
+    const after = {};
+    for (const x of sim.st.units) after[x.uid] = { pos: x.pos, hp: x.hp, dead: x.hp <= 0 };
+    return { before: sim.before, after };
   }
   function previewTotals(hoverKey = null) {
     const out = new Map();
@@ -1786,10 +1833,10 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     if (!sim) return out;
     const { tiles, st } = sim;
     for (const [k, e] of tiles) {
-      // The overlap bonus every damaging part on this tile gets, and the total:
-      // sum over parts of (base + bonus) x times.
-      const bonus = stackBonus(e.n);
-      for (const p of e.parts) { p.bonus = bonus; p.total = (p.dmg + bonus) * p.times; }
+      // Each damaging part's total, (base + its ordered bonus) x times, and the
+      // tile's: `bonus` is the extra damage the overlap adds on this tile in all.
+      for (const p of e.parts) p.total = (p.dmg + p.bonus) * p.times;
+      const bonus = e.parts.reduce((s, p) => s + p.bonus * p.times, 0);
       const raw = e.parts.reduce((s, p) => s + p.dmg * p.times, 0);
       const total = e.parts.reduce((s, p) => s + p.total, 0);
       const unit = unitAt(k);
@@ -1904,8 +1951,9 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     // AIM LOCKS: the damage pre-calculation and who has aimed (config.combat.lockedAim).
     previewTotals,
     previewMoves,
+    previewState,
     lockedUnits: () => sb.units.filter((u) => !u.isEnemy && u.hp > 0 && u.lock),
-    stackBonus,
+    overlapBonus,        // (priorHits) -> the extra base damage on a hex hit that many times already
     damageOf: (ab) => parseDamage(ab && ab.damage),   // { base, times } of an ability's damage
     // The firing order (party uids) and the party in that order.
     setFireOrder,

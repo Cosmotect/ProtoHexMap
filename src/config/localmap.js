@@ -27,11 +27,14 @@ export const COMBAT_CONFIG = {
     voidEdges: false,   // true = shoves over the map edge kill instead of crashing
     // ----- AIM LOCKS - the party fires together (since 2026-09-15) -----------
     // true: picking an ability and clicking a target LOCKS the unit's aim; End
-    // turn then fires the locks, and a hex covered by several damaging locks
-    // gives each of them +stack.bonusPerOverlap BASE damage there for every
-    // OTHER lock on it (two abilities: +1 each; three: +2 each). Re-aiming
+    // turn then fires the locks one after another (the party panel's order),
+    // and a damaging ability gets +stack.bonusPerOverlap BASE damage on every
+    // hex that an EARLIER ability of the volley already hit, once per such
+    // ability: the first blow on a hex gets nothing, the second +1, the third
+    // +2 (so the order matters - a shove first, the big hit after). Re-aiming
     // replaces a lock, walking takes it back; nothing fires before End turn.
-    // (Until 2026-09-22 the overlap DOUBLED / TRIPLED the damage instead.)
+    // (Until 2026-09-22 the overlap DOUBLED / TRIPLED the damage instead, and
+    // for a few hours that day every overlapping ability got the bonus.)
     // false: the older flow - a click casts at once and the phase ends by itself
     // when everyone has cast (kept for comparison and for tools/engine-test.mjs).
     // Grew out of the Hack experiment (src/local/hack/, see DESIGN.md).
@@ -89,10 +92,11 @@ export const LOCAL_MAP_CONFIG = {
   local: {
     aimFxOpacity: 0.5,        // how bright the aim-preview fills are (0..1, see colors.aim*Fill)
     // The overhead unit cards (portrait + hp bar + statuses over every body).
-    // OFF since 2026-09-15: the arena was too cluttered with them; the party
-    // panel, the enemy roster and the damage pre-calculation billboards carry
-    // the numbers. true brings them back.
-    unitPlaques: false,
+    // Off 2026-09-15 to 2026-09-22 while the damage billboards carried the
+    // numbers; back ON since the cards ARE the forecast now: while the player
+    // aims, each card hangs where its unit will be when the selected unit acts,
+    // reads hp now -> after the volley, and greys out if the volley kills it.
+    unitPlaques: true,
     radius: 6,                // rings of local hexes around the arena centre
     hexSize: 1.0,
     gap: 0.03,

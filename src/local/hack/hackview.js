@@ -9,7 +9,7 @@
 //    * NODE bodies: a short hex column per node with its hp as a FLAT DECAL on
 //      the column's top face (the emoji sprite the arena would draw for the
 //      tag is hidden; mines keep theirs). Nothing of the hack's floats: the
-//      only floating readings are the arena's own damage billboards.
+//      only floating readings are the arena's own overhead unit cards.
 //    * the battle bar's round counter reads "Turn n / N".
 //  Lock marks and the damage pre-calculation used to live here; they are the
 //  arena's now (LocalMapView.syncLockFx, since 2026-09-15).
