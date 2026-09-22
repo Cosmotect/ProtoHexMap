@@ -1151,6 +1151,14 @@ button.small {
   animation: banner-in 0.25s ease-out;
 }
 
+/* Forced into an event rather than a fight: the same shape, tinted blue
+   instead of the default red warning (see ui.js showBanner's `tone`). */
+.banner.event {
+  color: #d8ecff;
+  background: rgba(24, 60, 110, 0.55);
+  border-color: rgba(110, 175, 255, 0.5);
+}
+
 /* No opacity in this keyframe on purpose: a stalled animation must never hide a card. */
 @keyframes banner-in {
   from {

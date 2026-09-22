@@ -26,7 +26,9 @@
 //  ability defs (def.abilityDefs, resolved by src/upgrades.js from the unit's
 //  unlocked tree nodes); partyDamageMod is a flat penalty to the party's
 //  ability damage (the Stasis "damage" debuff); and a fatigue-forced fight
-//  opens with an ambush enemy phase before round 1.
+//  still opens with the party's own phase, same as any other fight (sb.ambush
+//  only labels round 1 "Ambush!" in the battle bar - since 2026-09-22 it no
+//  longer buys the enemy an extra opening phase before the player can act).
 //  AIM LOCKS (since 2026-09-15, grown out of the Hack experiment): with
 //  config.combat.lockedAim the party does not cast one by one - picking an
 //  ability and clicking a target LOCKS the unit's aim (u.lock), End turn
@@ -1191,9 +1193,6 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   }
   function endRound() {
     sb.activeUid = null;
-    // A fatigue ambush is an extra opening enemy phase: the round itself has not
-    // happened yet, so no tag ticking, no expiry, no round counter.
-    if (sb.ambush) { sb.ambush = false; startPlayerPhase(); return; }
     const due = [];
     for (const k of Object.keys(sb.tags)) {
       const t = sb.tags[k];
@@ -1221,6 +1220,10 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     }
     if (checkEnd()) return;
     sb.round++;
+    // sb.ambush only ever labels round 1 (the battle bar reads "Ambush!" there
+    // instead of "Round 1" - see ui.js): the player still opens even a forced
+    // fight, so there is no separate opening phase to end it after any more.
+    if (sb.ambush) sb.ambush = false;
     startPlayerPhase();
   }
   function checkEnd() {
@@ -1733,14 +1736,17 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   let opened = false;
   // The 'battleStart' moment fires once, here, before either side has moved, so
   // it lands the same way whether the fight opens normally or with an ambush.
+  // A forced fight used to open with an extra enemy phase before round 1 (the
+  // enemy struck before the party could act at all); the player now always
+  // opens the fight, forced or not - only the "Ambush!" round-1 label (sb.ambush)
+  // still marks that this one was forced.
   function start() {
     if (opened) return;
     opened = true;
     { const st = liveSt(); for (const u of sb.units) fireMoment(st, u, 'battleStart'); }
-    if (sb.ambush) { blog('AMBUSH - the enemy strikes first'); startEnemyPhase(); }
-    else startPlayerPhase();
+    startPlayerPhase();
   }
-  if (deferOpening && sb.ambush) emit();   // the bar reads "enemy phase" while it waits
+  if (deferOpening && sb.ambush) emit();   // the bar reads "Ambush!" while it waits
   else start();
 
   return {

@@ -537,6 +537,20 @@ export class Game {
   // In SCENARIO mode there are no random forces at all: the only forced fights
   // are the scripted ambushes, which fire at their exact step on an empty tile.
   onEnter(hex, rollChance) {
+    // A treasure is never in fatigue.forceable - it is entered by choice, same as
+    // a shop or a cache - EXCEPT on the exact step that empties the pack. That
+    // step ends the run right after this (checkEndOfRun), scenario or not, so if
+    // it landed on a treasure the pickup is forced now or it is lost for good:
+    // the player never gets a chance to press Enter before the run is over.
+    // offerSupplies sets pendingSupplies, which checkEndOfRun already knows to
+    // wait for (encounterInFlight), so the run does not end out from under it.
+    if (hex.encounter === 'treasure' && this.state.supplies <= 0) {
+      const label = this.labelFor('treasure');
+      this.addLog('log.forced', { label: { key: 'visual.treasure.label' }, chance: 100 });
+      this.emit('forced', { hex, type: 'treasure', label, chance: 100 });
+      this.enter(true);
+      return;
+    }
     if (this.scenario) {
       const amb = this.nextScenarioAmbush(hex);
       if (amb) {
@@ -857,7 +871,9 @@ export class Game {
     }
 
     const who = { list: enemies.map((e) => ({ key: 'log.battle.enemy', params: { name: { name: e.name }, hp: e.maxHp } })) };
-    const first = { key: forced ? 'log.battle.enemiesFirst' : 'log.battle.partyFirst' };
+    // The party always strikes first now, forced into the fight or not (2026-09-22
+    // - a forced fight used to hand the enemy a free opening phase; it no longer does).
+    const first = { key: 'log.battle.partyFirst' };
     if (enemies.title) this.addLog('log.battle.stasis', { title: { name: enemies.title }, who, first });
     else this.addLog('log.battle', { who, first });
 
@@ -889,7 +905,7 @@ export class Game {
     if (result.interactive) {
       result.lines = result.lines ?? [];
       result.deaths = result.deaths ?? [];
-      result.partyFirst = !forced;
+      result.partyFirst = true;   // always, forced or not - see startCombat
       for (const u of s.party) {
         if (u.alive && u.hp <= 0) { u.hp = 0; u.alive = false; result.deaths.push(u); }
       }
@@ -970,7 +986,8 @@ export class Game {
   // middle. Used when no combatDelegate is wired in (headless tests, safety net).
   resolveBattle(hex, forced, opts = {}) {
     const ctx = this.prepareCombat(hex, forced, opts);
-    const result = simulateBattle(this.rng, this.config.battle, this.state.party, ctx.enemies, !forced, ctx.damageMod);
+    // partyFirst is always true now: forced no longer hands the enemy the opening move.
+    const result = simulateBattle(this.rng, this.config.battle, this.state.party, ctx.enemies, true, ctx.damageMod);
     return this.finishCombat(ctx, result);
   }
 
@@ -988,7 +1005,8 @@ export class Game {
       if (this.combatDelegate(ctx)) return true;
       this.combatInFlight = false;
       // Delegate refused: fall through to the simulation on the SAME context.
-      const result = simulateBattle(this.rng, this.config.battle, this.state.party, ctx.enemies, !forced, ctx.damageMod);
+      // partyFirst is always true now: forced no longer hands the enemy the opening move.
+      const result = simulateBattle(this.rng, this.config.battle, this.state.party, ctx.enemies, true, ctx.damageMod);
       return this.finishCombat(ctx, result);
     }
     return this.resolveBattle(hex, forced, opts);

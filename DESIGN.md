@@ -98,7 +98,9 @@ void and the balance must be re-measured against interactive play.
 * **Forced encounters - fatigue DISABLED as an experiment (2026-09-22)**: stepping
   onto a tile that holds a FORCEABLE encounter (`config.fatigue.forceable`: battle,
   Stasis Seed, Stasis Colony, event) now **always** drags the party into it - no roll,
-  no percentage. A forced fight still opens with an enemy AMBUSH phase. Everything
+  no percentage. A forced fight still opens with the party's OWN phase - the player
+  always strikes first now, forced or not (2026-09-22; a forced fight used to hand
+  the enemy a free opening phase - see the combat engine bullet below). Everything
   outside that list (shop, cache, Acolyte, gate, hack) is still entered by choice with
   **Enter**. What paces a run is no longer the risk of being caught but the supply
   clock above.
@@ -463,8 +465,12 @@ void and the balance must be re-measured against interactive play.
     def + unlocked upgrade nodes (`def.abilityDefs`, from src/upgrades.js; the
     engine's `abilityFor(unit, id)` serves them, the battle bar reads them too).
     The Stasis "damage" debuff arrives as `partyDamageMod`, a flat penalty to
-    party ability damage. A forced fight opens with an AMBUSH - one extra
-    enemy phase before round 1 (no tag ticks, no round counter).
+    party ability damage. A forced fight is still labelled an AMBUSH (`sb.ambush`,
+    the battle bar reads "Ambush!" instead of "Round 1"), but no longer buys the
+    enemy a free opening phase - **removed 2026-09-22**: `start()` always opens
+    with the party's own phase, `sb.ambush` clears itself at the end of round 1
+    once it has done its one job (the label), and `game.js`'s post-battle report
+    and auto-resolve (`simulateBattle`) always take `partyFirst: true` now too.
   * **Deployment - the player places the party** (`local.deploy`): a fight the party
     WALKED INTO opens with a placement step. The arena keeps the party off the board
     during the dive (only the enemy is there as the clouds part); when the camera
@@ -950,7 +956,42 @@ stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }
   reports back (won and paid / won and paid nothing / lost), a cache the party
   never entered does NOT hold it, and `run.maxSupplies` is the ceiling. Each case
   builds its own tile by hand (`clearAround`) so nothing depends on what the
-  generator happened to roll.
+  generator happened to roll. **Note**: this test's own comment says "a cache
+  the party never entered does NOT hold [the verdict]" - true in general, but
+  since the same day's later change below a treasure the party HAS stepped
+  onto (the run-ending step) now enters itself; the test was not re-checked
+  against that case.
+* 2026-09-22 (later) **Three small fixes, one rule change:**
+  * The forced-encounter banner used to read one line ("Ambushed! Stumbled
+    into {label}") for everything. It now reads what actually happened:
+    **"Stumbled into a fight"** (red) for battle / Stasis Seed / Stasis
+    Colony, **"Stumbled into something..."** (blue, `.banner.event` in
+    style.css) for an event or anything else forced. `ui.showBanner` grew a
+    `tone` argument for the tint; `banner.forced` split into
+    `banner.forced.combat` / `banner.forced.event` in both locales.
+  * **The enemy no longer strikes first in a forced fight.** `sb.ambush` used
+    to buy the enemy a whole extra phase before round 1
+    (`local/battle/engine.js` `start()` called `startEnemyPhase()` instead of
+    `startPlayerPhase()`); now `start()` always opens with the party, and
+    `sb.ambush` only survives as the "Ambush!" label on round 1's counter,
+    clearing itself at that round's end instead of ending a phantom phase of
+    its own. `game.js`'s battle-intro log line, the post-battle report's
+    "who struck first" line, and both `simulateBattle` call sites (the
+    auto-resolve fallback) all take the party going first unconditionally
+    now - `log.battle.enemiesFirst` / `battle.enemiesFirst` are gone from
+    both locales (dead keys, nothing reads them any more). The tutorial 2
+    ambush card no longer teaches the old rule either.
+  * **A treasure forces its own pickup on the step that empties the pack.**
+    `treasure` was never in `fatigue.forceable` on purpose (it is entered by
+    choice, like a shop) - but the step that empties the pack ends the run
+    right after `onEnter` (`checkEndOfRun`), so a treasure sitting on exactly
+    that tile used to be unreachable: no more steps, no Enter press, reward
+    gone. `game.js` `onEnter` now checks for this one case before anything
+    else (scenario or not) and forces it in
+    (`state.supplies <= 0 && hex.encounter === 'treasure'`); `offerSupplies`
+    sets `pendingSupplies`, which `checkEndOfRun` already knew to wait on
+    (`encounterInFlight`), so the verdict still waits for the player to claim
+    it (or not) before the run ends.
 * 2026-09-10 **`tools/engine-test.mjs`** (`npm run test:engine`): headless rules
   checks that run in seconds. The smoke test drives the real browser and stays the
   authority on anything the player can see, but some rules are far easier to state

@@ -672,10 +672,14 @@ export function createUI(config, handlers) {
   }
 
   // Centre-screen banner (forced encounters). Hides itself after `ms`.
+  // `tone` (optional) picks a tint - 'event' reads blue, anything else (a
+  // forced fight) keeps the default red warning colour (see .banner.event
+  // in style.css). The element carries no other class, so this can just
+  // replace the whole className.
   let bannerTimer = null;
-  function showBanner(text, ms) {
+  function showBanner(text, ms, tone = '') {
     els.banner.textContent = text;
-    els.banner.classList.remove('hidden');
+    els.banner.className = tone ? `banner ${tone}` : 'banner';
     clearTimeout(bannerTimer);
     bannerTimer = setTimeout(() => els.banner.classList.add('hidden'), ms);
   }

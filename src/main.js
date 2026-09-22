@@ -833,8 +833,13 @@ function startRun(seed, opts = {}) {
     if (type === 'wither') renderer.handleWither(payload.hexes);
     if (type === 'stasis') renderer.rebuildStasisLines(game);
     if (type === 'forced') {
-      // Banner first; any dialog that follows waits forcedBannerMs.
-      ui.showBanner(t('banner.forced', { label: payload.label }), CONFIG.anim.forcedBannerMs + 900);
+      // Banner first; any dialog that follows waits forcedBannerMs. Wording and
+      // tint depend on what the party was dragged into: an actual fight (battle,
+      // Stasis Seed/Colony) reads red, "Stumbled into a fight"; anything else
+      // forced (an event, or a treasure forced by the last-step rule below)
+      // reads blue, "Stumbled into something...".
+      const isCombat = ['battle', 'stasisSeed', 'stasisColony'].includes(payload.type);
+      ui.showBanner(t(isCombat ? 'banner.forced.combat' : 'banner.forced.event'), CONFIG.anim.forcedBannerMs + 900, isCombat ? '' : 'event');
       holdDialogsUntil = performance.now() + CONFIG.anim.forcedBannerMs;
     }
     if (type === 'dialog') showDialog(payload);
@@ -970,7 +975,7 @@ function showDialog(d) {
       : '';
     ui.openDialog({
       title: d.intro ? d.intro.title : r.stasis ? (r.title ? t('battle.stasis.title', { title: tn(r.title) }) : t('battle.stasis.untitled')) : t('battle.title'),
-      html: `${intro}<div class="battle-sum ${r.won ? 'won' : 'lost'}">${t(r.won ? 'battle.victory' : 'battle.defeat', { n: r.rounds })} ${t(r.partyFirst ? 'battle.partyFirst' : 'battle.enemiesFirst')}</div>
+      html: `${intro}<div class="battle-sum ${r.won ? 'won' : 'lost'}">${t(r.won ? 'battle.victory' : 'battle.defeat', { n: r.rounds })} ${t('battle.partyFirst')}</div>
              ${debuffs}${flavour}${salvage}${enemies ? `<p class="muted">${escapeHtml(t('battle.enemies', { list: enemies }))}</p>` : ''}<div class="battle-lines">${lines.join('')}</div>`,
       actions: [{
         label: picks ? t('dialog.continueReward', { n: picks }) : t('dialog.continue'),

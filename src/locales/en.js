@@ -309,7 +309,6 @@ export const en = {
   'log.battle.stasis': 'Stasis: {title}. Battle vs {who}. {first}',
   'log.battle.enemy': '{name} ({hp} HP)',
   'log.battle.partyFirst': 'The party strikes first.',
-  'log.battle.enemiesFirst': 'Enemies strike first.',
   'log.unitDisabled': '{name} is disabled.',
   'log.victory': 'Victory after {n} {n:round|rounds}.',
   'log.victorySupplies': 'Salvaged {got} of {n} supplies from the battlefield.',
@@ -354,7 +353,7 @@ export const en = {
   'scenario.tutorial2.card.fork.title': 'Two roads',
   'scenario.tutorial2.card.fork.text': 'The short road climbs: hover a tile to see its price in supplies and blood. The long road is flat - and something out there is worth the detour.',
   'scenario.tutorial2.card.ambush.title': 'Ambush!',
-  'scenario.tutorial2.card.ambush.text': 'The bar filled - and the road struck first. In a forced fight the ENEMY acts before you do. Camps and battles reset the bar.',
+  'scenario.tutorial2.card.ambush.text': 'The bar filled - and the road forced your hand: no choosing the moment this time. You still strike first, forced or not. Camps and battles reset the bar.',
   'scenario.tutorial2.card.shop.title': 'A trader on the road',
   'scenario.tutorial2.card.shop.text': 'Shops trade supplies for strength and rest, each item sold once. Enter with <b>Enter</b> - visiting is free.',
   'scenario.tutorial2.card.highground.title': 'The high watch',
@@ -501,7 +500,6 @@ export const en = {
   'battle.victory': 'Victory after {n} {n:round|rounds}.',
   'battle.defeat': 'Defeat after {n} {n:round|rounds}.',
   'battle.partyFirst': 'The party struck first.',
-  'battle.enemiesFirst': 'The enemies struck first (forced by fatigue).',
   'battle.enemies': 'Enemies: {list}',
   'battle.round': 'Round {n}',
   // The deployment bar (placing the party before a fight it walked into).
@@ -586,7 +584,10 @@ export const en = {
   'acolyte.title': 'Acolyte of the Great Forge',
   'acolyte.text': 'The forge can return one disabled companion, at {pct} of their health. Choose who.',
   'acolyte.skip': 'Nobody will be restored. The Acolyte stays on this tile, so you can come back.',
-  'banner.forced': 'Ambushed! Stumbled into {label}',
+  // Split by what the party was forced into (main.js reads payload.type):
+  // an 'event' tints blue, everything else (battle, Stasis Seed/Colony) is a fight.
+  'banner.forced.event': 'Stumbled into something...',
+  'banner.forced.combat': 'Stumbled into a fight',
   'banner.skipped': 'Guide skipped',
 
   // ----- settings ---------------------------------------------------------------------
