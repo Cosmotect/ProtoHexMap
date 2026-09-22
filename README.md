@@ -64,12 +64,13 @@ hex-world-map/
   src/
     config.js    design knobs: run rules, camera, backgrounds, colours + glue for config/*
     config/world.js       map size, tile types, biomes, generation noise
-    config/encounters.js  encounter placement, the Stasis, rest / shop / treasure / events, fatigue
-    config/units.js       the party roster and the enemy groups
+    config/encounters.js  encounter placement, the handcrafted combat maps (map codes) and which
+                          fight rolls which map (battleMaps), the Stasis, rest / shop / treasure / events, fatigue
+    config/entities.js    the party roster, the bestiary, intellect classes, tile tags
     config/abilities.js   combat rules, abilities, tile tags, per-unit combat stats
     main.js      entry point, wires the parts together (incl. the combat bridge)
     game.js      rules and state: movement, fog, fatigue, party, encounters, win / lose (no graphics)
-    battle.js    enemy group generation + the legacy auto-resolve (fallback when no arena)
+    battle.js    builds each fight from its handcrafted map (makeArena) + the legacy auto-resolve (fallback when no arena)
     events.js    flavour texts for Event encounters
     tutorial.js  the new player experience (guided first run)
     text.js      texts generated from config numbers (legend entries, guide cards)
@@ -82,7 +83,8 @@ hex-world-map/
     hex.js       hex grid maths (axial coordinates, neighbours, distance)
     rng.js       seeded random numbers (same seed = same map)
     render.js    the world-map Three.js scene: tiles, fog, markers, player token, camera, picking
-    local/localmap.js     LOCAL map data (the encounter arena grid), elevation wave, recipe hook
+    local/localmap.js     LOCAL map data (the bare arena grid) + the recipe hook (every fight is a handcrafted map)
+    local/mapcode.js      the map code parser: text -> recipe (arena tiles + pinned enemies)
     local/localview.js    the arena's own Three.js scene, tokens, highlights, rotate-only camera
     local/transition.js   the cloud-dive cinematic between the world and the arena
     local/battle/bhex.js     combat hex math (string keys, zone rotation)

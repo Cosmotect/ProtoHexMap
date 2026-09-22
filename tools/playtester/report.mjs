@@ -2,8 +2,8 @@
 //  VIRTUAL PLAYTESTER - the report.
 //
 //  Renders whichever log it is given:
-//    - a GYM log (gym.mjs, 'fight' lines) becomes the bestiary difficulty
-//      ladder: per enemy group x party progression point - win rate (with a
+//    - a GYM log (gym.mjs, 'fight' lines) becomes the difficulty ladder of the
+//      handcrafted combat maps: per map x party progression point - win rate (with a
 //      rough 95% margin), average rounds and average party HP left
 //    - a CAMPAIGN log (campaign.mjs, 'run' + 'pick' lines) becomes the run
 //      report: per persona - win/loss/stall rates, how runs end, pace and
@@ -30,24 +30,22 @@ function loadLog(file) {
   };
 }
 
-// Which shelf of the design ladder a group sits on (config-driven).
-function bandOf(groupId) {
-  const b = CONFIG.battle;
-  for (const [name, band] of Object.entries(b.enemies.bands ?? {})) {
-    if ((band.groups ?? []).includes(groupId)) return name;
+// Which shelf of the design ladder a map sits on: the first row of the
+// battle-map table (config.battle.maps, any layer) that lists it.
+function bandOf(mapId) {
+  for (const [row, layers] of Object.entries(CONFIG.battle.maps ?? {})) {
+    for (const ids of Object.values(layers)) if ((ids ?? []).includes(mapId)) return row;
   }
-  if ((b.colonies ?? []).includes(groupId)) return 'colony';
-  if ((b.bosses ?? []).includes(groupId)) return 'boss';
   return 'other';
 }
-const BAND_ORDER = ['inner', 'middle', 'outer', 'colony', 'boss', 'other'];
+const BAND_ORDER = ['inner', 'middle', 'outer', 'colonies', 'seed', 'other'];
 
-// group x upgrades -> { n, wins, rounds, hpLeft }
+// map x upgrades -> { n, wins, rounds, hpLeft }
 function aggregate(fights) {
   const cells = new Map();
   for (const f of fights) {
-    const key = `${f.groupId}|${f.upgrades}`;
-    const c = cells.get(key) ?? { groupId: f.groupId, upgrades: f.upgrades, n: 0, wins: 0, rounds: 0, hpLeft: 0, timeouts: 0 };
+    const key = `${f.mapId}|${f.upgrades}`;
+    const c = cells.get(key) ?? { mapId: f.mapId, upgrades: f.upgrades, n: 0, wins: 0, rounds: 0, hpLeft: 0, timeouts: 0 };
     c.n += 1;
     if (f.won) { c.wins += 1; c.rounds += f.rounds; c.hpLeft += f.partyHpLeftPct; }
     if (f.outcome === 'timeout') c.timeouts += 1;
@@ -63,12 +61,12 @@ const margin = (p, n) => (n ? 1.96 * Math.sqrt((p * (1 - p)) / n) : 0);
 function renderLadder(log, file) {
   const cells = aggregate(log.fights);
   const upgradePoints = [...new Set(log.fights.map((f) => f.upgrades))].sort((a, b) => a - b);
-  const groups = [...new Set(log.fights.map((f) => f.groupId))];
+  const groups = [...new Set(log.fights.map((f) => f.mapId))];
   groups.sort((a, b) => BAND_ORDER.indexOf(bandOf(a)) - BAND_ORDER.indexOf(bandOf(b))
-    || (log.fights.find((f) => f.groupId === a)?.enemyPower ?? 0) - (log.fights.find((f) => f.groupId === b)?.enemyPower ?? 0));
+    || (log.fights.find((f) => f.mapId === a)?.enemyHp ?? 0) - (log.fights.find((f) => f.mapId === b)?.enemyHp ?? 0));
 
   const out = [];
-  out.push(`# Virtual Playtester - bestiary difficulty ladder`);
+  out.push(`# Virtual Playtester - combat map difficulty ladder`);
   out.push('');
   if (log.header) {
     out.push(`Log: ${path.basename(file)} | ${log.header.date} | bot: ${log.header.bot} | party: ${log.header.party.join(', ')} | seeds ${log.header.seeds.count} per cell${log.header.forced ? ' | AMBUSH openings' : ''}`);
@@ -77,11 +75,11 @@ function renderLadder(log, file) {
   }
   out.push(`Cells read "win rate (avg rounds / avg party HP left when winning)". The party column header is the number of unlocked ability upgrades - the gym's stand-in for run progression.`);
   out.push('');
-  out.push(`| band | group | power | ${upgradePoints.map((u) => `${u} upg`).join(' | ')} |`);
+  out.push(`| band | map | enemy hp | ${upgradePoints.map((u) => `${u} upg`).join(' | ')} |`);
   out.push(`| --- | --- | --- | ${upgradePoints.map(() => '---').join(' | ')} |`);
   for (const g of groups) {
-    const power = log.fights.find((f) => f.groupId === g)?.enemyPower ?? '?';
-    const title = log.fights.find((f) => f.groupId === g)?.title ?? g;
+    const power = log.fights.find((f) => f.mapId === g)?.enemyHp ?? '?';
+    const title = log.fights.find((f) => f.mapId === g)?.title ?? g;
     const cols = upgradePoints.map((u) => {
       const c = cells.get(`${g}|${u}`);
       if (!c || !c.n) return '-';
@@ -208,7 +206,7 @@ function renderDiff(base, next) {
   out.push(`# Virtual Playtester - experiment diff (win rate, candidate minus baseline)`);
   if (next.header?.patch) out.push(`\nCandidate patch: \`${JSON.stringify(next.header.patch)}\``);
   out.push('');
-  out.push('| group | upgrades | baseline | candidate | delta |');
+  out.push('| map | upgrades | baseline | candidate | delta |');
   out.push('| --- | --- | --- | --- | --- |');
   for (const [key, cb] of b) {
     const ca = a.get(key);
@@ -216,7 +214,7 @@ function renderDiff(base, next) {
     const pa = ca.wins / ca.n, pb = cb.wins / cb.n;
     const delta = pb - pa;
     const mark = Math.abs(delta) > margin(pa, ca.n) + margin(pb, cb.n) ? ' **' : '';
-    out.push(`| ${cb.groupId} | ${cb.upgrades} | ${pct(pa)} | ${pct(pb)} | ${delta >= 0 ? '+' : ''}${pct(delta)}${mark} |`);
+    out.push(`| ${cb.mapId} | ${cb.upgrades} | ${pct(pa)} | ${pct(pb)} | ${delta >= 0 ? '+' : ''}${pct(delta)}${mark} |`);
   }
   out.push('');
   out.push('`**` marks a delta larger than both margins combined - likely real, not noise.');

@@ -30,9 +30,24 @@ export const CONFIG = {
 
   // ----- Run rules ---------------------------------------------------
   run: {
-    // Supplies are the currency: camps (rest.cost), shop options (shop.*Cost); treasure gives treasure.supplies.
-    // This is also the maximum: gains never exceed it.
+    // Supplies are the currency AND the run's clock: camps (rest.cost), shop
+    // options (shop.*Cost) and every step spend them; treasure (treasure.supplies)
+    // and won fights (battle.victorySupplies) restock them.
+    // RUN END (2026-09-22): the run is over the moment supplies reach 0. The step
+    // that empties the pack is allowed to happen - and if it lands the party on a
+    // forced encounter, the verdict WAITS for that encounter, because winning it
+    // may restock them (see game.js checkEndOfRun / encounterInFlight).
     startSupplies: 60,
+    // The ceiling, its own knob since 2026-09-22 - it used to be implicitly equal
+    // to startSupplies, so a full pack could never grow. Gains never exceed it
+    // (game.js addSupplies); the overflow dialog offers a camp first.
+    maxSupplies: 100,
+    // Spent on EVERY step, on top of the tile type's climb cost (config/world.js
+    // tileTypes.*.supplyCost, which is only charged when climbing). This is the
+    // dial that decides how long a run lasts; 0 turns the walking clock off and
+    // leaves supplies draining only through terrain, camps and shops (the
+    // behaviour before 2026-09-22).
+    stepSupplyCost: 1,
     revealRadius: 0,          // how many rings around the player get uncovered (0 = only the tile you stand on)
     seedAlwaysVisible: false, // false = the Stasis Seed hides under the fog like everything else
     revealStartRadius: 1,     // rings uncovered around the start tile at the beginning
@@ -123,7 +138,16 @@ export const CONFIG = {
     stasisLine: 0x9a5cff,     // the lines growing from the Seed to its Colonies
     visitedTint: 1,           // multiplier applied to the colour of tiles you already stepped on
     reachableRing: 0xffd166,
-    abilityAimRing: 0xff4d4d,  // tile highlight while picking a target for a unit's ability
+    // A unit's LOCKED aim (and its live aim under the cursor), drawn as a thin hex
+    // OUTLINE in its party slot's colour. Each slot's outline is a little smaller
+    // than the one before, so all three nest inside each other on a shared tile:
+    // red (1st), green (2nd), blue (3rd). Extra slots repeat the colours.
+    lockColors: [0xff3b3b, 0x3bff6e, 0x3b8bff],
+    // Arena tiles a unit may move to / aim at: a small dark hex dot in the tile's
+    // centre, kept faint so the aim outlines above stay the loudest thing on the board.
+    moveDot: 0x000000,
+    moveDotOpacity: 0.2,
+    abilityAimRing: 0xff4d4d,  // (legacy) was the red castable-tile ring; castable tiles now use moveDot
     // ----- the aim PREVIEW: what a cast aimed at the hovered tile would touch.
     // The ring above says where an ability MAY be pointed; these fills say what
     // happens if it is pointed there. One colour per consequence, not per
@@ -142,9 +166,10 @@ export const CONFIG = {
   },
 };
 
-// The "which enemy GROUPS spawn on which world layer" table lives in
-// config/encounters.js (ENCOUNTERS.battleSpawns) so it sits next to the rest
-// of encounter design, but every existing reader still asks for it at
-// CONFIG.battle.spawns (src/battle.js, src/settings.js) - so it is wired in
-// here rather than making those files know about two config sections.
-CONFIG.battle.spawns = ENCOUNTERS.battleSpawns;
+// The "which handcrafted MAPS a fight may roll on which world layer" table
+// lives in config/encounters.js (ENCOUNTERS.battleMaps) so it sits next to
+// the map codes themselves, but its readers ask for it at CONFIG.battle.maps
+// (src/battle.js makeArena, src/settings.js's Battles table) - so it is wired
+// in here rather than making those files know about two config sections.
+// (It was the enemy-GROUP spawn table, battle.spawns, until 2026-09-16.)
+CONFIG.battle.maps = ENCOUNTERS.battleMaps;

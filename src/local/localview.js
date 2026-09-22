@@ -9,7 +9,7 @@
 // =====================================================================
 import * as THREE from 'three';
 import { MapControls } from 'three/addons/controls/MapControls.js';
-import { generateLocalMap, pickRandomTiles, pickClusteredTiles, applyElevationWave, neutralElevation } from './localmap.js';
+import { generateLocalMap, pickRandomTiles, pickClusteredTiles, neutralElevation } from './localmap.js';
 import { hexKey, hexesInRange, hexDistance, axialToPlane } from '../hex.js';
 import { COMBAT_CONFIG } from '../config/localmap.js';
 import { tagDefById } from '../config/entities.js';
@@ -214,7 +214,7 @@ export class LocalMapView {
   //   party     = living player units [{ name, hp }]
   //   enemies   = enemy units [{ name, hp }]
   //   seed      = number, so the same fight always lays out the same arena
-  //   recipe    = future handcrafted arena description (see localmap.js)
+  //   recipe    = the handcrafted arena (src/local/mapcode.js recipe; null = flat ground)
   // layout: 'battle' (default) scatters both sides on random tiles;
   //         'camp' seats the party around a campfire (the start screen).
   // neighbors: the 6 surrounding WORLD tiles as [{ dx, dy, color, dh }] - world-plane
@@ -244,14 +244,14 @@ export class LocalMapView {
     // camera facing the same way, instead of always the same fixed side.
     // Unused for 'camp' (the campfire keeps its own composed azimuth).
     this.worldAzimuth = worldAzimuth;
+    // The arena IS its recipe (src/local/mapcode.js): every fight plays on a
+    // handcrafted map, whose tiles, heights, walls, holes and braziers are laid
+    // over the bare grid here. There is no random terrain any more (the
+    // elevation wave went on 2026-09-16) - a recipe-less arena, such as the
+    // campfire start screen or a scenario fight that authors none, is flat
+    // ground at the neutral step.
     this.map = generateLocalMap(this.config, recipe);
     this.recipe = recipe ?? null;
-    // Battle arenas get rolling tile heights (high ground matters in combat);
-    // the campfire start screen stays flat and calm.
-    // A recipe that authors its own elevations IS the arena's height map: the
-    // random wave stays off so the designed terrain comes through untouched.
-    const recipeHasHeights = !!recipe?.tiles && Object.values(recipe.tiles).some((t) => t.elevation != null);
-    if (layout !== 'camp' && !recipeHasHeights) applyElevationWave(this.map, () => rng.random(), COMBAT_CONFIG.combat.elevationLevels);
     this.scene = new THREE.Scene();
     // The local map's own background settings, separate from the world map's.
     const bg = this.config.localBackground;
@@ -370,8 +370,17 @@ export class LocalMapView {
     // against each other as the camera moved - two coplanar surfaces fighting over
     // the same depth. Separating them in the PLANE fixes it for good, where nudging
     // one a hair higher only moves the problem around.
-    this.aimFillGeo = new THREE.CircleGeometry(tileRadius * 0.68, 6, ringStart);
+    // (Shrunk to stay inside the innermost aim outline, see lockRingGeo.)
+    this.aimFillGeo = new THREE.CircleGeometry(tileRadius * 0.56, 6, ringStart);
     this.aimFillGeo.rotateX(-Math.PI / 2);
+    // Reach / castable tiles: a small hex dot in the centre of the tile.
+    this.moveDotGeo = new THREE.CircleGeometry(tileRadius * 0.2, 6, ringStart);
+    this.moveDotGeo.rotateX(-Math.PI / 2);
+    // Aim outlines, one per party slot, each nested inside the previous
+    // (slot 0 outermost). Built on demand, see lockRingGeo().
+    this.tileRadius = tileRadius;
+    this.ringStart = ringStart;
+    this.lockRingGeos = [];
 
     // Which arena edges are a hole rather than a wall (see computeVoidEdges).
     this.voidEdges = this.computeVoidEdges(edges);
@@ -679,6 +688,9 @@ export class LocalMapView {
     sprite.userData.statusKey = undefined;
     sprite.userData.hotspots = [];   // status boxes, in canvas design units (hover -> tooltip)
     this.updateUnitPlaque(sprite, 0, 0, null);
+    // config.local.unitPlaques false = the overhead cards stay off (the party
+    // panel and the enemy roster carry the numbers; the arena stays readable).
+    sprite.visible = this.config.local?.unitPlaques !== false;
     return sprite;
   }
 
@@ -1250,6 +1262,12 @@ export class LocalMapView {
     // changes, so hovering costs nothing while the cursor sits still.
     this.aimFx = [];
     this.aimFxKey = null;
+    // AIM LOCKS: every unit's locked aim painted on the board, and the damage
+    // pre-calculation billboards over whatever the locks cover (syncLockFx).
+    this.lockFx = [];
+    this.lockLabels = [];
+    this.lockSig = null;
+    this.labelTexCache = this.labelTexCache ?? new Map();
 
     // Keep the sprites build() made for a recipe's authored tags: the engine's
     // startTags carry the same tiles, so syncBattle() simply adopts them.
@@ -1444,8 +1462,15 @@ export class LocalMapView {
       this.aimFx.push(m);
     };
     // What the blast MEANS decides its colour, not which ability is selected.
-    const hitColor = p.kind === 'heal' ? c.aimHealFill : p.kind === 'buff' ? c.aimBuffFill : c.aimHitFill;
-    for (const k of p.hit) fill(k, hitColor);
+    // The tiles the blast touches read as the caster's own aim outline (its
+    // slot colour), exactly like a lock - the hovered aim stands in for the
+    // unit's lock. A heal / buff keeps its fill on top, so its meaning shows.
+    const caster = this.battle.state.units.find((u) => u.uid === this.battle.state.activeUid);
+    this.addAimOutlines(caster, p.hit, key, this.aimFx, 0.004);
+    if (p.kind === 'heal' || p.kind === 'buff') {
+      const hitColor = p.kind === 'heal' ? c.aimHealFill : c.aimBuffFill;
+      for (const k of p.hit) fill(k, hitColor);
+    }
     for (const h of p.height) fill(h.k, c.aimRaiseFill);
     for (const k of p.tag) fill(k, c.aimTagFill);
     // A shove, as it will actually land: the tile the victim leaves, solid, and
@@ -1462,9 +1487,177 @@ export class LocalMapView {
     if (p.dash) fill(p.dash, c.aimDashFill, Math.min(1, baseOpacity * 1.4));
   }
 
-  // Reach (walkable tiles) and aim (castable tiles) as hex OUTLINE rings, the
-  // world map's language: bright ring + dark backing so it reads on any colour,
-  // pulsing; the hovered one goes solid white and its tile rises (see update()).
+  // ----- AIM LOCKS: lock marks + the damage pre-calculation billboards --------
+  // (config.combat.lockedAim; the engine's u.lock and previewTotals()). Every
+  // unit's locked aim is painted in that unit's own colour (config.colors
+  // .lockColors): a fill on each covered tile, a ring on the aim tile. Over
+  // every unit, barrier or hazard the locks cover - plus the aim under the
+  // cursor - floats ONE billboard reading, in three colours: the target's hp
+  // (white), the arithmetic ((2+5)x2=14, gold) and the outcome (-> 6, green
+  // while it survives, red when it goes down); an encounter's rules may add a
+  // note (the Hack's overkill / mine penalty). Rebuilt only when something in
+  // the reading changes (see the signature), so hovering costs nothing.
+  // The thin hex outline for party slot i: red outermost, then green, then blue,
+  // each a step smaller so they nest on a tile covered by several aims.
+  lockRingGeo(i) {
+    const lvl = i % 3;
+    if (!this.lockRingGeos[lvl]) {
+      const outer = this.tileRadius * (0.93 - lvl * 0.11);
+      const g = new THREE.RingGeometry(outer - this.tileRadius * 0.05, outer, 6, 1, this.ringStart);
+      g.rotateX(-Math.PI / 2);
+      this.lockRingGeos[lvl] = g;
+    }
+    return this.lockRingGeos[lvl];
+  }
+  // A party unit's slot (0, 1, 2...) in firing order, counting the fallen too so
+  // a death never repaints the survivors.
+  partySlot(u) {
+    if (!u || u.isEnemy || !this.battle) return 0;
+    const party = this.battle.state.units.filter((x) => !x.isEnemy).sort((a, b) => a.idx - b.idx);
+    return Math.max(0, party.indexOf(u));
+  }
+  // Thin aim outlines for the tiles an aim actually covers, in the unit's
+  // slot colour. `anchor` (the aimed-at tile) is NOT added on its own - for
+  // a pattern that doesn't cover its own anchor (e.g. the hack's flurry/kite/
+  // splay-hex abilities), the anchor tile is not in the damage zone and must
+  // not be outlined as if it were. `list` collects the meshes.
+  addAimOutlines(u, tiles, anchor, list, lift = 0) {
+    const slot = this.partySlot(u);
+    const colors = this.config.colors.lockColors ?? [0xff3b3b];
+    const color = colors[slot % colors.length];
+    const geo = this.lockRingGeo(slot);
+    const keys = new Set(tiles);
+    for (const k of keys) {
+      const tile = this.map.hexes.get(k); if (!tile) continue;
+      const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95, depthWrite: false, side: THREE.DoubleSide }));
+      m.position.set(tile.x, tile.top + 0.05 + lift + slot * 0.002, -tile.y);
+      m.renderOrder = 5;
+      m.userData.tile = tile;
+      m.userData.baseY = m.position.y;
+      this.scene.add(m); list.push(m);
+    }
+  }
+  clearLockFx() {
+    for (const m of this.lockFx ?? []) { this.scene?.remove(m); m.material.dispose(); }
+    this.lockFx = [];
+    for (const l of this.lockLabels ?? []) { this.scene?.remove(l); l.material.dispose(); }
+    this.lockLabels = [];
+    this.lockSig = null;
+  }
+  syncLockFx(hoverKey) {
+    const b = this.battle;
+    if (!b || !b.previewTotals || !this.scene) return;
+    const sb = b.state;
+    if (!sb.lockedAim) return;
+    const key = sb.over || sb.phase !== 'player' ? null : hoverKey;
+    const locks = sb.units.map((u) => (u.lock ? `${u.uid}:${u.lock.abId}@${u.lock.anchor}` : '')).join(';');
+    const hp = sb.units.reduce((n, u) => n + u.hp, 0) + Object.values(sb.tags).reduce((n, t) => n + (t.hp || 0), 0);
+    const sig = `${locks}|${key ?? ''}|${sb.selAb ?? ''}|${sb.activeUid ?? ''}|${sb.phase}|${sb.over ?? ''}|${sb.busy ? 1 : 0}|${hp}|${Object.keys(sb.tags).length}`;
+    if (sig === this.lockSig) return;
+    this.lockSig = sig;
+    for (const m of this.lockFx) { this.scene.remove(m); m.material.dispose(); }
+    this.lockFx = [];
+    for (const l of this.lockLabels) { this.scene.remove(l); l.material.dispose(); }
+    this.lockLabels = [];
+    if (sb.over || sb.phase !== 'player') return;
+    for (const u of sb.units) {
+      if (u.isEnemy || u.hp <= 0 || !u.lock) continue;
+      // While the active unit hovers a new aim, that aim (syncAimFx) replaces
+      // its standing lock on the board, as it does in the billboards.
+      if (key && u.uid === sb.activeUid) continue;
+      this.addAimOutlines(u, u.lock.tiles, u.lock.anchor, this.lockFx);
+    }
+    // The billboards.
+    const totals = b.previewTotals(key);
+    for (const [k, e] of totals) {
+      const segs = this.previewSegments(e);
+      if (!segs.length) continue;
+      const tile = this.map.hexes.get(k); if (!tile) continue;
+      const label = this.makeSegmentLabel(segs);
+      label.position.set(tile.x, tile.top + 1.05, -tile.y);
+      this.scene.add(label); this.lockLabels.push(label);
+    }
+  }
+  // The reading over one covered tile, as coloured segments (see syncLockFx).
+  previewSegments(e) {
+    const white = '#ffffff', gold = '#ffd75f', green = '#8fe0b8', red = '#ff5d73', cyan = '#5fc7e0';
+    const segs = [];
+    const t = e.target;
+    if (t && (t.kind === 'party' || t.kind === 'enemy' || t.kind === 'barrier')) {
+      if (!e.parts.length && !e.note) return segs;   // a heal or a buff: nothing to add up
+      segs.push({ text: String(t.hp), color: white, row: 0 });
+      if (e.parts.length) {
+        const calc = e.parts.length > 1 || e.mult > 1
+          ? `(${e.parts.map((p) => p.dmg).join('+')})x${e.mult}=${e.total}`
+          : `-${e.total}`;
+        segs.push({ text: calc, color: gold, row: 1 });
+      }
+      const left = Math.max(0, t.hp - e.dealt);
+      if (t.blocked && e.dealt < e.total) segs.push({ text: `-> ${left} SHIELD`, color: cyan, row: 0 });
+      else segs.push({ text: `-> ${left}`, color: left > 0 ? green : red, row: 0 });
+      if (e.note) segs.push({ ...e.note, row: 2 });
+    } else if (t && t.kind === 'hazard') {
+      segs.push({ text: t.name.toUpperCase(), color: red, row: 0 });
+      if (e.n > 1 || e.parts.length > 1) segs.push({ text: `x${Math.max(e.n, e.parts.length, 1)}`, color: white, row: 0 });
+      if (e.note) segs.push({ ...e.note, row: 2 });
+    }
+    return segs;
+  }
+  // One canvas billboard for the coloured segments, cached by content. Compact:
+  // the hp and the outcome on the top row, the arithmetic (and any note) below,
+  // and the whole card scaled so it never gets wider than its own hex.
+  makeSegmentLabel(segs) {
+    const key = segs.map((s) => s.text + '|' + s.color + '|' + (s.row ?? 0)).join('#');
+    let tex = this.labelTexCache.get(key);
+    if (!tex) {
+      // Rows by the segment's `row` (see previewSegments): 0 hp + outcome,
+      // 1 the arithmetic, 2 an encounter's note. Empty rows are dropped.
+      const rows = [0, 1, 2].map((r) => segs.filter((z) => (z.row ?? 0) === r)).filter((r) => r.length);
+      const ROW = 58, PAD = 14, GAP = 12, FONT = 'bold 44px "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace';
+      const cv = document.createElement('canvas');
+      let g = cv.getContext('2d');
+      g.font = FONT;
+      const rowW = rows.map((r) => r.reduce((a, s) => a + g.measureText(s.text).width, 0) + GAP * (r.length - 1));
+      const W = Math.ceil(Math.max(...rowW) + PAD * 2);
+      const H = Math.ceil(rows.length * ROW + PAD);
+      cv.width = W; cv.height = H;
+      g = cv.getContext('2d');
+      g.fillStyle = 'rgba(10, 14, 24, 0.82)';
+      roundRect(g, 2, 2, W - 4, H - 4, 16);
+      g.fill();
+      g.strokeStyle = 'rgba(255, 255, 255, 0.22)';
+      g.lineWidth = 3;
+      roundRect(g, 2, 2, W - 4, H - 4, 16);
+      g.stroke();
+      g.font = FONT;
+      g.textBaseline = 'middle';
+      g.textAlign = 'left';
+      rows.forEach((r, ri) => {
+        let x = (W - rowW[ri]) / 2;
+        const y = PAD / 2 + ROW * ri + ROW / 2 + 2;
+        for (const s of r) { g.fillStyle = s.color; g.fillText(s.text, x, y); x += g.measureText(s.text).width + GAP; }
+      });
+      tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.userData = { w: W, h: H, rows: rows.length };
+      this.labelTexCache.set(key, tex);
+    }
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false }));
+    // World size: a row is 0.26 tall, but the card is never wider than the hex
+    // (flat-to-flat width, minus a margin) - a long row shrinks the whole card.
+    const maxW = (this.tileRadius ?? 1) * Math.sqrt(3) * 0.9;
+    let h = 0.26 * tex.userData.rows * (tex.userData.h / (tex.userData.rows * 58 + 14));
+    let w = h * tex.userData.w / tex.userData.h;
+    if (w > maxW) { h *= maxW / w; w = maxW; }
+    sprite.scale.set(w, h, 1);
+    sprite.renderOrder = 20;
+    return sprite;
+  }
+
+  // Reach (walkable tiles) and aim (castable tiles) as a small, faint hex DOT in
+  // the tile's centre (colors.moveDot / moveDotOpacity); the hovered one goes
+  // white and its tile rises (see update()). The aim itself is drawn as slot-
+  // coloured outlines (addAimOutlines), which these dots never overlap.
   syncHighlights(battle) {
     for (const m of this.highlights) this.scene.remove(m);
     this.highlights = [];
@@ -1474,29 +1667,26 @@ export class LocalMapView {
     this.hlTiles = new Map();   // key -> { ring, color, phase, tile }
     const sb = battle.state;
     if (sb.over || sb.phase !== 'player') return;
-    const add = (k, color) => {
+    // A small, faint hex dot in the tile's centre (no pulse, no dark backing):
+    // the aim outlines are what the eye should find first.
+    const cc = this.config.colors;
+    const dotOpacity = cc.moveDotOpacity ?? 0.2;
+    const add = (k, color, opacity = dotOpacity) => {
       const tile = this.map.hexes.get(k);
       if (!tile) return;
       const ring = new THREE.Mesh(
-        this.hlRingGeo,
-        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8, depthWrite: false, side: THREE.DoubleSide })
+        this.moveDotGeo,
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false, side: THREE.DoubleSide })
       );
-      const back = new THREE.Mesh(
-        this.hlRingBackGeo,
-        new THREE.MeshBasicMaterial({ color: 0x0b0e16, transparent: true, opacity: 0.55, depthWrite: false, side: THREE.DoubleSide })
-      );
-      back.position.y = -0.004;
-      ring.add(back);
       ring.position.set(tile.x, tile.top + 0.02, -tile.y);
       this.scene.add(ring);
       this.highlights.push(ring);
-      this.hlTiles.set(k, { ring, color: new THREE.Color(color), phase: Math.random() * Math.PI * 2, tile });
+      this.hlTiles.set(k, { ring, color: new THREE.Color(color), opacity, tile });
     };
     if (sb.selAb && sb.aimMap) {
-      // Ability targeting always highlights red, regardless of the ability's
-      // own theme colour (used elsewhere for its icon) - gold stays reserved
-      // for plain movement below.
-      for (const k of Object.keys(sb.aimMap)) add(k, this.config.colors.abilityAimRing);
+      // Castable tiles use the same faint dot as movement: the colour lives in
+      // the aim outlines (the hovered aim and the standing locks).
+      for (const k of Object.keys(sb.aimMap)) add(k, cc.moveDot ?? 0x000000);
     } else if (sb.inspectReach) {
       // A clicked ENEMY: where it could walk, in its own red. Gold is the
       // party's colour, so the two readings can never be confused.
@@ -1504,14 +1694,14 @@ export class LocalMapView {
       const e = sb.units.find((u) => u.uid === sb.inspectUid);
       for (const k of Object.keys(d)) {
         if (occ.has(k) || (e && k === e.pos)) continue;
-        add(k, this.config.colors.enemyReachRing);
+        add(k, cc.enemyReachRing, 0.45);
       }
     } else if (sb.reach) {
       const { d, occ } = sb.reach;
       const cur = battle.curPlayer();
       for (const k of Object.keys(d)) {
         if (occ.has(k) || (cur && k === cur.pos)) continue;
-        add(k, this.config.colors.reachableRing);
+        add(k, cc.moveDot ?? 0x000000);
       }
     }
   }
@@ -1654,6 +1844,7 @@ export class LocalMapView {
     this.highlights = [];
     this.hlTiles = new Map();
     this.clearAimFx();
+    this.clearLockFx();
     if (this.map) for (const tile of this.map.hexes.values()) { tile.lift = 0; if (tile.mesh) tile.mesh.position.y = 0; }
     for (const s of (this.tagSprites ?? new Map()).values()) this.scene?.remove(s);
     this.tagSprites = new Map();
@@ -1936,7 +2127,7 @@ export class LocalMapView {
 
     for (const tok of this.tokens) {
       const plaque = tok.userData.plaque;
-      if (!plaque || !tok.visible || !plaque.userData.hotspots?.length) continue;
+      if (!plaque || !plaque.visible || !tok.visible || !plaque.userData.hotspots?.length) continue;
       plaque.getWorldPosition(centre);
       const c = toScreen(centre);
       if (c.z > 1) continue;                               // behind the camera
@@ -1996,6 +2187,7 @@ export class LocalMapView {
       const aiming = !sb.over && sb.phase === 'player' && sb.selAb && sb.aimMap;
       const want = aiming && this.hoverKey && sb.aimMap[this.hoverKey] !== undefined ? this.hoverKey : null;
       if (want !== this.aimFxKey) this.syncAimFx(want);
+      this.syncLockFx(want);
     } else if (this.aimFx.length) this.clearAimFx();
     if (this.deploy) this.stepDeployDecal();
     // The active combatant's ground ring breathes so the player sees whose turn it is.
@@ -2024,10 +2216,11 @@ export class LocalMapView {
         if (hl) {
           hl.ring.position.y = tile.top + 0.02 + tile.lift;
           hl.ring.material.color.set(isHover ? c.hoverRing : hl.color);
-          hl.ring.material.opacity = isHover ? 1 : 0.45 + 0.35 * (0.5 + 0.5 * Math.sin(this.elapsed / 260 + hl.phase));
+          hl.ring.material.opacity = isHover ? 0.85 : hl.opacity;
         }
       }
       for (const m of this.aimFx) m.position.y = m.userData.baseY + (m.userData.tile.lift ?? 0);
+      for (const m of this.lockFx ?? []) if (m.userData.tile) m.position.y = m.userData.baseY + (m.userData.tile.lift ?? 0);
     }
     if (this.campfire) {
       // The flame breathes and the light jitters like a real fire.
@@ -2057,6 +2250,9 @@ export class LocalMapView {
     if (this.hlRingGeo) { this.hlRingGeo.dispose(); this.hlRingGeo = null; }
     if (this.hlRingBackGeo) { this.hlRingBackGeo.dispose(); this.hlRingBackGeo = null; }
     if (this.aimFillGeo) { this.aimFillGeo.dispose(); this.aimFillGeo = null; }
+    if (this.moveDotGeo) { this.moveDotGeo.dispose(); this.moveDotGeo = null; }
+    for (const g of this.lockRingGeos ?? []) g?.dispose();
+    this.lockRingGeos = [];
     if (this.scene) {
       this.scene.traverse((o) => {
         if (o.geometry) o.geometry.dispose();

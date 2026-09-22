@@ -4,7 +4,7 @@ import { createRng } from './rng.js';
 import { generateMap, setType, setBiome } from './map.js';
 import { buildScenarioMap, cloneEnemies } from './scenarios/scenario.js';
 import { hexKey, neighbors, hexesInRange, hexDistance } from './hex.js';
-import { simulateBattle, makeEnemies, makeRegulars, renameDuplicates, makeEnemyOfType } from './battle.js';
+import { simulateBattle, makeArena, makeRegulars, renameDuplicates } from './battle.js';
 import { recipeFromCode } from './local/mapcode.js';
 import { availableUpgrades, unlockUpgrade, upgradeCount } from './upgrades.js';
 import { EVENTS } from './events.js';
@@ -18,7 +18,7 @@ const FLAVOUR_POOL = { battle: 4, combatIntro: 6, treasure: 4, shop: 13, acolyte
 export class Game {
   // `scenario` switches the run into SCENARIO MODE (src/scenarios/): the map is
   // built from the scenario's data instead of the generator, and every roll the
-  // script covers (forced fights, event picks, enemy groups) is read from it.
+  // script covers (forced fights, event picks, enemy line-ups) is read from it.
   // `layer` is which layer of the worldflake the run happens on (config.layers;
   // main.js passes the start screen's selection - for now it only recolours the
   // biomes, see map.js biomeColorFor).
@@ -31,11 +31,17 @@ export class Game {
     this.rng = createRng(seed);
     this.map = scenario ? buildScenarioMap(config, scenario) : generateMap(config, this.rng, this.layer);
     this.map.layer = this.layer;
-    // Enemy groups are rolled up front for every battle tile, so the danger of a revealed
-    // battle can be shown before the party enters it. (Scenario battles come authored.)
+    // Every battle tile (and the Seed) rolls its ARENA up front: one handcrafted
+    // map out of the tile's cell of config.battleMaps (ring band x layer), whose
+    // pinned enemies are the fight's enemies - so the danger of a revealed battle,
+    // the tile's hover and the fight itself all read the same map. (Scenario
+    // battles come authored: enemies from the script, an arena only if the
+    // script gives one - otherwise flat ground.)
     for (const h of this.map.hexes.values()) {
       if ((h.encounter === 'battle' || h.encounter === 'stasisSeed') && !h.enemies) {
-        h.enemies = makeEnemies(this.rng, config.battle, h.ring, h.isSeed ? 'boss' : 'regular', this.map.layer);
+        const arena = makeArena(this.rng, config, h.ring, h.isSeed ? 'boss' : 'regular', this.map.layer);
+        h.recipe = arena.recipe;
+        h.enemies = arena.enemies;
       }
     }
 
@@ -78,11 +84,18 @@ export class Game {
       party: (scenario?.party ?? (config.party.roster ?? []).slice(0, config.party.size ?? 3))
         .map((u) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.hp, upgrades: [], alive: true, isPlayer: true })),
       supplies,
-      maxSupplies: scenario?.maxSupplies ?? supplies,
+      // The ceiling is its own config knob since 2026-09-22 (run.maxSupplies); a
+      // scenario may still fix its own, and the `?? supplies` tail keeps an old
+      // scenario that set only `supplies` behaving as it always did.
+      maxSupplies: scenario?.maxSupplies ?? run.maxSupplies ?? supplies,
       turn: 0,
       position: this.map.start,   // the hex the player stands on
       shortestPathLength: pathLength,
       // Fatigue: steps taken since the last encounter, and the resulting chance (%).
+      // While fatigue is DISABLED (config.fatigue.enabled === false, the current
+      // experiment) `fatigue` stays 0 and is never rolled on, but `fatigueSteps`
+      // keeps counting: it is also the clock the tutorial scenarios time their
+      // scripted ambushes off (nextScenarioAmbush).
       fatigueSteps: 0,
       fatigue: 0,
       encountersCleared: 0,
@@ -95,6 +108,11 @@ export class Game {
     this.log = [];
     this.listeners = [];
     this.pendingArrival = null;   // set while the guide holds what happens on the tile just reached
+    // True from the moment an interactive fight is handed to the arena until
+    // finishCombat comes back with its result. The out-of-supplies verdict reads
+    // it (encounterInFlight): a party that walks its last ration onto a forced
+    // fight is not dead yet - the salvage from winning may refill the pack.
+    this.combatInFlight = false;
 
     // Shops: each one rolls its stock now (seeded), so a revealed and visited shop can
     // show what it sells before the party walks back to it. Done last, so the rolls do
@@ -103,12 +121,14 @@ export class Game {
       if (h.encounter === 'shop' && !h.shop) h.shop = this.rollShopStock();
     }
 
-    // Handcrafted arenas (config.craftedMaps): some battle and shop tiles trade
-    // the random arena for an authored map code. Rolled on a rng of its OWN,
-    // after every other generation roll, so tuning the rates never reshuffles
-    // the map, the enemies or the shop stock of an existing seed. Scenario maps
-    // are authored already and skip this entirely.
-    if (!scenario) this.assignCraftedMaps();
+    // Shop arenas (config.craftedMaps.shop): some shop tiles get an authored map
+    // code, stored for a shop flow that does not open a local map yet. Rolled on
+    // a rng of its OWN, after every other generation roll, so tuning the rate
+    // never reshuffles the map, the fights or the shop stock of an existing
+    // seed. Scenario maps are authored already and skip this entirely. (Battle
+    // tiles do not roll here any more: since 2026-09-16 every fight takes its
+    // map from config.battleMaps in the loop above.)
+    if (!scenario) this.assignShopMaps();
 
     this.map.start.visited = true;
     this.reveal(this.map.start.q, this.map.start.r, run.revealStartRadius, true);
@@ -118,34 +138,25 @@ export class Game {
     else this.addLog('log.newRun', { seed, n: this.map.colonies.length, steps: pathLength });
   }
 
-  // ----- handcrafted arenas -------------------------------------------
-  // Rolls which battle / shop tiles use an authored map code instead of the
-  // random arena generator (config.craftedMaps: per-kind rate + map list).
-  // A crafted battle brings its own garrison - the authored enemies REPLACE
-  // the group rolled at generation. A map code has no say over its tile's
-  // chevrons (2026-09-10 - the old `danger:` header line is gone): those are
-  // read purely from the tile's ring band, see dangerRank() below. A code
-  // that fails to parse is skipped with a console warning: a typo in a
-  // config map must never take the run down with it.
-  assignCraftedMaps() {
-    const crafted = this.config.craftedMaps ?? {};
+  // ----- shop arenas ---------------------------------------------------
+  // Rolls which shop tiles carry an authored map code (config.craftedMaps.shop:
+  // rate + map list). Stored only - the shop flow does not open a local map
+  // yet. A code that fails to parse is skipped with a console warning: a typo
+  // in a config map must never take the run down with it. (Until 2026-09-16
+  // this also rolled which BATTLE tiles used a crafted map instead of the
+  // random arena; every battle is a crafted map now, see the constructor.)
+  assignShopMaps() {
+    const set = this.config.craftedMaps?.shop;
+    if (!set?.maps?.length) return;
     const rng = createRng((this.seed ^ 0x5eedca) >>> 0);
     for (const h of this.map.hexes.values()) {
-      const set = h.encounter === 'battle' ? crafted.combat
-        : h.encounter === 'shop' ? crafted.shop : null;
-      if (!set?.maps?.length || !rng.chance(set.rate ?? 0)) continue;
+      if (h.encounter !== 'shop' || !rng.chance(set.rate ?? 0)) continue;
       const recipe = recipeFromCode(rng.pick(set.maps), this.config);
       if (recipe.errors.length) {
         console.warn(`crafted map "${recipe.id}" skipped:`, recipe.errors.join('; '));
         continue;
       }
       h.recipe = recipe;
-      if (h.encounter === 'battle') {
-        if (recipe.enemyTypeIds.length) {
-          const units = recipe.enemyTypeIds.map((id) => makeEnemyOfType(this.config.battle, id)).filter(Boolean);
-          if (units.length === recipe.enemyTypeIds.length) h.enemies = renameDuplicates(units);
-        }
-      }
     }
   }
 
@@ -176,25 +187,39 @@ export class Game {
   // ridge-walking mountain-to-mountain or hill-to-hill, or coming back down
   // mountain-to-hill, costs nothing. A biome's own flat HP cost (wither) is
   // NOT height-gated - it hurts every step regardless of where you came from.
+  // On top of the terrain price, EVERY step costs run.stepSupplyCost (added
+  // 2026-09-22): walking itself is what empties the pack, and an empty pack ends
+  // the run.
   stepCost(hex) {
     const from = this.state.position;
     const type = this.config.tileTypes[hex.type] ?? {};
     const biome = this.config.biomes[hex.biome] ?? {};
     const climbing = (hex.terrainHeight ?? 0) > (from?.terrainHeight ?? 0);
     return {
-      supplyCost: climbing ? (type.supplyCost ?? 0) : 0,
+      supplyCost: (this.config.run.stepSupplyCost ?? 0) + (climbing ? (type.supplyCost ?? 0) : 0),
       hpCost: (climbing ? (type.hpCost ?? 0) : 0) + (biome.hpCost ?? 0),
     };
   }
 
-  // Hexes the player could step to right now.
+  // Would stepping onto `hex` empty the pack? The step is still LEGAL - running
+  // out of supplies is how a run ends, not something the rules forbid - but the
+  // HUD paints the tile as the last one and the hover tip says so.
+  stepEndsRun(hex) {
+    if (!hex || this.state.status !== 'playing') return false;
+    return this.state.supplies - this.stepCost(hex).supplyCost <= 0;
+  }
+
+  // Hexes the player could step to right now. Affordability is NOT a filter any
+  // more (it was until 2026-09-22, when supplies could not go below 0): a step
+  // the party cannot pay for is the last step of the run, and they are allowed
+  // to take it - see checkEndOfRun.
   reachable() {
     if (this.state.status !== 'playing') return [];
     const { q, r } = this.state.position;
     const out = [];
     for (const [nq, nr] of neighbors(q, r)) {
       const h = this.hexAt(nq, nr);
-      if (h && h.passable && this.stepCost(h).supplyCost <= this.state.supplies) out.push(h);
+      if (h && h.passable) out.push(h);
     }
     return out;
   }
@@ -204,7 +229,8 @@ export class Game {
     const pos = this.state.position;
     if (hexDistance(pos.q, pos.r, hex.q, hex.r) !== 1) return false;
     if (!hex.passable) return false;
-    if (this.stepCost(hex).supplyCost > this.state.supplies) return false;
+    // No affordability check: the step that empties the pack is the run's last
+    // step, not an illegal one (see reachable / checkEndOfRun).
     return true;
   }
 
@@ -248,9 +274,19 @@ export class Game {
     return this.enterAction().enabled;
   }
 
+  // Is the fatigue mechanic switched on? DISABLED as an experiment on 2026-09-22
+  // (config/encounters.js, the "Fatigue" section): with it off nothing is rolled,
+  // state.fatigue stays 0, the bar is hidden, and every forceable encounter fires
+  // on arrival. Every fatigue-shaped branch in this file asks here first, so the
+  // whole mechanic comes back by flipping one boolean.
+  fatigueEnabled() {
+    return this.config.fatigue?.enabled !== false;
+  }
+
   // Fatigue % the party will have after one more step (the step raises it AFTER the
   // arrival roll, which uses the current value shown in the HUD).
   fatigueAfterNextStep() {
+    if (!this.fatigueEnabled()) return 0;
     return lerpTable(this.config.fatigue.byStep, this.state.fatigueSteps + 1);
   }
 
@@ -265,10 +301,17 @@ export class Game {
     return this.config.fatigue.resetOn?.[type] === 'optional' ? t(`reset.note.${type}`) : '';
   }
 
-  // Chance (%) of being forced into something if the party steps onto `hex` now:
-  // the CURRENT fatigue, and only if the tile holds (or may hide) a forceable encounter.
-  // Returns null when the tile is revealed and cannot force anything.
+  // Chance (%) of being forced into something if the party steps onto `hex` now.
+  // Returns null when nothing can be forced there.
+  // With fatigue ON: the CURRENT fatigue, for a tile that holds - or may still
+  // hide - a forceable encounter.
+  // With fatigue OFF (the experiment): a revealed forceable encounter is a flat
+  // 100%, and an unrevealed tile promises nothing, because whether it forces
+  // anything depends entirely on what is under the fog.
   forcedChanceFor(hex) {
+    if (!this.fatigueEnabled()) {
+      return hex.revealed && hex.encounter && this.isForceable(hex.encounter) ? { chance: 100 } : null;
+    }
     const f = this.state.fatigue;
     if (!hex.revealed) return { chance: f };
     if (hex.encounter && this.isForceable(hex.encounter)) return { chance: f };
@@ -318,14 +361,17 @@ export class Game {
     hex.visited = true;
 
     // The arrival roll uses the fatigue you could see before stepping; then the step
-    // raises it (every step, encounter or not).
+    // raises it (every step, encounter or not). With fatigue DISABLED the counter
+    // still ticks (the tutorial ambushes read it) but the chance stays 0 and
+    // onEnter forces regardless - see fatigueEnabled().
     const rollChance = s.fatigue;
     s.fatigueSteps += 1;
-    s.fatigue = lerpTable(this.config.fatigue.byStep, s.fatigueSteps);
+    if (this.fatigueEnabled()) s.fatigue = lerpTable(this.config.fatigue.byStep, s.fatigueSteps);
 
-    // Terrain costs (mountains, hills): supplies and HP, only when climbing
-    // (see stepCost above).
-    if (cost.supplyCost > 0) s.supplies -= cost.supplyCost;
+    // The walking cost (run.stepSupplyCost) plus the terrain cost of a climb.
+    // Supplies floor at 0 rather than going negative: 0 IS the end of the run,
+    // and the end is decided in checkEndOfRun, after the arrival has played out.
+    if (cost.supplyCost > 0) s.supplies = Math.max(0, s.supplies - cost.supplyCost);
 
     const radius = this.config.run.revealRadius + (hex.revealBonus || 0);
     const newlyRevealed = this.reveal(hex.q, hex.r, radius, false);
@@ -334,7 +380,14 @@ export class Game {
     const costs = [];
     if (cost.supplyCost > 0) costs.push(t('log.cost.supplies', { n: cost.supplyCost }));
     if (cost.hpCost > 0) costs.push(t('log.cost.hp', { n: cost.hpCost }));
-    this.addLog('log.moved', { turn: s.turn, where: { hex: { type: hex.type, biome: hex.biome, q: hex.q, r: hex.r, encounter: hex.encounter } }, fatigue: s.fatigue });
+    // The step's line names the number that now paces the run: fatigue while the
+    // mechanic is on, supplies while it is off.
+    this.addLog(this.fatigueEnabled() ? 'log.moved' : 'log.moved.supplies', {
+      turn: s.turn,
+      where: { hex: { type: hex.type, biome: hex.biome, q: hex.q, r: hex.r, encounter: hex.encounter } },
+      fatigue: s.fatigue,
+      supplies: s.supplies,
+    });
     if (costs.length) this.addLog('log.moved.costs', { costs: costs.join(', ') });
     if (cost.hpCost > 0) this.damageParty(cost.hpCost, 'log.climb');
     if (!this.livingUnits().length) {
@@ -411,12 +464,15 @@ export class Game {
   spawnColony(c) {
     c.active = true;
     c.hex.encounter = 'stasisColony';
-    // Scripted Colonies (tutorial) bring an authored garrison; the rest roll one.
+    // Scripted Colonies (tutorial) bring an authored garrison; the rest roll
+    // a Colony arena (config.battleMaps.colonies), enemies included.
     if (c.script?.enemies) {
       c.hex.enemies = cloneEnemies(c.script.enemies, this.config.battle);
       if (c.script.title) c.hex.enemies.title = c.script.title;
     } else {
-      c.hex.enemies = makeEnemies(this.rng, this.config.battle, c.hex.ring, 'colony', this.map.layer);
+      const arena = makeArena(this.rng, this.config, c.hex.ring, 'colony', this.map.layer);
+      c.hex.recipe = arena.recipe;
+      c.hex.enemies = arena.enemies;
     }
     this.addLog('log.colonySpawn', {
       where: { hex: { type: c.hex.type, biome: c.hex.biome, q: c.hex.q, r: c.hex.r } },
@@ -450,6 +506,7 @@ export class Game {
       const type = h.encounter;
       h.encounter = null;
       h.enemies = null;
+      h.recipe = null;
       if (h.revealed) this.addLog('log.witherConsumed', { label: { key: `visual.${type}.label` } });
       this.emit('encounter', { hex: h, type, forced: false, withered: true });
     }
@@ -470,8 +527,13 @@ export class Game {
     return [];
   }
 
-  // What happens when stepping on a hex: the party is NOT pulled into the encounter
-  // automatically, unless fatigue rolls against them.
+  // What happens when stepping on a hex.
+  //   fatigue ON:  the party is NOT pulled into the encounter automatically -
+  //                only if the fatigue roll goes against them.
+  //   fatigue OFF: (the experiment, 2026-09-22) walking onto a FORCEABLE
+  //                encounter always drags the party in, no roll, chance 100.
+  //                Everything not in config.fatigue.forceable - a shop, a cache,
+  //                the Acolyte, the gate - is still entered by choice.
   // In SCENARIO mode there are no random forces at all: the only forced fights
   // are the scripted ambushes, which fire at their exact step on an empty tile.
   onEnter(hex, rollChance) {
@@ -492,9 +554,14 @@ export class Game {
     }
     if (!hex.encounter) return;
     const label = this.labelFor(hex.encounter);
-    if (this.isForceable(hex.encounter) && rollChance > 0 && this.rng.chance(rollChance / 100)) {
-      this.addLog('log.forced', { label: { key: `visual.${hex.encounter}.label` }, chance: rollChance });
-      this.emit('forced', { hex, type: hex.encounter, label, chance: rollChance });
+    const forceable = this.isForceable(hex.encounter);
+    // Fatigue off: certain. Fatigue on: rolled against the chance the HUD showed
+    // before the step.
+    const forced = forceable && (!this.fatigueEnabled() || (rollChance > 0 && this.rng.chance(rollChance / 100)));
+    if (forced) {
+      const chance = this.fatigueEnabled() ? rollChance : 100;
+      this.addLog('log.forced', { label: { key: `visual.${hex.encounter}.label` }, chance });
+      this.emit('forced', { hex, type: hex.encounter, label, chance });
       this.enter(true);
       return;
     }
@@ -528,6 +595,11 @@ export class Game {
       case 'stasisSeed':
       case 'stasisColony':
         return this.startCombat(hex, forced);
+      case 'hack':
+        // EXPERIMENT (src/local/hack/, see DESIGN.md "The Hack encounter"): played
+        // out by the hack bridge; this branch is one of the few lines outside
+        // that folder and goes with it.
+        return this.startHack(hex);
       case 'treasure': {
         this.consume(hex, type, forced);
         // A scenario may fix the exact amount a cache holds.
@@ -603,6 +675,10 @@ export class Game {
     this.applyRest();
     this.resetFatigue();
     this.emit('camp', {});
+    // Supplies buy the camp, so a camp can be the thing that empties the pack.
+    // (Held back while a cache's overflow dialog is open - claimSupplies, which
+    // is what asked for this camp, gives the verdict once the find is taken.)
+    this.checkEndOfRun();
     this.emit('change');
     return true;
   }
@@ -680,7 +756,7 @@ export class Game {
 
     if (item === 'rest') {
       s.supplies -= cost;
-      this.addLog('log.shop.rested', { cost });
+      this.addLog(this.fatigueEnabled() ? 'log.shop.rested' : 'log.shop.rested.nofatigue', { cost });
       this.applyRest();
       this.resetFatigue();
     } else if (item === 'map') {
@@ -719,6 +795,9 @@ export class Game {
     // open window - and the tile's hover text - can still list what was here.
     // Fatigue is untouched: shop's reset rule is 'optional', not 'always'.
     if (this.shopSoldOut(hex)) this.consume(hex, 'shop', false);
+    // A purchase spends supplies, and spending the last of them ends the run the
+    // same way walking them off does.
+    this.checkEndOfRun();
     this.emit('change');
     return true;
   }
@@ -733,14 +812,21 @@ export class Game {
   // ----- battle ---------------------------------------------------------
   // A fight happens in three steps, so the INTERACTIVE combat on the local map
   // (src/local/battle/) can slot in between them:
-  //   prepareCombat()  rolls the enemies, applies the Stasis debuffs, logs the
+  //   prepareCombat()  takes the tile's fight (map + enemies), applies the Stasis debuffs, logs the
   //                    opening - and returns a context describing the fight
   //   ...the fight...  either simulateBattle (the old auto-resolve) or the
   //                    combatDelegate set by main.js (the playable arena)
   //   finishCombat()   lifts the debuffs, applies deaths, rewards, dialogs, end
   prepareCombat(hex, forced, opts = {}) {
     const s = this.state;
-    const enemies = hex.enemies ?? makeEnemies(this.rng, this.config.battle, hex.ring, hex.isSeed ? 'boss' : hex.isColony ? 'colony' : 'regular', this.map.layer);
+    // A tile that never rolled its fight (a battle conjured onto a bare tile by
+    // a test or an event) rolls it now, arena and all, the same way generation does.
+    let enemies = hex.enemies;
+    if (!enemies) {
+      const arena = makeArena(this.rng, this.config, hex.ring, hex.isSeed ? 'boss' : hex.isColony ? 'colony' : 'regular', this.map.layer);
+      hex.recipe = hex.recipe ?? arena.recipe;
+      enemies = arena.enemies;
+    }
     hex.enemies = null;
 
     // Stasis debuffs: temporarily weaken the party and/or reinforce the enemy for
@@ -787,6 +873,10 @@ export class Game {
   finishCombat(ctx, result) {
     const s = this.state;
     const { hex, forced, opts, enemies, debuffs, saved } = ctx;
+    // The fight is back from the arena: the out-of-supplies verdict is free to
+    // read the pack again (see encounterInFlight). Cleared here, before the
+    // salvage below, so the re-check at the end of this method sees the truth.
+    this.combatInFlight = false;
 
     // Undo the temporary debuffs (wounds and deaths remain).
     for (let i = 0; i < s.party.length; i++) {
@@ -827,6 +917,9 @@ export class Game {
       result.reward = 'upgrade';
       // Clearing a Colony grants several picks (config.stasis.rewardPicks).
       result.rewardPicks = hex.isColony ? this.config.stasis.rewardPicks : 1;
+      // How many OPTIONS each pick offers (null = one per living unit, the
+      // default). Set by an encounter that grades its reward (the Hack's badges).
+      result.rewardOptions = ctx.rewardOptions ?? null;
     }
     if (result.won) result.lore = this.pickFlavour('battle');
     // Winners salvage supplies from the field (battle and Stasis fights alike).
@@ -864,6 +957,11 @@ export class Game {
         this.emit('stasis', {});
       }
     }
+    // The verdict this fight may have been holding back: the party walked their
+    // last ration onto a forced fight, and what they salvaged from it (or failed
+    // to) decides the run. A no-op when the pack is not empty, and when the run
+    // already ended above.
+    this.checkEndOfRun();
     this.emit('change');
     return true;
   }
@@ -883,12 +981,44 @@ export class Game {
   startCombat(hex, forced, opts = {}) {
     if (this.combatDelegate) {
       const ctx = this.prepareCombat(hex, forced, opts);
+      // The fight is about to leave for the arena and will not report back until
+      // finishCombat. Flagged BEFORE the delegate runs, because a delegate that
+      // finishes synchronously clears it on the way out.
+      this.combatInFlight = true;
       if (this.combatDelegate(ctx)) return true;
+      this.combatInFlight = false;
       // Delegate refused: fall through to the simulation on the SAME context.
       const result = simulateBattle(this.rng, this.config.battle, this.state.party, ctx.enemies, !forced, ctx.damageMod);
       return this.finishCombat(ctx, result);
     }
     return this.resolveBattle(hex, forced, opts);
+  }
+
+  // ----- the HACK encounter (EXPERIMENT - src/local/hack/, see DESIGN.md) ----
+  // The world-map side of the hack is deliberately tiny: build a combat-shaped
+  // context with no enemies, hand it to the bridge, and on the way back reuse
+  // finishCombat's reward path for a win. A failed hack is simply consumed -
+  // no reward, no run-ending defeat. Ripping the experiment out = deleting
+  // these two methods and the 'hack' case in enter().
+  startHack(hex) {
+    const ctx = {
+      hex, forced: false, opts: {}, enemies: [], debuffs: [],
+      saved: this.state.party.map((u) => ({ maxHp: u.maxHp })),
+      damageMod: 0, stasis: false, title: null, lore: null, hack: true,
+    };
+    if (this.hackDelegate && this.hackDelegate(ctx)) return true;
+    // No arena to play it on (headless): the terminal is left alone, consumed.
+    this.addLog('log.hack.failed');
+    this.consume(hex, 'hack', false);
+    return true;
+  }
+  finishHack(ctx, { won, rounds, badges = 0 }) {
+    // The hack's reward is GRADED: as many upgrade options as badges earned
+    // (finishCombat reads ctx.rewardOptions; the chooser shows only that many).
+    if (won) { ctx.rewardOptions = badges > 0 ? badges : null; return this.finishCombat(ctx, { won: true, rounds, interactive: true }); }
+    this.addLog('log.hack.failed');
+    this.consume(ctx.hex, 'hack', false);
+    return true;
   }
 
   // ----- event effects ---------------------------------------------------
@@ -987,7 +1117,7 @@ export class Game {
       case 'rest': {
         this.applyRest();
         this.resetFatigue();
-        effect = t('effect.rest', { pct: `${Math.round(this.config.rest.healFraction * 100)}%` });
+        effect = t(this.fatigueEnabled() ? 'effect.rest' : 'effect.rest.nofatigue', { pct: `${Math.round(this.config.rest.healFraction * 100)}%` });
         break;
       }
     }
@@ -1027,6 +1157,10 @@ export class Game {
     s.pendingSupplies = null;
     const got = this.addSupplies(p.amount);
     this.addLog(got < p.amount ? 'log.collected.partial' : 'log.collected', { got, amount: p.amount });
+    // The find may have been the last thing standing between an empty pack and
+    // the end of the run (see encounterInFlight): now that it is taken - or
+    // turned out not to be enough - the verdict can be given.
+    this.checkEndOfRun();
     this.emit('change');
     return true;
   }
@@ -1036,7 +1170,9 @@ export class Game {
   // everything currently unlockable across the unit's ability trees; the
   // player picks one offer to actually unlock. Newly opened children join the
   // pool on the NEXT reward, because the pool is re-read every time.
-  upgradeOffers() {
+  // `limit` (optional) caps how many offers come back - a random subset, so a
+  // graded reward (the Hack's badges) can offer one, two or three options.
+  upgradeOffers(limit = null) {
     const out = [];
     this.state.party.forEach((u, index) => {
       if (!u.alive) return;
@@ -1044,6 +1180,7 @@ export class Game {
       if (!pool.length) return;
       out.push({ index, ...this.rng.pick(pool) });
     });
+    if (limit != null && limit < out.length) return this.shuffle(out).slice(0, Math.max(0, limit));
     return out;
   }
   hasUpgradeOffers() {
@@ -1197,6 +1334,19 @@ export class Game {
     return `flavour.${kind}.${this.rng.int(1, FLAVOUR_POOL[kind] ?? 1)}`;
   }
 
+  // Is something the party was dragged into still resolving, and still able to
+  // hand them supplies? Two cases, and both are the reason the out-of-supplies
+  // verdict below can be held back:
+  //   * an interactive fight is out on the arena (combatInFlight) - winning it
+  //     salvages battle.victorySupplies;
+  //   * a cache or an event has offered supplies the player has not taken yet
+  //     (state.pendingSupplies, the overflow dialog).
+  // Both clear themselves (finishCombat, claimSupplies), and both call
+  // checkEndOfRun again on the way out, so the verdict is never simply dropped.
+  encounterInFlight() {
+    return this.combatInFlight || !!this.state.pendingSupplies;
+  }
+
   checkEndOfRun() {
     const s = this.state;
     if (s.status !== 'playing') return;
@@ -1205,6 +1355,19 @@ export class Game {
       s.status = 'won';
       s.endReason = ['end.scenario', { turn: s.turn }];
       this.addLog('log.scenarioDone');
+      this.emit('end', { status: s.status });
+      return;
+    }
+    // OUT OF SUPPLIES (2026-09-22): an empty pack ends the run. The step that
+    // empties it is allowed to happen, so this is checked AFTER the arrival has
+    // played out - and if that arrival forced the party into something that can
+    // still pay them (a fight on the arena, a cache waiting to be claimed), the
+    // verdict waits for it. finishCombat / claimSupplies come back here.
+    if (s.supplies <= 0) {
+      if (this.encounterInFlight()) return;
+      s.status = 'lost';
+      s.endReason = ['end.supplies', { turn: s.turn }];
+      this.addLog('log.outOfSupplies', { turn: s.turn });
       this.emit('end', { status: s.status });
       return;
     }

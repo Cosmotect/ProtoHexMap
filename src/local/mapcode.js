@@ -4,7 +4,13 @@
 //  A map code is a few header lines and one line per authored tile:
 //
 //    # comments start with a hash, blank lines are ignored
-//    id: the-causeway          required - the map's name
+//    id: the-causeway          required - the map's id (what the spawn table lists)
+//    title: The Causeway       optional - the fight's display name (the battle
+//                              log, the Local Map Info panel, the report). It
+//                              used to come from the enemy group; since
+//                              2026-09-16 a fight IS its map, so the map
+//                              carries it. Default: the id, dashes to spaces,
+//                              words capitalised.
 //    radius: 4                 optional - rings of local hexes (default: config.local.radius)
 //    q,r: <type> [elevation] [tags...] [!Enemy Name]
 //
@@ -25,8 +31,12 @@
 //  parseMapCode() turns the text into plain data (+ a list of readable
 //  errors); buildRecipe() validates it against the config and produces the
 //  recipe object src/local/localmap.js applyRecipe / LocalMapView.build eat:
-//    { id, radius, tiles: { 'q,r': { type, elevation, tags } },
+//    { id, title, radius, tiles: { 'q,r': { type, elevation, tags } },
 //      spawns: { enemies: [keys] }, enemyTypeIds: [ids], startTags: [{ k, id }] }
+//  Since 2026-09-16 EVERY fight plays on one of these (there is no random
+//  arena generator any more): the map's pinned enemies are the fight's
+//  enemies, and config/encounters.js `battleMaps` says which map ids each
+//  kind of fight may roll on each layer.
 // =====================================================================
 import { COMBAT_CONFIG } from '../config/localmap.js';
 import { COMBAT_TAGS } from '../config/entities.js';
@@ -37,7 +47,7 @@ const TYPE_ALIASES = { g: 'ground', ground: 'ground', w: 'wall', wall: 'wall', e
 // Text -> plain data. Never throws: everything wrong lands in `errors`, one
 // human sentence per problem, with the 1-based line number.
 export function parseMapCode(text) {
-  const out = { id: null, radius: null, tiles: [], errors: [] };
+  const out = { id: null, title: null, radius: null, tiles: [], errors: [] };
   const lines = String(text ?? '').split('\n');
   const seen = new Set();
   const err = (n, msg) => out.errors.push(`line ${n}: ${msg}`);
@@ -47,11 +57,12 @@ export function parseMapCode(text) {
     const line = raw.replace(/#.*$/, '').trim();
     if (!line) return;
 
-    const header = line.match(/^(id|radius)\s*:\s*(.+)$/i);
+    const header = line.match(/^(id|title|radius)\s*:\s*(.+)$/i);
     if (header) {
       const key = header[1].toLowerCase();
       const value = header[2].trim();
       if (key === 'id') out.id = value;
+      else if (key === 'title') out.title = value;
       else {
         const num = Number(value);
         if (!Number.isInteger(num) || num < 0) { err(n, `${key} must be a whole number, got "${value}"`); return; }
@@ -129,8 +140,10 @@ export function buildRecipe(parsed, config) {
     if (!bad) tiles[t.key] = { type: t.type, elevation, tags: t.tags.length ? [...t.tags] : null };
   }
 
+  const id = parsed.id ?? 'unnamed';
   return {
-    id: parsed.id ?? 'unnamed',
+    id,
+    title: parsed.title ?? titleFromId(id),
     radius,
     tiles,
     spawns: enemies.length ? { enemies: enemies.map((e) => e.key) } : null,
@@ -143,6 +156,27 @@ export function buildRecipe(parsed, config) {
 // One call from text to recipe - what the game and the preview window use.
 export function recipeFromCode(text, config) {
   return buildRecipe(parseMapCode(text), config);
+}
+
+// "ember-hollow" -> "Ember Hollow": the display name of a map whose code has
+// no `title:` line.
+export function titleFromId(id) {
+  return String(id ?? '').split(/[-_\s]+/).filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
+// The id a code declares, without building the whole recipe - what indexes
+// the crafted map list by id (src/battle.js craftedMapIndex).
+export function mapCodeId(text) {
+  return headerLine(text, 'id');
+}
+// The display name a code declares (`title:`), or the one derived from its id.
+export function mapCodeTitle(text) {
+  return headerLine(text, 'title') ?? titleFromId(mapCodeId(text));
+}
+function headerLine(text, key) {
+  const m = String(text ?? '').match(new RegExp(`^\\s*${key}\\s*:\\s*([^#\\n]+)`, 'im'));
+  return m ? m[1].trim() : null;
 }
 
 // A bestiary reference by id ("husk") or display name ("Husk", "Forge Tyrant").

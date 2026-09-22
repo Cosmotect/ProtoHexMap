@@ -1,6 +1,9 @@
 // Battle simulation: pure logic, no rendering. Both sides are arrays of units
 // { name, hp, maxHp, alive }. Returns a transcript + the outcome.
 // Units are mutated in place (the party keeps its wounds).
+// The second half of the file builds fights: which handcrafted map (and so
+// which enemies) a tile gets - see makeArena at the bottom.
+import { recipeFromCode, mapCodeId } from './local/mapcode.js';
 
 // Random damage in [min, max], shaped like a bell: average of `dice` uniform rolls.
 export function rollDamage(rng, cfg) {
@@ -105,16 +108,18 @@ export function renameDuplicates(units) {
   return units;
 }
 
-// ----- building enemy groups from the bestiary --------------------------------
-// Since 2026-08-31 nothing about a fight is rolled unit by unit: config/entities.js
-// holds a BESTIARY (battle.enemyTypes: name, shape, colour, hp, abilities) and a
-// table of GROUPS (battle.enemyGroups: a title plus a list of bestiary ids).
-// A fight picks one whole GROUP, so what is written in the config is exactly
-// what walks onto the arena.
-
+// ----- building fights from the bestiary and the handcrafted maps ----------
+// Since 2026-09-16 a fight IS its map: config/encounters.js holds the MAP
+// CODES (craftedMaps.combat.maps, src/local/mapcode.js) and a table of which
+// map ids each kind of fight may roll on each layer (battleMaps, wired in as
+// battle.maps). A map pins its own enemies to its own tiles, so what is
+// written in the code is exactly what walks onto the arena - there is no
+// separate enemy GROUP any more (battle.enemyGroups went with the random
+// arena generator), and no arena is rolled at all: makeArena() below picks
+// one authored map and returns its recipe together with its enemies.
 // The band a ring falls into (cfg.enemies.bands, in listed order). Rings past the
 // last band's maxRing keep using the last band. `ringBandId` gives its name, which
-// is also the row it uses in the spawn table.
+// is also the row it uses in the map table.
 export function ringBandId(cfg, ring) {
   const ids = Object.keys(cfg.enemies.bands);
   for (const id of ids) if (ring <= cfg.enemies.bands[id].maxRing) return id;
@@ -124,17 +129,59 @@ export function ringBand(cfg, ring) {
   return cfg.enemies.bands[ringBandId(cfg, ring)];
 }
 
-// The groups one kind of fight may roll on one layer (cfg.spawns, a row per kind
+// The map ids one kind of fight may roll on one layer (cfg.maps, a row per kind
 // of fight and a column per layer). An empty cell falls through to the nearest
 // FILLED layer of the same row, so a half-finished table still plays.
-export function spawnPool(cfg, kind, layer) {
-  const row = cfg.spawns?.[kind] ?? {};
+export function arenaPool(cfg, kind, layer) {
+  const row = cfg.maps?.[kind] ?? {};
   const filled = (n) => (Array.isArray(row[n]) && row[n].length ? row[n] : null);
   const exact = filled(layer);
   if (exact) return exact;
   const near = Object.keys(row).map(Number).filter((n) => filled(n))
     .sort((a, b) => Math.abs(a - layer) - Math.abs(b - layer) || a - b)[0];
   return near === undefined ? [] : row[near];
+}
+
+// The crafted combat maps by id: { id: code }. Read off the code's own `id:`
+// line, so the list in config stays a plain list of pasteable codes. Cached
+// per list instance - the Settings window replaces the whole list when it
+// edits it, which invalidates the cache by itself.
+const indexCache = new WeakMap();
+export function craftedMapIndex(config) {
+  const list = config.craftedMaps?.combat?.maps;
+  if (!Array.isArray(list)) return {};
+  let idx = indexCache.get(list);
+  if (!idx) {
+    idx = {};
+    for (const code of list) {
+      const id = mapCodeId(code);
+      if (!id) { console.warn('crafted map without an "id:" line skipped'); continue; }
+      if (idx[id]) console.warn(`crafted map id "${id}" is listed twice; the later code wins`);
+      idx[id] = code;
+    }
+    indexCache.set(list, idx);
+  }
+  return idx;
+}
+
+// The recipe for one map id, or null (with a console warning) when the id is
+// unknown or its code does not parse - a typo in a config map must never
+// take the run down with it.
+export function craftedMapById(config, id) {
+  const code = craftedMapIndex(config)[id];
+  if (!code) { console.warn(`crafted map "${id}" is not in config.craftedMaps.combat.maps`); return null; }
+  const recipe = recipeFromCode(code, config);
+  if (recipe.errors.length) { console.warn(`crafted map "${id}" skipped:`, recipe.errors.join('; ')); return null; }
+  return recipe;
+}
+
+// The enemies a recipe pins, as live units (numbered "Husk 2"...), carrying the
+// map's title and id for the battle log / report.
+export function enemiesOfRecipe(cfg, recipe) {
+  const out = renameDuplicates((recipe?.enemyTypeIds ?? []).map((id) => makeEnemyOfType(cfg, id)).filter(Boolean));
+  out.title = recipe?.title ?? null;
+  out.mapId = recipe?.id ?? null;
+  return out;
 }
 
 // One live enemy from a bestiary id. `shape` and `color` ride along so the arena
@@ -169,17 +216,6 @@ export function enemyTypeByName(cfg, name) {
   return null;
 }
 
-// A whole group by its id. Repeats are numbered ("Husk 2"), and the group's
-// title travels with the list for the battle report.
-export function makeGroup(cfg, groupId) {
-  const g = cfg.enemyGroups?.[groupId];
-  if (!g) return [];
-  const out = renameDuplicates(g.units.map((id) => makeEnemyOfType(cfg, id)).filter(Boolean));
-  out.title = g.title ?? groupId;
-  out.groupId = groupId;
-  return out;
-}
-
 // `count` loose enemies for a tile on `ring`, rolled from the band's
 // reinforcement types. (The Stasis "extra enemies" debuff, where there is no
 // group to draw.)
@@ -195,20 +231,31 @@ export function makeRegulars(rng, cfg, ring, count) {
   return out;
 }
 
-// Builds an enemy group for a tile. "ring" = distance from the map centre,
-// "layer" = which layer of the worldflake this run walks. "pool" picks the ROW of
-// the spawn table the group comes from:
+// Picks the arena (and so the enemies) for a tile. "ring" = distance from the
+// map centre, "layer" = which layer of the worldflake this run walks. "pool"
+// picks the ROW of the map table the arena comes from:
 //   'regular' (default) - the ring band the tile falls into (inner / middle / outer)
 //   'boss'              - the Stasis Seed
 //   'colony'            - a Stasis Colony
 // (true is still accepted for 'boss', so older call sites keep working.)
-export function makeEnemies(rng, cfg, ring, pool = 'regular', layer = 0) {
+// Returns { recipe, enemies }. A row with nothing in it anywhere, or whose
+// every map is broken, falls back to the whole crafted list rather than walk
+// into an empty arena; with no usable map at all the fight is a flat arena
+// with no enemies - and a console warning says so.
+export function makeArena(rng, config, ring, pool = 'regular', layer = 0) {
+  const cfg = config.battle;
   const kind = pool === true || pool === 'boss' ? 'seed'
     : pool === 'colony' ? 'colonies'
     : ringBandId(cfg, ring);
-  const groups = spawnPool(cfg, kind, layer);
-  // A row with nothing in it anywhere would leave a fight with no enemies at all;
-  // fall back to the whole group table rather than walk into an empty arena.
-  const pick = groups.length ? groups : Object.keys(cfg.enemyGroups ?? {});
-  return makeGroup(cfg, rng.pick(pick));
+  const ids = arenaPool(cfg, kind, layer);
+  const pick = ids.length ? ids : Object.keys(craftedMapIndex(config));
+  // Roll once; only if that map is broken walk the rest of the cell in order,
+  // so a bad code costs one warning and not a different roll for every tile.
+  let recipe = null;
+  if (pick.length) {
+    const at = Math.floor(rng.random() * pick.length);
+    for (let i = 0; i < pick.length && !recipe; i++) recipe = craftedMapById(config, pick[(at + i) % pick.length]);
+  }
+  if (!recipe) console.warn(`no usable crafted map for a "${kind}" fight on layer ${layer}`);
+  return { recipe, enemies: enemiesOfRecipe(cfg, recipe) };
 }

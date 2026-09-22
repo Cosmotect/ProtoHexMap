@@ -13,7 +13,8 @@
     "gym:report": "node tools/playtester/report.mjs",
     "campaign": "node tools/playtester/campaign.mjs",
     "campaign:report": "node tools/playtester/report.mjs tools/playtester/worldruns.jsonl",
-    "test:engine": "node tools/engine-test.mjs"
+    "test:engine": "node tools/engine-test.mjs",
+    "test:worldmap": "node tools/worldmap-test.mjs"
   },
   "dependencies": {
     "three": "^0.185.1"

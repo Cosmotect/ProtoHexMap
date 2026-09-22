@@ -77,7 +77,14 @@ export const TUTORIAL_3 = {
   maxSupplies: 60,
   // The clock, compressed: the line walks one tile of its length per turn and
   // every active source rots one tile per turn.
+  // 2026-09-22: the main game now charges run.stepSupplyCost for EVERY step and
+  // ends the run on an empty pack. This map's supply budget was hand-tuned when
+  // walking was free, so the walking clock is switched off here rather than
+  // silently re-balancing a teaching map.
+  // TODO if the experiment sticks: re-tune this map's `supplies` around the
+  // walking cost and drop this override, so the tutorial teaches the real rule.
   configPatch: {
+    'run.stepSupplyCost': 0,
     'stasis.lineSpeed': 1,
     'stasis.witherEvery': 1,
   },

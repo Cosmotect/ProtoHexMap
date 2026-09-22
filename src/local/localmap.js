@@ -10,6 +10,13 @@
 //  nothing about Game, fog, fatigue or encounters. It produces plain tile data;
 //  src/local/localview.js draws it; src/local/transition.js flies the camera.
 //  Local tiles have NO gameplay logic yet.
+//
+//  There is NO procedural arena any more (2026-09-16). This file builds the
+//  bare grid - every tile plain ground at the neutral step - and lays a
+//  handcrafted RECIPE over it (src/local/mapcode.js); every fight has one.
+//  The old elevation wave (three seeded sine waves that rolled random heights
+//  over a battle arena) is gone with the decision to ship only authored maps:
+//  a fight without a recipe is simply flat.
 // =====================================================================
 import { hexKey, hexesInRange, hexDistance, axialToPlane } from '../hex.js';
 import { COMBAT_CONFIG } from '../config/localmap.js';
@@ -56,7 +63,7 @@ export function generateLocalMap(config, recipe = null) {
       x: plane.x,
       y: plane.y,
       elevation: neutralElevation(),  // the middle step = untouched ground level
-                                      // (recipes and the wave move tiles up / down from here)
+                                      // (a recipe moves tiles up / down from here)
       type: 'ground',      // 'ground' | 'wall' | 'ether' - recipes set these
       tags: null,          // authored tile tag ids (e.g. ['fire']) - recipes set these
       decor: null,         // future: set dressing (rocks, trees, ruins...)
@@ -97,37 +104,8 @@ export function applyRecipe(map, recipe) {
   return map;
 }
 
-/**
- * ELEVATION WAVE - rolling heights for battle arenas.
- * Three overlapping sine waves with seeded phase offsets, snapped to whole
- * levels 0..levels (the combat rules read these as high/low ground). The camp
- * layout skips this: the start screen wants a flat, calm stage.
- *
- * How the steps land: v runs -3..3 and is squashed onto 0..levels, so the
- * MIDDLE step (neutralElevation) is what most tiles get and is drawn at the
- * untouched ground height; the wave pushes tiles one or two steps up from
- * there, or one or two steps down. With levels = 4 the mix over the arena is
- * roughly 43% middle, 25% each one step up / down, 3.5% each two steps up / down
- * - so the outermost steps read as rare peaks and pits, not as general terrain.
- *
- * FREQ is the size of the features: bigger = smaller, choppier bumps. x2 the
- * original 0.9 / 0.8 / 0.6 - the original gave one lazy hill across the whole
- * arena, x3 was too broken up to fight on (a quarter of all tile borders were
- * 2-level cliffs), so the arena settled here.
- */
-const FREQ = [1.8, 1.6, 1.2];
-
-export function applyElevationWave(map, random, levels) {
-  const ph = [random() * Math.PI * 2, random() * Math.PI * 2, random() * Math.PI * 2];
-  for (const tile of map.hexes.values()) {
-    const v = Math.sin(tile.q * FREQ[0] + ph[0])
-            + Math.cos(tile.r * FREQ[1] + ph[1])
-            + Math.sin((tile.q + tile.r) * FREQ[2] + ph[2]);
-    // v runs -3..3; squash it onto 0..levels (middle step = untouched ground).
-    tile.elevation = Math.max(0, Math.min(levels, Math.round(((v + 3) / 6) * levels)));
-  }
-  return map;
-}
+// (applyElevationWave - the random rolling heights - lived here until
+// 2026-09-16. Arenas are handcrafted now; see the header.)
 
 /**
  * Picks `count` distinct random tile keys, using the caller's rng function

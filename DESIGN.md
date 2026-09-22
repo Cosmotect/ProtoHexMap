@@ -18,11 +18,13 @@ through dialogs.
 > On a 0-100 combat difficulty scale: regular encounters occupy 0-60, Stasis Colonies
 > 50-70, bosses 80-100.
 
-The three enemy pools live in `src/config/entities.js`: `battle.enemies.bands` (regular
-groups, by ring), `battle.colonies` (Stasis Colonies), `battle.bosses` (the Stasis
-Seed). Power is an ENEMY-ONLY number; the party grows through ability upgrade trees
-(see "Ability upgrades" below), so all old party-power yardsticks are void and the
-balance must be re-measured against interactive play.
+Since 2026-09-16 a fight IS a handcrafted map (its arena and its pinned enemies
+together), and the five pools are the rows of `battleMaps` in
+`src/config/encounters.js`: `inner` / `middle` / `outer` (regular fights, by the
+tile's ring band, `battle.enemies.bands`), `colonies` and `seed`, one column per
+layer. There is no power number at all any more; the party grows through ability
+upgrade trees (see "Ability upgrades" below), so all old party-power yardsticks are
+void and the balance must be re-measured against interactive play.
 
 ## Links
 
@@ -64,7 +66,22 @@ balance must be re-measured against interactive play.
   `run.revealRadius` (0) + their `terrainHeight`; `run.revealStartRadius` (1) rings
   open around the start. The Seed hides under the fog like everything else.
 * **Movement**: one step per turn to a neighbouring walkable tile, paying the tile's
-  costs. Supplies are the only currency, capped at `run.startSupplies` (60).
+  costs. Supplies are the only currency: the run starts with `run.startSupplies` (60)
+  and is capped at `run.maxSupplies` (100) - its OWN knob since 2026-09-22, so a full
+  pack can still grow.
+* **Supplies are the run's clock (2026-09-22)**: every step costs
+  `run.stepSupplyCost` (1) on top of any terrain charge, and **the run ends the moment
+  supplies reach 0**. The step that empties the pack is LEGAL - affordability is no
+  longer a movement filter, and `game.stepEndsRun(hex)` is what the HUD uses to paint
+  that tile's ring red and warn in the hover tip. One exception decides the verdict:
+  if that last step landed the party on a FORCED encounter, the end is held back until
+  the encounter reports back, because winning it may restock them
+  (`game.encounterInFlight`, checked by `checkEndOfRun`; `finishCombat` and
+  `claimSupplies` call the check again on their way out). A cache or a shop the party
+  merely stands next to is NOT a reprieve - only a forced encounter is. Spending the
+  last supplies on a camp or a purchase ends the run the same way. Set
+  `stepSupplyCost` to 0 to go back to the pre-2026-09-22 economy, where only climbs,
+  camps and shops drained the pack.
 * **Party**: `party.size` (3) units, taken from the top of `party.roster` (10
   characters; name, icon, hp - the character's ABILITIES live in
   `config/abilities.js`, exactly TWO per character). Party units have NO power
@@ -75,17 +92,41 @@ balance must be re-measured against interactive play.
   (the start tile stays empty), type by weight: battle 5, event 2, treasure 0.8,
   shop 0.75, acolyte 0.15 (min 1 acolyte per map). Standing on one enables **Enter**
   (E); on an empty tile the same button makes camp: `rest.cost` (20) supplies, heals
-  each living unit `rest.healFraction` (50%) of max HP, resets fatigue. Encounter
+  each living unit `rest.healFraction` (50%) of max HP (and resets fatigue, while the
+  mechanic is on). Encounter
   windows have no close button; choices that abandon a reward ask for confirmation.
-* **Fatigue** (`config.fatigue`): a step counter since the last reset maps through
-  `byStep` (interpolated, clamped: step 4 = 0%, 5 = 5, 6 = 15, 7 = 30, 8 = 50,
-  9 = 75) to the chance that arriving on a tile with a FORCEABLE encounter (battle,
-  Stasis fights, event) forces the party in; the roll uses the value shown before the
-  step. A forced fight opens with an enemy AMBUSH phase. `resetOn` per type: battle /
-  Stasis / acolyte / camp always reset, shop / event optionally, treasure never.
-  The **fatigue bar** (top centre) draws one box per step, coloured by its percentage,
-  filling as the party walks and emptying on a reset; hovering a reachable tile shows
-  the forced chance and the fatigue after the step.
+* **Forced encounters - fatigue DISABLED as an experiment (2026-09-22)**: stepping
+  onto a tile that holds a FORCEABLE encounter (`config.fatigue.forceable`: battle,
+  Stasis Seed, Stasis Colony, event) now **always** drags the party into it - no roll,
+  no percentage. A forced fight still opens with an enemy AMBUSH phase. Everything
+  outside that list (shop, cache, Acolyte, gate, hack) is still entered by choice with
+  **Enter**. What paces a run is no longer the risk of being caught but the supply
+  clock above.
+  * The switch is `config.fatigue.enabled` (false). Nothing was deleted: with it true
+    the old behaviour returns whole - the roll, the bar, the tips. Every branch asks
+    `game.fatigueEnabled()` (mirrored in `ui.js` as `fatigueOn()` and read directly by
+    `render.js` and `text.js`), so the mechanic lives behind one boolean.
+  * While off: `state.fatigue` stays 0, the **fatigue bar** is hidden, the hover tip
+    drops its percentages and shows the step's supply cost and what is left instead,
+    the reachable rings go back to the flat `colors.reachableRing`, and the legend,
+    the movement log, the shop header and the "resets fatigue" lines all switch to
+    their fatigue-free wording (`text.js` `tFatigue` + the `.nofatigue` locale twins;
+    `encounterInfo` now GENERATES the "can you be forced in here" sentence from the
+    config instead of it being hand-written into each `visual.*.info`).
+  * `state.fatigueSteps` keeps counting even while the mechanic is off: it is also the
+    clock the tutorial scenarios time their scripted ambushes off
+    (`nextScenarioAmbush`). `resetOn` still fires and still resets it.
+  * **Tutorials**: all three switch `run.stepSupplyCost` back to 0 through their
+    `configPatch` (their supply budgets were hand-tuned when walking was free), and
+    tutorial 2 additionally switches fatigue back ON for itself, because two of its
+    cards point at the fatigue bar. Both are marked TODO in the scenario files: if the
+    experiment sticks, those maps need re-authoring around the supply clock.
+  * *(For reference, the mechanic as it stands when enabled: a step counter since the
+    last reset maps through `byStep` - interpolated, clamped: step 4 = 0%, 5 = 5,
+    6 = 15, 7 = 30, 8 = 50, 9 = 75 - to the chance that arriving on a forceable tile
+    forces the party in, rolled against the value shown BEFORE the step. `resetOn` per
+    type: battle / Stasis / acolyte / camp always, shop / event optionally, treasure
+    never. The bar draws one box per step, coloured by its percentage.)*
 * **The Stasis** (`config.stasis`) - the win condition and the clock:
   * One **Seed** on ring >= `seedMinRing` ('half' = floor(radius/2)); destroying it
     wins the run. `colonyCount` (4) future **Colony** sites; their only placement rule
@@ -120,8 +161,10 @@ balance must be re-measured against interactive play.
     5 `colonies` variants (leader + chaff, or an equal-power swarm). Victory: one
     ability upgrade pick (x`rewardPicks` after a Colony),
     +`battle.victorySupplies` (5) supplies, a lore line.
-  * *Treasure*: +`treasure.supplies` (40); if it overflows the cap on an empty tile,
-    the dialog offers "make camp first, then collect".
+  * *Treasure*: +`treasure.supplies` (40); if it overflows `run.maxSupplies` on an
+    empty tile, the dialog offers "make camp first, then collect". Not forceable - a
+    cache the party is standing on does nothing for them until they press Enter, which
+    also means it cannot save a run that has just run out of supplies.
   * *Event*: one of `events.js` - reveal effects (nearest shop / a blob of tiles /
     hidden battles / a vantage), a supply find (10-20), a scholar (a random unit
     unlocks a random available upgrade), the black market (pick a unit, then pick
@@ -129,7 +172,8 @@ balance must be re-measured against interactive play.
     max HP; decline allowed at either step), Nomads (a battle through the same
     combat path), or a merchant caravan (acts as a free camp). (Pure-lore events with
     no effect were removed.)
-  * *Shop*: stays on its tile, revisitable; entering does not reset fatigue. Stock =
+  * *Shop*: stays on its tile, revisitable; never forceable, and entering does not
+    reset fatigue. Stock =
     2 guaranteed options (Training = one upgrade pick for 25, reveal 8 tiles for 15)
     + 2 random from (rest 15, relic 25 = same as Training, rumours 15, spare parts
     30 = revive at 50%). Each option sells once; hovering a visited shop lists its
@@ -143,7 +187,8 @@ balance must be re-measured against interactive play.
     line from their pool (`FLAVOUR_POOL` in game.js; texts in the locale table).
 * **Camera**: perspective only, follows the player with a glide
   (`camera.followPlayer`). Left-drag pan, right-drag orbit, wheel zoom, arrows pan.
-* **HUD**: one top-centre bar (supplies | fatigue boxes | turn), a bottom-centre bar
+* **HUD**: one top-centre bar (supplies | fatigue boxes, hidden while fatigue is
+  disabled | turn), a bottom-centre bar
   holding just the Enter button (the battle bar replaces it during a fight), the party
   panel left, a collapsible legend bottom-right (entries expand with config-generated
   info texts), a menu top-right (M: seed, load, copy link, new map, restart, reveal,
@@ -226,7 +271,10 @@ balance must be re-measured against interactive play.
 
 * **The arena**: a hex grid of `local.radius` (6) rings in the OPPOSITE orientation to
   the world map, so one world tile visually breaks into a sub-grid (a handcrafted
-  map's own radius wins - see "Handcrafted local maps" below). Tile colours are
+  map's own radius wins - see "Handcrafted local maps" below). **Every fight plays
+  on a handcrafted map** (since 2026-09-16): the random arena generator is gone,
+  and with it the random elevation wave described further down this bullet, which
+  is kept only as the record of how the arena used to be shaped. Tile colours are
   shades of the entered world tile with a strong ELEVATION VALUE RAMP on top
   (`local.tileShade`): each level away from the neutral middle brightens or darkens
   the tile by `perLevel` (0.17), so all five height steps read at a glance, and the
@@ -237,16 +285,16 @@ balance must be re-measured against interactive play.
   were 0.5 / 0.6 and drowned the terrain. Arena tiles have a
   BASELINE height from the entered world tile's TYPE - max(`local.tileHeight`, type's
   visual height x `local.typeHeightScale` (16)) - so a hill arena starts taller than a
-  plains one; battle arenas then add rolling heights on top: `applyElevationWave`
-  (three seeded sine waves) snaps each tile to a level 0..`elevationLevels` (4), drawn
-  at `local.elevationStep` (0.35) world units per level (the campfire layout stays
-  flat, baseline only). The levels are CENTRED on `local.elevationMid` (2): that
+  plains one; the map's recipe then sets each tile's level 0..`elevationLevels`
+  (4), drawn at `local.elevationStep` (0.35) world units per level (a recipe-less
+  arena - the campfire, a scenario fight that authors none - stays flat at the
+  neutral step). The levels are CENTRED on `local.elevationMid` (2): that
   middle step is the untouched ground, flush with the surrounding world tiles, and
-  the arena has two steps up and two steps down around it. The wave's mix over an
-  arena is about 43% middle, 25% each one step up / down, 3.5% each two steps up /
-  down, so the outer steps read as rare peaks and pits; its feature size (`FREQ` in
-  localmap.js) is x2 the original, which leaves ~36% of tile borders flat and ~14% a
-  2-level cliff. THREE rings of surrounding world tiles stand around the arena
+  the arena has two steps up and two steps down around it. (Until 2026-09-16 a
+  battle arena without a recipe got `applyElevationWave` instead - three seeded
+  sine waves snapped to levels, about 43% middle / 25% one step up or down / 3.5%
+  two steps, `FREQ` tuned so ~14% of borders were 2-level cliffs. Removed with the
+  decision to ship only authored maps.) THREE rings of surrounding world tiles stand around the arena
   as giant uninteractive backdrop hexes: bottoms on the arena floor, tops at the SAME
   type-baseline formula - so a mountain neighbour towers over a hill arena and a
   same-type neighbour sits flush with the arena's wave-less level; hidden tiles use
@@ -260,14 +308,56 @@ balance must be re-measured against interactive play.
   handcrafted arena before the swap - see "Handcrafted local maps" below.
 * **The combat engine** (`local/battle/engine.js` + `bhex.js`; definitions in
   `src/config/abilities.js`, deliberately NOT in the settings window):
-  * **Player phase - one simultaneous turn**: select any unit and reposition it
-    FREELY within its range, which is always measured from the tile it started the
-    round on - so a move is taken back by simply clicking elsewhere. Casting an
-    ability commits the turn so far: the caster is finished and every unit standing
-    away from its starting tile locks in place; units still at home keep their
-    freedom. The phase ends by itself once every living unit has cast; **End turn**
-    (button or E) ends it early for the whole party. Player haste is not consumed by
-    repositioning.
+  * **Player phase - one simultaneous turn, AIM LOCKS** (`combat.lockedAim`, on
+    since 2026-09-15; grown out of the Hack experiment and made the default for
+    every fight by the owner's decision): select any unit and reposition it
+    FREELY within its range, which is always measured from the tile it started
+    the round on - so a move is taken back by simply clicking elsewhere. Picking
+    an ability and clicking a target LOCKS that unit's aim (`u.lock`): nothing
+    fires yet, the unit stays selectable, re-aiming replaces the lock and walking
+    takes it back (the pattern was measured from where it stood). Selection moves
+    on to the next unit that has not aimed. **End turn** (button or E) FIRES every
+    lock at once, in party order, then hands over to the enemy phase; the phase
+    never ends by itself. **Stacking**: a tile covered by several DAMAGING locks
+    takes each of their damage multiplied by `combat.stack.multipliers[count]`
+    (1 / 2 / 3, the last entry repeats) - so two abilities of 2 and 5 on one tile
+    deal (2+5)x2 = 14. Stacking applies after the height modifier and before a
+    crit; only the party's volley stacks (enemies still act one by one). Costs
+    are checked at lock time and paid when the lock fires. With `lockedAim`
+    false the older flow returns: a click casts at once and the phase ends when
+    everyone has cast (kept for comparison and for tools/engine-test.mjs, which
+    still assumes it). Player haste is not consumed by repositioning.
+  * **The damage pre-calculation** (`previewTotals(hoverKey)` in the engine,
+    `LocalMapView.syncLockFx` in the arena): over every unit, barrier or hazard
+    the standing locks cover - plus the aim under the cursor, which stands in
+    for the hovering unit's own lock - floats ONE compact billboard in three
+    colours: the target's hp (white) and the outcome (-> 6, green while it
+    survives, red when it goes down; SHIELD when a block eats it) on the top
+    row, the arithmetic ((2+5)x2=14, gold) below it, an encounter note on a
+    third row. The card is scaled so it is never wider than its own hex
+    (2026-09-15). The arithmetic lists each ability's nominal damage (base, height,
+    crit); the outcome is read back from playing the whole volley out on a copy
+    of the board - shields, shoves and crashes included - so the two can
+    disagree exactly when the board would. Every unit's aim - its lock, or the
+    live aim under the cursor, which replaces the active unit's lock while
+    hovering - is drawn as a thin hex OUTLINE (no dark backing) on each covered
+    tile and the aim tile, in its party slot's colour (`colors.lockColors`):
+    red for the 1st, green for the 2nd (a step smaller), blue for the 3rd
+    (smaller again), so outlines stacked on one tile nest instead of hiding
+    each other. Tiles a unit may walk to or aim at are only a small, faint
+    black hex dot in the tile's centre (`colors.moveDot` / `moveDotOpacity`,
+    20%); an inspected enemy's reach uses the same dot in its red. The aim
+    preview keeps its fills only for the extra consequences (shove, height,
+    tag, dash, and heal / buff), shrunk inside the innermost outline. The locked ability's button
+    wears a padlock. An encounter's `rules` may add a note to a billboard (the
+    Hack's overkill and mine penalties).
+  * **Rules hooks** (`createBattle`'s `rules` and `tags` options, since
+    2026-09-15): an encounter type can plug its own end condition and tile
+    effects into the engine without the engine knowing what they mean -
+    `attach(sb)`, `onBarrierHit`, `onHazardHit`, `onTurnFired`, `checkEnd`,
+    `decoratePreview`, `debugResolve`; `tags` drops pre-built tag INSTANCES
+    (kinds outside COMBAT_TAGS) into the tag table; the rules' own state lives
+    in `sb.ext`. The Hack is the only user; the hooks are generic and stay.
   * **Enemy phase**: enemies act by initiative (ties by index), one move + one cast
     each. The AI simulates every reachable cast and scores the outcome (damage,
     kills, stuns, and POPPING A SHIELD - for and against); with nothing worth casting
@@ -373,7 +463,7 @@ balance must be re-measured against interactive play.
     def + unlocked upgrade nodes (`def.abilityDefs`, from src/upgrades.js; the
     engine's `abilityFor(unit, id)` serves them, the battle bar reads them too).
     The Stasis "damage" debuff arrives as `partyDamageMod`, a flat penalty to
-    party ability damage. A fatigue-forced fight opens with an AMBUSH - one extra
+    party ability damage. A forced fight opens with an AMBUSH - one extra
     enemy phase before round 1 (no tag ticks, no round counter).
   * **Deployment - the player places the party** (`local.deploy`): a fight the party
     WALKED INTO opens with a placement step. The arena keeps the party off the board
@@ -382,7 +472,7 @@ balance must be re-measured against interactive play.
     map's cost-decal idea, an icon instead of numbers, red over an occupied tile),
     left click locks that unit in, right click takes the last one back, and the
     fight is built the moment the last unit is down (`#deploy-bar` shows who is
-    being placed). A FORCED fight (fatigue ambush) gets no choice: the party is
+    being placed). A FORCED fight (an ambush) gets no choice: the party is
     scattered at random, but as a GROUP - no two units further than
     `deploy.maxSpread` (6) apart (`pickClusteredTiles`). Arenas whose recipe
     authors party spawns, and "Restart battle", skip the step.
@@ -394,7 +484,10 @@ balance must be re-measured against interactive play.
     callbacks (onChange / onFloater / onLog / onAnim / onEnd). The view draws
     movement / cast ranges as hex-outline rings (bright over a dark backing, pulsing;
     the hovered ring goes solid white and its tile rises), DOM floaters for combat
-    numbers, and the battle bar (`#battle-bar`: active unit, ability buttons, End
+    numbers, the overhead unit cards (portrait + hp bar + statuses over every
+    body - OFF since 2026-09-15 via `local.unitPlaques`, the arena was too
+    cluttered; the party panel, the enemy roster and the billboards carry the
+    numbers), and the battle bar (`#battle-bar`: active unit, ability buttons, End
     turn) in place of the status bar. The party panel's HP updates live as hits land;
     deaths only become official at the end of the fight.
   * **Wiring**: `game.startCombat` -> `prepareCombat` (rolls the enemies, applies
@@ -405,8 +498,9 @@ balance must be re-measured against interactive play.
     rewards, dialogs, win / lose states). With no delegate, `resolveBattle` falls back
     to the legacy auto-simulation (`battle.js`: damage roll 2-8 triangular x
     `powerBase` (1.15) ^ (power gap / 3), low-HP desperation bonus, enemies prefer
-    healthier targets) - kept for headless tests. `battle.js` also still generates
-    every enemy group.
+    healthier targets) - kept for headless tests. `battle.js` is also where a
+    fight is BUILT: `makeArena` rolls the tile's handcrafted map out of
+    `config.battle.maps` and turns its pinned enemies into live units.
   * **Debug handles**: `window.game`, `__renderer`, `__cinematic`, `__localView`,
     `__startScreen`, `__battle` (with `debugResolve(won)` to decide a fight
     instantly).
@@ -415,41 +509,75 @@ balance must be re-measured against interactive play.
 
 ## Handcrafted local maps - map codes (src/local/mapcode.js)
 
-Any encounter that opens a local map can trade the random generator for an
-AUTHORED arena. The authoring format is the MAP CODE: plain text, one line per
-statement, built to be scanned by human eyes and pasted around.
+**Every fight plays on a handcrafted map** (owner's decision, 2026-09-16). There is
+no random arena generator and no separate enemy-group table: a combat map is the
+whole fight - its terrain AND its enemies. The authoring format is the MAP CODE:
+plain text, one line per statement, built to be scanned by human eyes and pasted
+around.
 
-* **The format**: `id:` (required), `radius:` (optional - the arena takes the
-  code's size, any 1..12 rings), then tile lines
-  `q,r: <type> [elevation] [tags...] [!Enemy Name]`. (A `danger:` header line
-  existed until 2026-09-10; it's gone now - a battle tile's chevrons come
-  purely from its ring band, see `config.battle.danger.ringBands`.) Only
-  tiles that differ from plain ground at the neutral elevation are listed. Types:
-  `ground`; `wall` (a rock column - nobody walks or flies through, a shove
+* **The format**: `id:` (required - what the spawn table lists), `title:`
+  (optional - the fight's display name in the battle log, the Local Map Info panel
+  and the playtester report; defaults to the id with dashes as spaces,
+  capitalised), `radius:` (optional - the arena takes the code's size, any 1..12
+  rings), then tile lines `q,r: <type> [elevation] [tags...] [!Enemy Name]`. (A
+  `danger:` header line existed until 2026-09-10; it's gone - a battle tile's
+  chevrons come purely from its ring band, see `config.battle.danger.ringBands`.)
+  Only tiles that differ from plain ground at the neutral elevation are listed.
+  Types: `ground`; `wall` (a rock column - nobody walks or flies through, a shove
   against it crashes like the arena rim); `ether` (a hole - nobody walks in, a
   shove over it kills, exactly like a lethal void edge). Tags are tile tag ids
-  from `COMBAT_TAGS` (today: `fire`) and come up PERMANENT - an authored
-  brazier is terrain, it does not gutter out like a cast's fire. `!` pins one
-  bestiary enemy (by id or display name) to the tile. `#` comments. The parser
-  (`parseMapCode` / `buildRecipe` / `recipeFromCode`) validates everything
-  against the config and reports readable per-line errors; a broken code is
-  skipped with a console warning, never crashes a run.
-* **Storage + rates** (`config/encounters.js craftedMaps`): per encounter kind
-  - `combat` and `shop` for now - a `rate` (chance a placed encounter uses a
-  crafted map instead of a generated arena) and a `maps` list of code strings.
-  Three sample maps ship: the-causeway (radius 4), ember-hollow (radius 6),
-  wayside-hollow (shop, radius 3).
-* **Assignment** (`Game.assignCraftedMaps`): rolled at world generation on a
-  rng of its OWN (seed ^ 0x5eedca), after every other roll - tuning the rates
-  never reshuffles an existing seed's map, enemies or shop stock. A crafted
-  battle's authored enemies REPLACE the rolled group (so the tile's hover, the
-  fight and the simulation all agree); its chevrons always come from the
-  tile's ring band (`dangerRank`), independent of the recipe. Shops only
-  STORE their recipe for now - the shop flow does not open a local map yet.
-  Scenario maps skip
-  crafted assignment entirely; the Virtual Playtester's world runs keep the
-  crafted ENEMIES but fight them on a generated arena (the headless harness
-  does not read recipes yet - a known divergence).
+  from `COMBAT_TAGS` (today: `fire`, `nerveAgentCloud`) and come up PERMANENT - an
+  authored brazier is terrain, it does not gutter out like a cast's fire. `!` pins
+  one bestiary enemy (by id or display name) to the tile; the pinned enemies ARE
+  the fight's enemies. `#` comments. The parser (`parseMapCode` / `buildRecipe` /
+  `recipeFromCode`) validates everything against the config and reports readable
+  per-line errors; a broken code is skipped with a console warning, never crashes
+  a run.
+* **Authoring rules** (the engine's, not conventions): a ground unit cannot step
+  across a height gap of more than ONE level (`reach()` in the engine), so a
+  plateau at 4 needs a ramp of 3s and a pit at 0 needs a rim of 1s, or nothing
+  walks in or out. Every pinned ground enemy must be able to walk to where the
+  party can stand, and every free ground tile should be walkable to, because a
+  forced fight drops the party on random tiles (a sealed tile is a stuck
+  unit; the harness guards its own spawns, the live game does not). Flying
+  creatures (Ether Leviathan, Ether Spawn, Stasis Mote) are exempt - leviathan-deep
+  keeps its boss on a one-tile island for exactly that reason. Fire does not block
+  walking (a tag blocks only while it has `hp`); it burns. Keep radius 4..7: the
+  arena camera does not zoom. The 45 maps written on 2026-09-16 were built by
+  `tools/maps/build_maps.py` and checked against these rules by
+  `tools/maps/validate.mjs` (parse + walkable-component + stranded-tile check;
+  `render.mjs` prints an ASCII preview) - run the validator before adding a map.
+* **Storage** (`config/encounters.js craftedMaps.combat.maps`): a plain list of
+  code strings, indexed by the `id:` in each code (`craftedMapIndex` in
+  src/battle.js, cached per list). 47 combat maps ship: the two originals
+  (the-causeway r4, ember-hollow r6) plus ten each for the inner, middle and outer
+  rings and the Stasis Colonies and five for the Stasis Seed, every one with its
+  own line-up pinned to its own tiles - the old enemy GROUPS (loneRaider ...
+  twinStalkers) were dissolved into them, so the rosters per band are what they
+  were (1-5 weak creatures inner, 3-6 middle, 8-12 outer, garrisons of 3-7 for the
+  Colonies, the five boss courts for the Seed) but each now stands on terrain built
+  for it. `craftedMaps.shop` keeps its `rate` + list: shops do not open a local
+  map yet and only store the recipe (the last place a crafted-map RATE exists).
+* **Which map a fight rolls** (`config/encounters.js battleMaps`, wired onto
+  `CONFIG.battle.maps`; Settings > Encounters > Battles edits it): a row per kind
+  of fight (`inner` / `middle` / `outer` by the tile's ring band, `colonies`,
+  `seed`) and a column per layer 0-6, map ids in the cells, a map listed twice
+  rolling twice as often. An empty cell plays the nearest FILLED layer of the same
+  row (`arenaPool`), so only layer 3 is filled today and every other layer plays
+  its maps until given its own. This is the repurposed enemy-group spawn table
+  (`battleSpawns` until 2026-09-16).
+* **Assignment** (`Game` constructor, `makeArena` in src/battle.js): every battle
+  tile and the Seed roll their map at world generation on the world rng (the map
+  IS the enemy roll, so a revealed tile's hover, its chevrons' band and the fight
+  all read one code); a Colony rolls its map when it spawns; a fight conjured onto
+  a bare tile (tests, events) rolls in `prepareCombat`. `hex.recipe` carries the
+  map, `hex.enemies` its line-up (`renameDuplicates`: "Husk 2"), `enemies.title`
+  / `.mapId` the name for the log and the report. A withered tile drops both.
+  Scenario maps are authored already and skip this: their fights bring scripted
+  enemies and play on the recipe the script gives, else on FLAT ground (the
+  tutorials do not author arenas yet - tutorial2's guard fight is the one that
+  does). The Virtual Playtester now fights on the real recipe too (`runArena`
+  takes it; the enemies stand on their authored tiles).
 * **Engine support**: `createBattle` takes `wallKeys` / `etherKeys`
   (impassable for walking AND flying; wall = crash on shove, ether = death on
   shove) and `startTags` (pre-lit tile tags, made permanent). Placement,
@@ -537,7 +665,7 @@ everything downstream (renderer, HUD, combat) sees an ordinary, just small, map.
   map): explicit tile table (type / biome / revealed), encounters with exact enemy
   groups, shop stock, fixed event ids and treasure amounts, an optional fixed party
   and supplies, scripted `ambushes` (a forced fight fires at an exact step count on
-  an empty tile - fatigue stops rolling dice entirely in scenario mode), a `goal`
+  an empty tile - nothing is ever forced at random in scenario mode), a `goal`
   (`{ type: 'reach', tile }` with the hidden waypoint marker, or `{ type: 'seed' }` -
   destroying the scripted Seed wins) and an optional `configPatch` (per-run CONFIG
   overrides, applied and undone by main.js). A scripted Stasis: a `stasisSeed`
@@ -567,8 +695,8 @@ everything downstream (renderer, HUD, combat) sees an ordinary, just small, map.
   walkthrough in the smoke test and cannot break silently (the old seeded NPE
   broke whenever worldgen changed).
 * **Arena recipes are LIVE**: a battle encounter's `recipe` now really shapes
-  its arena - `tiles: { 'q,r': { elevation } }` authors the heights (the random
-  elevation wave stays off when a recipe brings its own), and
+  its arena - `tiles: { 'q,r': { elevation } }` authors the heights (since
+  2026-09-16 there is no random wave at all: no recipe = flat ground), and
   `spawns: { party: [keys], enemies: [keys] }` pins units to authored tiles
   positionally (extras fall back to random). Flows through the existing
   `hex.recipe` -> flyIn -> localview path, so normal runs can use recipes too.
@@ -604,9 +732,10 @@ Data shapes:
 ```
 unit   = { name, icon, hp, maxHp, upgrades: ['ability:node'], power (sim proxy only), alive }
 hex    = { q, r, ring, key, type, biome, passable, supplyCost, encounter, isStart,
-           isSeed, isColony, revealed, visited, x, y }
+           isSeed, isColony, revealed, visited, x, y,
+           recipe (the fight's handcrafted map), enemies (its pinned line-up) }
 state  = { status, party, supplies, maxSupplies, turn, position, shortestPathLength,
-           fatigueSteps, fatigue, coloniesCleared, endReason }
+           fatigueSteps, fatigue, coloniesCleared, endReason }   // maxSupplies from run.maxSupplies
 stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }], witherCharge }
 ```
 * 2026-09-02 Shield deadlock fixed (see the AI scoring note above), the **retreat
@@ -813,6 +942,15 @@ stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }
     through, not where the victim ends up. Collisions, crushes and falls resolve in
     waves against everything else the same cast moves, and playing that out would
     mean simulating the cast to draw a hint about it.
+* 2026-09-22 **`tools/worldmap-test.mjs`** (`npm run test:worldmap`): the
+  world-map twin of the engine test - the same idea (headless, seconds, no
+  browser), pointed at the rules in `src/game.js` rather than at a fight. It pins
+  the 2026-09-22 rework: fatigue disabled means forceable encounters always fire,
+  an empty pack ends the run, a FORCED encounter holds that verdict until it
+  reports back (won and paid / won and paid nothing / lost), a cache the party
+  never entered does NOT hold it, and `run.maxSupplies` is the ceiling. Each case
+  builds its own tile by hand (`clearAround`) so nothing depends on what the
+  generator happened to roll.
 * 2026-09-10 **`tools/engine-test.mjs`** (`npm run test:engine`): headless rules
   checks that run in seconds. The smoke test drives the real browser and stays the
   authority on anything the player can see, but some rules are far easier to state
@@ -1296,12 +1434,270 @@ stasis = { seed, colonies: [{ hex, distance, progress, active, cleared, debuff }
     `commitRoster()`, so there is only one rule. It listens for pointerdown on
     the backdrop itself, so a drag that starts inside the window and ends outside
     it is not mistaken for a click outside.
+* 2026-09-16 **Only handcrafted arenas; enemy groups are gone; the spawn table
+  now names maps.** Three decisions of the owner, one change.
+  * **No procedural local maps for combat.** `applyElevationWave` (the three
+    seeded sine waves that rolled random heights over a battle arena) is deleted
+    from `src/local/localmap.js`; `LocalMapView.build` lays the recipe over the
+    bare grid and nothing else. A fight without a recipe - the campfire, a
+    scenario fight whose script authors none - is FLAT ground at the neutral
+    step, and the smoke test asserts exactly that on a conjured recipe-less
+    fight (it used to assert the wave). `craftedMaps.combat.rate` is gone with
+    it: there is nothing for a rate to choose between. `craftedMaps.shop` keeps
+    its rate because shops do not open a local map yet.
+  * **Enemy groups are gone as a concept.** `battle.enemyGroups`
+    (config/entities.js), `makeGroup` / `makeEnemies` / `spawnPool`
+    (src/battle.js), the Groups table on Settings > Units and its locale
+    strings are all removed. A fight's line-up is pinned tile by tile in its map
+    code (`!Enemy` lines): `enemiesOfRecipe` turns the recipe's
+    `enemyTypeIds` into live units, numbered as before, carrying the map's
+    `title` and `mapId` where the group's title used to travel (battle log, the
+    Local Map Info panel, the report). Map codes gained an optional `title:`
+    header for that (default: the id, dashes to spaces, capitalised); the
+    parser exports `mapCodeId` / `mapCodeTitle` / `titleFromId`.
+  * **The spawn table is repurposed.** `ENCOUNTERS.battleSpawns` is now
+    `ENCOUNTERS.battleMaps`, wired onto `CONFIG.battle.maps` (was
+    `battle.spawns`): the same rows (inner / middle / outer / colonies / seed)
+    x layers 0-6, but the cells hold crafted combat map IDS. `makeArena(rng,
+    config, ring, pool, layer)` in src/battle.js replaces `makeEnemies`: it
+    picks the cell (`arenaPool`, same nearest-filled-layer fallback), rolls ONE
+    id, and only if that code is broken walks the rest of the cell in order -
+    a bad code costs a console warning, not a different roll for every tile -
+    and returns `{ recipe, enemies }`. `Game` stores both on the hex at
+    generation (battles and the Seed), `spawnColony` at arrival,
+    `prepareCombat` for a fight conjured onto a bare tile; `witherNear` drops
+    both. `assignCraftedMaps` shrank to `assignShopMaps`. Settings > Encounters
+    > Battles is the same grid with map chips (unknown ids in red) and a picker
+    over `craftedMapIndex`; the Units tab lost its Groups table.
+  * **45 new maps for layer 3** (`craftedMaps.combat.maps`): ten each for the
+    inner rings, the middle rings, the outer rings and the Stasis Colonies,
+    five for the Stasis Seed, plus the two originals kept (the-causeway ->
+    inner, ember-hollow -> middle). Every map carries its own line-up - the
+    old groups' rosters redistributed over terrain built for them: hills with
+    one ramp, sunken creeks, palisades with gates, ether chasms with a single
+    bridge, a rampart with ether behind it for the Warden of the Rim, a
+    one-tile island in an ether lake for the Leviathan. All 45 were generated
+    from a builder script and checked with the game's own parser plus a
+    walkability pass (every pinned ground enemy inside the main walkable
+    component, no free ground tile a forced spawn could be stuck on; flyers
+    exempt) - the rules are written down under "Handcrafted local maps". Layer
+    3 only; layers 0-2 and 4-6 stay empty and play layer 3's cells.
+  * **Tools.** The playtester harness (`headless.mjs`) fights on the real recipe
+    now (grid, heights, walls, ether, braziers; enemies on their authored
+    tiles; the party random inside the main walkable component) and takes
+    `radius` off the map; `runFight` takes a `mapId`; the gym sweeps `--maps`;
+    `worldrun` passes `ctx.hex.recipe`; the report's ladder is per map, sorted
+    by the line-up's total HP (the `enemyPower` column was already dead). The
+    harness's stale `COMBAT_CONFIG` import (config/abilities.js) was also
+    pointed at config/localmap.js - it had not run since the 09-12 split. A
+    3-seed gym over all 47 maps at 0 and 8 upgrades ran 282 fights with no
+    errors and no timeouts; the shape of the ladder (inner trivial, outer
+    hard for a fresh party, colonies easier than the outer rings, bosses
+    winnable at 8 upgrades) is a balance note, not a target.
+  * **Verified**: `tools/smoke-test.cjs` in headless Chromium against the
+    built app - the 8 problems it reports are the same 8 the untouched
+    sources report (status table description, party panel badges and sockets,
+    party view columns, roster grid, unit detail trees, stale-settings
+    healing), none of them touched by this change; its new checks (every
+    battle tile has a recipe from its own band's row, the Seed from the seed
+    row, enemies equal to the pinned spawns, the map table's ids all declared
+    and layer 3 holding 10/10/10/10/5, a forced fight on a recipe, a
+    recipe-less arena flat, the preview tool) pass. `tools/engine-test.mjs`
+    was already crashing before this change (it fixtures a `poison` status the
+    09-13 vocabulary pass renamed) and is untouched.
+  * **Open**: the tutorials' fights (except tutorial2's guard) are flat now -
+    they should get authored arenas; the fatigue-forced clustered spawn does not
+    check walkability (the maps are built so it does not have to); the
+    `log.battle.stasis` key still fronts every titled fight with "Stasis:" as
+    it did for every titled group.
 
+
+## The Hack encounter - an EXPERIMENT (src/local/hack/, since 2026-09-15)
+
+**This is a big experiment, and it is quarantined on purpose.** It tries a radical
+departure from how combat works on the local map, to find out whether the true
+essence of the core gameplay - PATTERN MATCHING ON A HEX GRID - can carry a play
+mode on its own, with no enemies at all. It may grow a lot, and it may be ripped
+out wholesale. **Update 2026-09-15**: the part of it that proved itself at once -
+aiming all three units, then firing on End turn, with stacking and the damage
+pre-calculation - was PROMOTED into the combat engine and the arena as the
+default for every fight (see "Aim locks" and "The damage pre-calculation" in the
+combat section above). What remains the experiment is the BOARD: nodes, mines,
+the progress bar and the turn budget. Two rules follow, and every future session
+must keep them:
+
+1. **All of its code is self-contained in `src/local/hack/`.** Its rules, its
+   board, its extra presentation, its numbers and even its two tile tags live
+   there and nowhere else. It imports from the rest of the game (the hex math,
+   the ability table, the upgrade resolver, the arena view's public methods)
+   but nothing in the rest of the game imports from it except the bridge line
+   in main.js.
+2. **The rest of the game does not change.** The hack reaches the shared code
+   only through IF BRANCHES that route into the folder - the complete list is
+   below, and it doubles as the RIP-OUT CHECKLIST: delete the folder, undo those
+   lines, and the game is exactly what it was. No shared rule, table, view or
+   HUD function was altered for it. When the experiment needs something the
+   shared code does not offer, the answer is to add it INSIDE the folder (even
+   at the cost of a little duplication), not to bend a shared file.
+
+### The idea
+
+Instead of enemies, the board holds static NODES with hp. Units aim their
+abilities - the same hex-pattern abilities they fight with - and on End turn
+everything fires at once. A tile covered by two abilities takes its combined
+damage DOUBLED, by three TRIPLED. The party has five volleys; every node brought
+down counts, and the REWARD IS GRADED by that count through three BADGES (the
+stars of a mobile level). Some tiles are MINES, and an ability hex landing on
+one hurts the caster. (Until 2026-09-19 the goal was a progress bar filled by
+node damage and drained by mines and overkill; the badges replaced it.) The
+synergy of overlapping patterns is meant to become the foundation of a
+progression where rewards are upgrades installed into INDIVIDUAL HEXES of an
+ability, changing how that hex behaves when it overlaps a hex of another unit's
+ability. (Not built yet: v1 is the play mode itself.)
+
+### The rules (v1 - `hackconfig.js` holds every number)
+
+* **The board** (`hackmap.js` + `hacklayouts.js`): a completely flat arena
+  (every tile pinned to the neutral elevation, which is what switches the
+  elevation wave off) of `radius` 5. WHERE nodes and mines go is one of TWENTY
+  LAYOUTS, drawn by seed per terminal (`forceLayout` pins one by id for
+  playtesting, `layoutPool` narrows the draw). A layout is data: node and mine
+  counts (14-18 nodes, 7-15 mines - halved from the original 14-30 once
+  playtesting found the boards too dense, since 2026-09-22), the
+  minimum node spacing (1 = nodes may touch), where the party starts ('centre'
+  or a cluster on one random side of the rim, 'edge'), and two WEIGHT functions
+  over the free tiles - one for nodes, one (seeing the placed nodes) for mines;
+  the placer draws tiles without replacement in proportion to weight, so a
+  layout is a shape of probability, not a fixed picture. The twenty: even
+  (scatter, dense scatter, blue noise, minefield), central congregation (core,
+  citadel, core-and-outposts, halo), clustered (three clusters, five knots,
+  archipelago, six corners), shaped (crescent, gradient, lanes, spiral,
+  honeycomb) and noise-driven (Perlin hills, veins, islands - `src/noise.js`).
+  Mine recipes recur: guard (next to a node), pocket (between nodes), moat (one
+  ring out), inverse (the empty stretches). The first ring around the party is
+  always kept free. `tools/hack-layouts-sheet.mjs` draws all twenty as a
+  contact sheet (SVG) to judge the shapes. The layout's name and description
+  are shown in the Local Map Info panel while playing, so feedback can name it.
+* **The turn** is the ordinary fight's turn now (aim locks, see the combat
+  section): walk, lock, End turn fires. Nodes are BARRIER tags (they block
+  walking; fliers glide over, never stop on one); mines are HAZARD tags,
+  walkable, ticking nothing. Every ability locks, as in a fight, and every
+  effect of a fired ability applies (a charge lands, a shove shoves); only
+  damaging abilities count for the stack multiplier. A NODE at 0 hp vanishes
+  and counts as CLEARED (overkill is simply wasted - nothing reads it any
+  more). A MINE under a hex of a fired ability costs the aiming unit
+  `mineDamage` (3) hp per hex, never below 1 hp (`mineLethal` false); a hit
+  mine detonates once the volley has landed (`mineDetonates`). Wounds carry
+  back to the world-map party like a fight's.
+* **The turn budget and the badges** (since 2026-09-19): `turns` (5) volleys,
+  after which the encounter ENDS BY ITSELF (or earlier, once every node is
+  down). Under the turn counter sit three BADGES with node thresholds
+  (`badges`, [4, 5, 6]); each lights up the moment the cleared count reaches
+  it. The badges earned are the reward: the party gets the REGULAR reward
+  screen (the battle report window through `finishCombat` itself, with the
+  victory supplies) and its upgrade chooser offers AS MANY OPTIONS AS BADGES -
+  one badge is no choice at all (take what was rolled), two a choice of two,
+  three the usual choice of three. No badge = the hack fails: the encounter is
+  consumed, no reward of any kind, the run continues (a small "Hack failed"
+  window, then the flight back out). A hack, won or lost, resets fatigue
+  (`fatigue.resetOn.hack = 'always'`). Mines never kill.
+  Plumbing: `game.finishHack` puts the badge count on the context as
+  `rewardOptions`; `finishCombat` copies it onto the result; main.js's
+  `askUpgradePick` passes it to `game.upgradeOffers(limit)`, which returns a
+  random subset of that size of the usual one-offer-per-living-unit draft.
+  LATER: better upgrades should also turn up more often with more badges - the
+  offer draft is the place (`upgradeOffers`), once upgrades carry a quality.
+* **Preview**: while aiming, hovering a castable tile paints the pattern (the
+  arena's own aim preview) AND every covered node / mine shows the arena's
+  damage billboard (hp, arithmetic, outcome); a mine's reads what it costs the
+  caster in hp. A node's own hp sits as a flat decal on its top.
+* **Reaching it**: `hack` is an ordinary encounter type rolled at world
+  generation (`encounters.weights.hack`, 1.5 - set 0 to keep it off generated
+  maps), a lime box marker. Enter it like a battle: the same cloud dive, no
+  deployment step (the recipe seats the party). Not forceable - it is entered by choice.
+
+### How it is built - a rules plug-in on the combat engine
+
+Until 2026-09-15 the hack ran on a SEPARATE duck-typed engine (`hackengine.js`,
+gone now). It runs on `createBattle` itself: no enemies, the node / mine tag
+instances dropped into the engine's tag table through its `tags` option
+(`makeHackTags`), and a `rules` object (`hackrules.js`, `createHackRules`)
+supplying what the engine does not know: `onBarrierHit` (a node brought to 0
+hp counts as cleared, and lights a badge when a threshold is reached),
+`onHazardHit` (a mine under a hex -> the caster's hp, detonation once the
+volley has landed), `onTurnFired` (the turn's tally), `checkEnd` (the turn
+budget - or every node down - ends it: a win with a badge, a loss without;
+replaces last-side-standing), `decoratePreview` (the billboard's mine note)
+and `debugResolve`. The rules' state is `sb.ext.hack` (`cleared`, `badges`,
+`total`, `lastTurn`). Aim locks, the volley, stacking and the billboards are the engine's
+and the arena's own.
+
+`hackview.js` layers the rest on top of the arena without touching it: the
+HACK panel - the turn counter and the three badges, lit with a pop as they
+are earned (a DOM panel with its own injected `<style>` - style.css is
+untouched), node bodies with the hp as a FLAT DECAL on the column's top (turned
+to the camera's bearing; nothing of the hack's floats, so the arena's billboard
+is the only floating reading), and the "Turn n / N" counter written into the
+battle bar. `hackbridge.js` is the hack's copy of main.js's combat bridge (dive
+in, build the engine with the rules, bind, finish, abort). `hackconfig.js` is
+every knob and the two tag definitions (`node`, `mine` - NOT in COMBAT_TAGS);
+`hacklayouts.js` the twenty board layouts.
+`tools/hack-test.cjs` plays a hack headlessly (walk, three locks on one node,
+the x3 preview, fire, a mine hit, win -> reward window, lose -> consumed).
+
+### The IF branches outside the folder (= the rip-out checklist)
+
+* `src/main.js`: the import of `hackbridge.js`; `createHackBridge(...)` after the
+  cinematic; `hackBridge.abort()` in `abortBattle()`; the `action.type ===
+  HACK_TYPE` branch in `onEnter`; `game.hackDelegate = ...` next to
+  `game.combatDelegate`.
+* `src/game.js`: `case 'hack'` in `enter()`; the `startHack()` / `finishHack()`
+  methods (a combat-shaped context with no enemies; a win goes through
+  `finishCombat`, a loss just consumes); the `rewardOptions` line in
+  `finishCombat` and the `limit` argument of `upgradeOffers` (both generic:
+  any graded reward could use them).
+* `src/main.js` (again): the `options` argument of `askUpgradePick`, and the
+  battle window not printing an "Enemies:" line when the list is empty.
+* `src/config/encounters.js`: `weights.hack`, `visuals.hack`, `fatigue.resetOn.hack`.
+* `src/local/battle/engine.js`: nothing hack-specific - the `rules` / `tags`
+  options and their hooks are generic and stay (see "Rules hooks" above).
+* `src/locales/en.js` + `ru.js`: `visual.hack.label`, `visual.hack.info`,
+  `log.hack.failed` (the world map needs a name and a legend entry; every other
+  hack text is English-only inside `hackconfig.js`).
+* `DESIGN.md`: this section. `README.md` does not mention it.
+
+### Open questions for the experiment
+
+* Balance is a first guess: 14-18 nodes at 15-30 hp each (seeded per node,
+  since 2026-09-22 - was a flat 20) against 5 volleys and badge thresholds of
+  4 / 5 / 6 nodes, with the hack abilities the owner gave the starter trio;
+  whether those thresholds sit right, and which of the twenty layouts play
+  well, is for play to tell. Every number is
+  in `hackconfig.js`, every layout in `hacklayouts.js`.
+* Should walking spend the turn budget too, or a per-unit action budget?
+  (v1: turns only.)
+* The hex-upgrade progression (upgrades installed into individual hexes of an
+  ability, changing what that hex does when overlaid with another unit's) is the
+  reason the mode exists and is not built. It would live in the folder too.
+* The playtester tools (`tools/playtester/`) assume the older cast-at-once flow
+  in places (and are already broken by an earlier config move - `COMBAT_CONFIG`
+  no longer lives in `config/abilities.js`); `tools/engine-test.mjs` likewise.
+  Both need a pass once the aim-lock flow settles.
 
 ## Open questions
 
 1. Should fog ever re-cover tiles (line of sight), or stay permanent? Currently permanent.
 2. Is "supplies" the resource we want, or days / food / something tied to combat?
+   Since 2026-09-22 supplies also END the run, so this question now decides the
+   pacing of the whole map rather than just what camps cost.
+2a. The fatigue experiment (2026-09-22): does "every forceable encounter always
+   fires, and supplies are the clock" read better than a rising risk of ambush?
+   If it sticks, delete the mechanic properly and re-author tutorial 2, which
+   still teaches it. If it does not, `config.fatigue.enabled: true` brings it
+   back whole.
+2b. Should a cache the party is STANDING on be able to save a run that just ran
+   out of supplies? Today it cannot - only a forced encounter holds the verdict -
+   so it is possible to die on top of 40 supplies.
 3. Party HP never grows, only abilities do (through the upgrade trees). Is that the
    pacing we want, or should HP / healing scale too?
 4. Map variants: branching lanes? Bigger fields? Multiple Seeds?
@@ -1336,8 +1732,9 @@ owner-approved request.
   enemy phase resolves before `endTurn()` returns. Rules untouched; the game
   itself never passes the flag. This is the one game-side hook the harness
   needed.
-* **The harness** (`headless.mjs`): one fight = the live arena recipe (local
-  map + elevation wave), seeded random-distinct-tile placement, resolved
+* **The harness** (`headless.mjs`): one fight = the live arena recipe (the
+  handcrafted map's grid, heights, walls, ether and braziers; enemies on their
+  authored tiles), seeded random-distinct-tile party placement, resolved
   party abilityDefs, an engine in instant mode and a bot on the sticks.
   Everything is reproducible from (seed, group, party spec, bot); the bot
   rolls its own seeded rng, separate from the game's. `buildParty` unlocks N
@@ -1350,12 +1747,13 @@ owner-approved request.
   ground as a tie-break, heal real wounds. `random` - the lower bound and
   crash-finder. Bot numbers are COMPARATIVE (before vs after a patch), not
   absolute difficulty.
-* **The gym** (`gym.mjs`, `npm run gym`): sweeps enemy groups x party
+* **The gym** (`gym.mjs`, `npm run gym`): sweeps the crafted combat maps
+  (`--maps`, each a fight: arena + enemies) x party
   progression points x N seeds, one JSON line per fight (plus a header that
   makes the log self-describing), `--patch file.json` applies dotted-path
   CONFIG overrides for A/B experiments on identical seeds. Roughly 20-50
   fights/s single-process. **The report** (`report.mjs`, `npm run gym:report`)
-  aggregates a log into the bestiary difficulty ladder (win rate with a 95%
+  aggregates a log into the combat-map difficulty ladder (win rate with a 95%
   margin, rounds, HP left) as report.md; two logs = an experiment diff with
   noise-aware markers. The harness guards its own spawns (everyone in one
   walkable height component) so soft-locks do not pollute the statistics.
@@ -1370,9 +1768,10 @@ owner-approved request.
   blackMarketDeal). Every upgrade screen also writes a per-decision 'pick'
   record (offered refs vs the taken one) - the Slay-the-Spire lesson. Known
   divergences from the live game, both cosmetic to the rules: no deployment
-  step (spawns are random, walkable-component guarded) and no scripted void
-  edges. The engine's rng is seeded now, so a whole campaign replays
-  identically from its seed.
+  step (the party spawns on random tiles, walkable-component guarded; the
+  enemies stand on their map's authored tiles as in the live game) and no
+  scripted void edges. The engine's rng is seeded now, so a whole campaign
+  replays identically from its seed.
 * **The personas** (`worldbot.mjs`): the overworld policy plus three
   parameter sets - `cautious` (fights only what looks safe, camps early,
   hoards, grinds before the Seed), `bold` (the intended baseline: calculated

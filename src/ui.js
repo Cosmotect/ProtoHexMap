@@ -1,7 +1,7 @@
 // The HUD: plain HTML elements layered over the 3D canvas.
 // (In Godot terms: a CanvasLayer with Labels and Buttons.)
 import { describeHex, lerpTable } from './game.js';
-import { terrainInfo, terrainName, encounterLabel, encounterInfo, tc } from './text.js';
+import { terrainInfo, terrainName, encounterLabel, encounterInfo, tc, tFatigue } from './text.js';
 import { t, tn, hasKey } from './i18n.js';
 import { playFatigueStep, playFatigueClear, clearStaggerMs } from './audio.js';
 import { unitAbilityIds, upgradeInfo, abilityDesc, unlockUpgrade } from './upgrades.js';
@@ -241,7 +241,7 @@ export function createUI(config, handlers) {
       const note = !tr.passable ? t('legend.blocked')
         : tr.supplyCost > 0 ? t('legend.cost', { supplies: tr.supplyCost, hp: tr.hpCost })
           : tr.hpCost > 0 ? t('legend.costHp', { hp: tr.hpCost }) : '';
-      legendItems.push({ swatch: `<span class="swatch" style="background:${hex(tr.color)}"></span>`, label: `${terrainName(name)}${note}`, info: terrainInfo(name, tr) });
+      legendItems.push({ swatch: `<span class="swatch" style="background:${hex(tr.color)}"></span>`, label: `${terrainName(name)}${note}`, info: terrainInfo(name, tr, config) });
     }
     // Biomes: mostly colour - the swatch shows the pure biome colour that land tiles
     // are shifted towards. A special biome (wither) may also add an HP cost.
@@ -281,7 +281,23 @@ export function createUI(config, handlers) {
     barTimers = [];
   }
 
+  // Is the fatigue mechanic switched on? Mirrors game.fatigueEnabled() for the
+  // moments the HUD has to answer without a Game in hand (building the bar).
+  // DISABLED as an experiment on 2026-09-22: the bar is hidden and the hover tip
+  // drops its fatigue lines. See config/encounters.js.
+  const fatigueOn = () => config.fatigue?.enabled !== false;
+
   function buildFatigueBar() {
+    // Switched off: no boxes at all. Rebuilt (and un-hidden) the moment the
+    // setting flips, because main.js calls this on any fatigue.* config change.
+    els.fatigueBar.classList.toggle('hidden', !fatigueOn());
+    if (!fatigueOn()) {
+      els.fatigueBoxes.innerHTML = '';
+      boxes = [];
+      cancelBarTimers();
+      shownSteps = -1;
+      return;
+    }
     const fb = config.fatigueBar;
     const byStep = config.fatigue.byStep || {};
     const keys = Object.keys(byStep).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
@@ -350,6 +366,7 @@ export function createUI(config, handlers) {
   }
 
   function syncFatigueBar(game) {
+    if (!fatigueOn()) return;
     const steps = game.state.fatigueSteps;
     const fresh = game !== barGame;      // a new run: no sound, no animation
     barGame = game;
@@ -384,7 +401,7 @@ export function createUI(config, handlers) {
       const action = game.enterAction();
       els.enter.disabled = !action.enabled;
       els.enter.textContent = action.label;
-      els.enter.title = action.reason || (action.kind === 'camp' ? tc('status.camp.title', config) : t('status.enter.title'));
+      els.enter.title = action.reason || (action.kind === 'camp' ? tFatigue('status.camp.title', config) : t('status.enter.title'));
       els.enter.classList.toggle('camp', action.kind === 'camp');
     }
     lastGame = game;
@@ -430,10 +447,16 @@ export function createUI(config, handlers) {
     els.hover.textContent = `${describeHex(hex)}${cost}${seen}${canGo ? t('hover.click') : ''}`;
   }
 
-  // Popup near the cursor. On a tile the party can step onto this turn: the number of
-  // the step about to be taken (1 = first step since the last fatigue reset), the chance
-  // of a forced encounter on arrival, and the fatigue after that step. On any tile: what
-  // its encounter does to fatigue, and the stock of a shop already visited.
+  // Popup near the cursor.
+  // On a tile the party can step onto this turn, with fatigue ON: the number of
+  // the step about to be taken (1 = first since the last fatigue reset), the
+  // chance of a forced encounter on arrival, and the fatigue after that step.
+  // With fatigue OFF (the experiment, 2026-09-22): no step counter and no
+  // percentages - a revealed forceable encounter is simply certain, and what the
+  // player needs instead is what the step costs and how much is left after it,
+  // because supplies are now the run's clock. A step that empties the pack is
+  // called out as the last one.
+  // On any tile: the stock of a shop already visited.
   function updateFatigueTip(hex, game) {
     const s = game.state;
     if (s.status !== 'playing') { els.tip.classList.add('hidden'); return; }
@@ -449,7 +472,7 @@ export function createUI(config, handlers) {
         parts.push(`<div class="tip-debuff"><b>${escapeHtml(tc(`debuff.${id}.name`, config))}</b> ${escapeHtml(tc(`debuff.${id}.desc`, config))}</div>`);
       }
     }
-    if (canGo) {
+    if (canGo && fatigueOn()) {
       const next = game.fatigueAfterNextStep();
       const forced = game.forcedChanceFor(hex); // null = nothing to force here
       const stepTag = `<span class="tip-step" title="${t('tip.step.title')}">${t('tip.step')} <b>${s.fatigueSteps + 1}</b></span>`;
@@ -461,6 +484,19 @@ export function createUI(config, handlers) {
         parts.push(`<div class="tip-big">${stepTag}</div>`);
       }
       parts.push(`<div class="tip-small">${t('tip.after', { next, now: s.fatigue })}</div>`);
+    } else if (canGo) {
+      // Fatigue off: the pack is the clock, so the tip reads as supplies.
+      const spend = game.stepCost(hex).supplyCost;
+      const left = Math.max(0, s.supplies - spend);
+      if (game.forcedChanceFor(hex)) parts.push(`<div class="tip-big">${t('tip.forced.always')}</div>`);
+      if (game.stepEndsRun(hex)) {
+        // The step is still allowed - this is a warning, not a refusal. If the
+        // tile forces a fight, winning it may yet refill the pack.
+        parts.push(`<div class="tip-big tip-last">${t('tip.lastStep', { spend })}</div>`);
+        parts.push(`<div class="tip-sub">${t(game.forcedChanceFor(hex) ? 'tip.lastStep.forced' : 'tip.lastStep.sub')}</div>`);
+      } else {
+        parts.push(`<div class="tip-small">${t('tip.supplies', { spend, left })}</div>`);
+      }
     }
     // A shop the party has already entered lists what it still sells, from any distance.
     if (hex.revealed && hex.encounter === 'shop' && hex.shop?.seen) {
@@ -498,10 +534,12 @@ export function createUI(config, handlers) {
   // openDialog({ title, html, actions: [{ label, sub, onClick, disabled }], onRefresh })
   let dialogRefresh = null;
   let dialogOnClose = null;
+  let upgradePick = null;   // { offers, onPick } while chooseUpgrade's card grid is up
   function openDialog(spec) {
     els.dialogTitle.textContent = spec.title;
     els.dialogBody.innerHTML = spec.html ?? '';
     els.dialogActions.innerHTML = '';
+    els.dialog.classList.toggle('dialog-wide', !!spec.wide);
     for (const a of spec.actions ?? []) {
       const b = document.createElement('button');
       b.innerHTML = `<b>${escapeHtml(a.label)}</b>${a.sub ? `<small>${escapeHtml(a.sub)}</small>` : ''}`;
@@ -531,6 +569,16 @@ export function createUI(config, handlers) {
     void els.dialog.offsetWidth; // restart the animation
     els.dialog.classList.add('flash');
   }
+  // Delegated click for chooseUpgrade's card grid (the grid is plain HTML in
+  // the dialog body, not the actions list, so it wires up its own picks here
+  // rather than through openDialog's per-action listeners).
+  els.dialogBody.addEventListener('click', (e) => {
+    if (!upgradePick) return;
+    const card = e.target.closest('.upg-card');
+    if (!card) return;
+    const o = upgradePick.offers[Number(card.dataset.i)];
+    if (o) upgradePick.onPick(o);
+  });
 
   // "Are you sure?" box. onYes runs if the player confirms.
   $('btn-confirm-no').addEventListener('click', () => els.confirm.classList.add('hidden'));
@@ -571,24 +619,34 @@ export function createUI(config, handlers) {
 
   // The upgrade reward chooser: one offered upgrade per living unit; picking
   // one unlocks it (main.js drives the pick count and what happens after).
+  // Shown as big, roster-card-style squares (one per offer) rather than the
+  // plain text-list rows the generic dialog otherwise uses - the icon and
+  // description both need to read at a glance. Each card fades/slides in a
+  // beat after the previous one (staggered animation-delay, replayed every
+  // time this rebuilds the grid, including between back-to-back picks).
   function chooseUpgrade({ game, offers, left, onPick, onSkip }) {
+    const cards = offers.map((o, i) => {
+      const u = game.state.party[o.index];
+      const info = upgradeInfo(o.abilityId, o.nodeId);
+      return `<div class="upg-card" data-i="${i}" style="animation-delay:${i * 110}ms">
+        <div class="upg-icon">${info.icon}</div>
+        <div class="upg-name">${escapeHtml(info.name)}</div>
+        <div class="upg-unit">${u.icon} ${escapeHtml(tn(u.name))} - ${escapeHtml(abilityName(o.abilityId))}</div>
+        <div class="upg-desc">${escapeHtml(info.desc)}</div>
+      </div>`;
+    }).join('');
+    upgradePick = { offers, onPick: (o) => { upgradePick = null; onPick(o); } };
     openDialog({
       title: t('battle.lessons.title'),
-      html: `<p>${t('battle.lessons.text')}${left > 1 ? ` ${t('battle.lessons.left', { n: left })}` : ''}</p>`,
+      wide: true,
+      html: `<p>${t('battle.lessons.text')}${left > 1 ? ` ${t('battle.lessons.left', { n: left })}` : ''}</p><div class="upg-grid">${cards}</div>`,
       actions: [
-        ...offers.map((o) => {
-          const u = game.state.party[o.index];
-          return {
-            label: `${u.icon} ${tn(u.name)}: ${upgradeInfo(o.abilityId, o.nodeId).name}`,
-            sub: `${abilityName(o.abilityId)} - ${upgradeInfo(o.abilityId, o.nodeId).desc}`,
-            onClick: () => onPick(o),
-          };
-        }),
         ...(onSkip ? [{
           label: t('dialog.skip'), sub: t('dialog.skip.sub'),
-          onClick: () => confirm({ title: t('confirm.skip.title'), text: t('battle.lessons.skip'), onYes: () => { closeDialog(); onSkip(); } }),
+          onClick: () => confirm({ title: t('confirm.skip.title'), text: t('battle.lessons.skip'), onYes: () => { upgradePick = null; closeDialog(); onSkip(); } }),
         }] : []),
       ],
+      onClose: () => { upgradePick = null; },
     });
   }
 
@@ -802,7 +860,13 @@ export function createUI(config, handlers) {
     els.battleRound.textContent = sb.ambush ? t('battle.ui.ambush') : t('battle.ui.round', { n: sb.round });
     const c = battleRef.curPlayer();
     if (sb.phase === 'player' && c) {
-      const hint = c.moveLocked ? t('battle.ui.locked') : t('battle.ui.canMove');
+      // AIM LOCKS (config.combat.lockedAim): the hint says whether this unit has
+      // aimed, and how many of the party have - End turn fires them all.
+      const aimed = sb.lockedAim && battleRef.lockedUnits ? battleRef.lockedUnits().length : 0;
+      const total = sb.units.filter((u) => !u.isEnemy && u.hp > 0).length;
+      const hint = sb.lockedAim
+        ? `${c.lock ? t('battle.ui.aimLocked', { ability: c.lock.abName }) : t('battle.ui.aimFree')} ${t('battle.ui.aimed', { n: aimed, total })}`
+        : c.moveLocked ? t('battle.ui.locked') : t('battle.ui.canMove');
       // The two pools an ability cost can draw on, so a spend is SEEN where it
       // happens: movement left this round (walk included) and the run's
       // supplies. The world-map supplies counter is hidden during a fight, which
@@ -819,7 +883,7 @@ export function createUI(config, handlers) {
       els.battleAbilities.innerHTML = c.abilityIds.map((id) => {
         const ab = battleRef.abilityFor(c, id);   // the unit's UPGRADED def
         if (!ab) return '';
-        const sel = sb.selAb === id ? 'selected' : '';
+        const sel = sb.selAb === id ? 'selected' : c.lock && c.lock.abId === id ? 'locked' : '';
         const num = ab.damage > 0 ? `⚔${ab.damage}` : ab.heal > 0 ? `+${ab.heal}` : '';
         const slot = slots.indexOf(id);
         const key = slot >= 0 && slot < 3 ? ` [${slot + 1}]` : '';

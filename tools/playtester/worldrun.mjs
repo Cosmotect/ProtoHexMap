@@ -17,8 +17,9 @@
 //      restoreUnit / blackMarketOffers + blackMarketDeal)
 //
 //  Two deliberate divergences from the live game, both cosmetic to the rules:
-//    - no deployment step: units spawn on random tiles (walkable-component
-//      guarded) instead of being placed by hand
+//    - no deployment step: the party spawns on random tiles (walkable-component
+//      guarded) instead of being placed by hand; the enemies stand on their
+//      map's authored tiles exactly as in the live game
 //    - voidEdgeKeys is empty: the arena has no story-scripted void edges
 // =====================================================================
 import { Game } from '../../src/game.js';
@@ -59,6 +60,7 @@ export function runWorld({ config, seed, persona, bot, maxTurns = 500 }) {
       forced: !!ctx.forced,
       partyDamageMod: ctx.damageMod ?? 0,
       noFlee: !!ctx.stasis,        // Seed / Colony garrisons never break and run
+      recipe: ctx.hex.recipe ?? null,   // the tile's handcrafted arena (every fight has one)
     });
 
     // Wounds land on the real party (finishCombat reads deaths off it).
@@ -71,6 +73,7 @@ export function runWorld({ config, seed, persona, bot, maxTurns = 500 }) {
     fights.push({
       turn: game.state.turn,
       title: ctx.title ?? null,
+      mapId: ctx.hex.recipe?.id ?? null,
       stasis: !!ctx.stasis,
       forced: !!ctx.forced,
       enemies: enemyDefs.length,

@@ -171,14 +171,15 @@ fs.mkdirSync(OUT, { recursive: true });
     mode: window.__cinematic.mode(),
     bar: !document.getElementById('battle-bar').classList.contains('hidden'),
     units: window.__battle.state.units.length,
-    // Heights sit around the neutral middle step now: a wave means variety.
-    wave: new Set(Object.values(window.__battle.state.heights)).size > 1,
+    // No handcrafted recipe on this conjured tile = a FLAT arena at the
+    // neutral step (there is no random elevation wave any more, 2026-09-16).
+    flat: new Set(Object.values(window.__battle.state.heights)).size === 1,
     abilities: window.__battle.state.units.every((u) => u.abilityIds.length > 0),
   }));
   if (engineState.mode !== 'local') problems.push('battle engine started outside the local map: ' + JSON.stringify(engineState));
   if (!engineState.bar) problems.push('battle bar is not shown during a fight');
   if (engineState.units !== 4) problems.push(`expected 3 party + 1 enemy in the engine, got ${engineState.units}`);
-  if (!engineState.wave) problems.push('battle arena has no elevation wave (all tiles flat)');
+  if (!engineState.flat) problems.push('a recipe-less arena is not flat - some random terrain generator is still alive: ' + JSON.stringify(engineState));
   if (!engineState.abilities) problems.push('some combat units have no abilities');
   // ----- the status table (config.statuses) ---------------------------------
   // Statuses are data now: the engine, the badges and the Settings window all read
@@ -452,7 +453,7 @@ fs.mkdirSync(OUT, { recursive: true });
   // ----- the settings defaults asked for on 2026-09-10 -----------------------
   const newDefaults = await page.evaluate(() => {
     const c = window.game.config;
-    const sp = c.battle.spawns;
+    const sp = c.battle.maps;   // the battle-MAP table (was the group spawn table until 2026-09-16)
     return {
       volume: c.audio.volume,
       weakTick: c.battle.enemyTypes.weakTick && c.battle.enemyTypes.weakTick.color,
@@ -463,7 +464,7 @@ fs.mkdirSync(OUT, { recursive: true });
   });
   if (newDefaults.volume !== 0.05) problems.push('audio.volume default is ' + newDefaults.volume);
   if (newDefaults.weakTick !== '#a0c437') problems.push('weakTick colour default is ' + newDefaults.weakTick);
-  if (!newDefaults.emptyLow || !newDefaults.filledHigh) problems.push('spawn layers 0-2 should be empty and 3+ filled: ' + JSON.stringify(newDefaults));
+  if (!newDefaults.emptyLow || !newDefaults.filledHigh) problems.push('battle-map layers 0-2 should be empty and 3 filled: ' + JSON.stringify(newDefaults));
 
   // ----- intellect classes (config.intellect) -------------------------------
   // Every creature carries a class saying which facts it can weigh on its turn.
@@ -524,17 +525,29 @@ fs.mkdirSync(OUT, { recursive: true });
   if (initScope.defaultHasInit) problems.push('party.defaultCombat still carries init');
   if (initScope.enemiesWithInit !== initScope.enemyRows) problems.push('a bestiary row lost its init: ' + JSON.stringify(initScope));
 
-  // ----- the spawn table ------------------------------------------------------
+  // ----- the battle-map table (config.battle.maps) ---------------------------
+  // A row per kind of fight, a column per layer, map ids in the cells; every
+  // id must be a crafted combat map, and the layer-3 cells must hold the
+  // counts the owner asked for (10+ inner / middle / outer / colonies, 5 seed).
   const spawns = await page.evaluate(() => {
-    const sp = window.game.config.battle.spawns || {};
-    return { rows: Object.keys(sp), layers: Object.keys(sp.inner || {}).length,
+    const sp = window.game.config.battle.maps || {};
+    const codes = (window.game.config.craftedMaps.combat.maps || []);
+    const ids = new Set(codes.map((c) => (String(c).match(/^\s*id\s*:\s*([^#\n]+)/m) || [])[1]).filter(Boolean).map((x) => x.trim()));
+    const unknown = [];
+    for (const [row, layers] of Object.entries(sp)) for (const l of Object.values(layers)) for (const id of (l || [])) if (!ids.has(id)) unknown.push(`${row}:${id}`);
+    return { rows: Object.keys(sp), layers: Object.keys(sp.inner || {}).length, unknown, codes: codes.length,
+      layer3: Object.fromEntries(Object.entries(sp).map(([k, v]) => [k, (v[3] || []).length])),
       empty: Object.entries(sp).filter(([, row]) => !Object.values(row).some((l) => l && l.length)).map(([k]) => k) };
   });
   for (const row of ['inner', 'middle', 'outer', 'colonies', 'seed']) {
-    if (!spawns.rows.includes(row)) problems.push(`the spawn table has no "${row}" row: ${spawns.rows.join(', ')}`);
+    if (!spawns.rows.includes(row)) problems.push(`the battle-map table has no "${row}" row: ${spawns.rows.join(', ')}`);
   }
-  if (spawns.layers < 2) problems.push('the spawn table has no layer columns: ' + JSON.stringify(spawns));
-  if (spawns.empty.length) problems.push('spawn rows with nothing in them on any layer: ' + spawns.empty.join(', '));
+  if (spawns.layers < 2) problems.push('the battle-map table has no layer columns: ' + JSON.stringify(spawns));
+  if (spawns.empty.length) problems.push('battle-map rows with nothing in them on any layer: ' + spawns.empty.join(', '));
+  if (spawns.unknown.length) problems.push('battle-map table names maps no code declares: ' + spawns.unknown.join(', '));
+  for (const [row, want] of [['inner', 10], ['middle', 10], ['outer', 10], ['colonies', 10], ['seed', 5]]) {
+    if ((spawns.layer3[row] || 0) < want) problems.push(`layer 3 of the "${row}" row lists ${spawns.layer3[row]} maps, wanted at least ${want}`);
+  }
   await page.screenshot({ path: path.join(OUT, '01e-battle-engine.png') });
   await page.evaluate(() => window.__battle.debugResolve(true));
   await page.waitForFunction(() => !document.getElementById('dialog').classList.contains('hidden'), null, { timeout: 25000 });
@@ -795,15 +808,11 @@ fs.mkdirSync(OUT, { recursive: true });
   await dismissDialog();
   await page.waitForFunction(() => window.__cinematic.mode() === 'idle', null, { timeout: 25000 }).catch(() => {});
 
-  // A FORCED fight places the party itself, as a group. The cohesion guarantee
-  // (party within deploy.maxSpread) is about the RANDOM arena - a handcrafted
-  // map with walls, ether and a small radius may make it impossible - so this
-  // check picks a battle tile WITHOUT a crafted recipe on purpose.
+  // A FORCED fight places the party itself, as a group, on the tile's
+  // handcrafted arena (every battle tile has one since 2026-09-16).
   await page.evaluate(() => {
     const g = window.game;
-    const hex = [...g.map.hexes.values()].find((h) => h.encounter === 'battle' && !h.recipe)
-      || [...g.map.hexes.values()].find((h) => h.encounter === 'battle')
-      || g.state.position;
+    const hex = [...g.map.hexes.values()].find((h) => h.encounter === 'battle') || g.state.position;
     hex.encounter = 'battle';
     g.startCombat(hex, true);
   });
@@ -820,12 +829,14 @@ fs.mkdirSync(OUT, { recursive: true });
   });
   if (forced.deploying) problems.push('a forced fight asked the player to place the party');
   if (!forced.battle) problems.push('a forced fight did not start');
-  // The group-cohesion guarantee (party within deploy.maxSpread) is about the
-  // GENERATED arena. A handcrafted map can be deliberately fragmented - e.g.
-  // the-causeway is split by an ether trench - so a forced spawn there may
-  // straddle it by design; the author owns that arena's spawn layout. Assert
-  // cohesion only when the fight landed on a non-crafted arena.
-  if (!forced.recipe && forced.worst > forced.spread) problems.push(`a forced party landed ${forced.worst} tiles apart (max ${forced.spread}) - ${JSON.stringify(forced)}`);
+  if (forced.battle && !forced.recipe) problems.push('a forced fight played on an arena with no handcrafted recipe: ' + JSON.stringify(forced));
+  // The group-cohesion guarantee (party within deploy.maxSpread) holds on a
+  // handcrafted map too - pickClusteredTiles keeps the party together over
+  // whatever ground the map has - but a map can be deliberately fragmented
+  // (the-causeway is split by an ether trench, chasm-bridge by a chasm), so a
+  // forced spawn there may straddle the gap by design; the author owns that
+  // arena's layout. Reported, not failed.
+  if (forced.worst > forced.spread) console.log(`  note: a forced party landed ${forced.worst} tiles apart (max ${forced.spread}) on a crafted arena - ${JSON.stringify(forced)}`);
   await page.evaluate(() => window.__battle && window.__battle.debugResolve(true));
   await dismissDialog();
   await dismissDialog();
@@ -926,18 +937,41 @@ fs.mkdirSync(OUT, { recursive: true });
   }
   await waitIdle();
   await recenter();
-  const probe = await page.evaluate(() => { const g = window.game; const n = g.reachable()[0]; return n ? [n.q, n.r, g.fatigueAfterNextStep()] : null; });
-  if (probe && probe[2] > 0) {
-    const p = await screenPos(probe[0], probe[1]);
+  // The hover popup. What it is expected to say depends on whether fatigue is
+  // switched on (config.fatigue.enabled) - it was DISABLED as an experiment on
+  // 2026-09-22, and the popup then talks about supplies instead of percentages.
+  // Both readings are checked here so the test follows the config rather than
+  // pinning one era's wording.
+  const probe = await page.evaluate(() => {
+    const g = window.game; const n = g.reachable()[0];
+    if (!n) return null;
+    return { q: n.q, r: n.r, fatigueOn: g.fatigueEnabled(), next: g.fatigueAfterNextStep(), spend: g.stepCost(n).supplyCost };
+  });
+  if (probe && (probe.fatigueOn ? probe.next > 0 : probe.spend > 0)) {
+    const p = await screenPos(probe.q, probe.r);
     await page.mouse.move(p.x, p.y); await page.waitForTimeout(250);
     const tip = await page.evaluate(() => { const t = document.getElementById('fatigue-tip'); return t.classList.contains('hidden') ? null : t.textContent; });
     // (The single HUD fatigue number is gone - the fatigue bar replaced it - so the
     // popup is checked on its own.)
-    if (!tip) problems.push('fatigue popup did not appear on hover');
-    const nextOk = await page.evaluate(() => { const t = document.getElementById('fatigue-tip').textContent; return t.includes(`after this step: ${window.game.fatigueAfterNextStep()}%`); });
-    if (!nextOk) problems.push('popup does not show the next-step fatigue value');
+    if (!tip) problems.push('hover popup did not appear');
+    if (probe.fatigueOn) {
+      const nextOk = await page.evaluate(() => { const t = document.getElementById('fatigue-tip').textContent; return t.includes(`after this step: ${window.game.fatigueAfterNextStep()}%`); });
+      if (!nextOk) problems.push('popup does not show the next-step fatigue value');
+    } else if (tip && !/supplies/i.test(tip)) {
+      problems.push('popup does not show the step\'s supply cost: ' + tip);
+    }
     await page.screenshot({ path: path.join(OUT, '02b-fatigue-tip.png') });
   }
+  // The fatigue bar follows the same switch: boxes while it is on, hidden while
+  // it is off.
+  const barOk = await page.evaluate(() => {
+    const bar = document.getElementById('fatigue-bar');
+    const on = window.game.fatigueEnabled();
+    const hidden = bar.classList.contains('hidden');
+    const boxes = document.querySelectorAll('#fatigue-boxes .fbox').length;
+    return { ok: on ? (!hidden && boxes > 0) : (hidden && boxes === 0), on, hidden, boxes };
+  });
+  if (!barOk.ok) problems.push('fatigue bar does not match config.fatigue.enabled: ' + JSON.stringify(barOk));
   // Forced encounter: banner first, dialog later.
   await page.evaluate(() => { const g = window.game; g.emit('forced', { label: 'Battle', chance: 50 }); g.emit('dialog', { kind: 'event', title: 'Forced test', text: 't', effect: 'e' }); });
   await page.waitForTimeout(150);
@@ -1018,8 +1052,11 @@ fs.mkdirSync(OUT, { recursive: true });
   const unblurred = await page.evaluate(() => !document.getElementById('scene').classList.contains('blurred'));
   if (!unblurred) problems.push('blur stayed after closing settings');
 
-  // A fatigue-forced fight on a plain run: the dive starts by itself and the
-  // battle opens with the AMBUSH enemy phase.
+  // A FORCED fight on a plain run: the dive starts by itself and the battle opens
+  // with the AMBUSH enemy phase. Pinning the fatigue to 100 is what made the roll
+  // certain while fatigue was on; with it off (the 2026-09-22 experiment) every
+  // forceable tile forces anyway, so the line is harmless either way and the rest
+  // of the check is unchanged.
   await page.evaluate(() => { const g = window.game; g.state.fatigueSteps = 9; g.state.fatigue = 100; g.emit('change'); });
   {
     const n = await page.evaluate(() => { const g = window.game; const h = g.reachable().find((x) => !x.encounter) ?? g.reachable()[0]; h.encounter = 'battle'; h.enemies = [{ name: 'Test', hp: 10, maxHp: 10, power: 9, alive: true }]; window.__renderer.loadGame(g); return [h.q, h.r]; });
@@ -1227,28 +1264,35 @@ fs.mkdirSync(OUT, { recursive: true });
   // The last version of them is in _archive_2026-09-12, and they should come
   // back with the reworked tutorial.
 
-  // ----- HANDCRAFTED MAPS: crafted assignment + the map code preview tool -----
+  // ----- HANDCRAFTED MAPS: every fight is one + the map code preview tool -----
   await page.goto(URL.replace(/\?.*$/, '') + '?seed=777&nostart=1', { waitUntil: 'load', timeout: 60000 });
   await page.waitForTimeout(1200);
-  // World generation hands some battle / shop tiles an authored recipe, whose
-  // enemies replace the rolled group and whose danger line drives the chevrons.
+  // World generation hands EVERY battle tile (and the Seed) an authored recipe
+  // out of config.battleMaps, and the recipe's pinned enemies ARE the tile's
+  // enemies. There is no random arena any more (2026-09-16).
   const craftedGen = await page.evaluate(() => {
-    const hexes = [...window.game.map.hexes.values()];
-    const battle = hexes.find((h) => h.encounter === 'battle' && h.recipe);
-    const shop = hexes.find((h) => h.encounter === 'shop' && h.recipe);
+    const g = window.game;
+    const hexes = [...g.map.hexes.values()];
+    const battles = hexes.filter((h) => h.encounter === 'battle');
+    const bandOf = (h) => (h.ring <= 3 ? 'inner' : h.ring <= 7 ? 'middle' : 'outer');
+    const table = g.config.battle.maps;
+    const inRow = (h) => Object.values(table[bandOf(h)] ?? {}).some((ids) => (ids ?? []).includes(h.recipe?.id));
     return {
-      battles: hexes.filter((h) => h.encounter === 'battle' && h.recipe).length,
+      battles: battles.length,
+      withRecipe: battles.filter((h) => h.recipe).length,
+      enemiesMatchSpawns: battles.every((h) => h.enemies && h.recipe && h.enemies.length === (h.recipe.spawns?.enemies?.length ?? 0)),
+      mapFromOwnBand: battles.every(inRow),
+      seedRecipe: g.map.seed?.recipe?.id ?? null,
+      seedFromSeedRow: Object.values(table.seed ?? {}).some((ids) => (ids ?? []).includes(g.map.seed?.recipe?.id)),
+      distinctMaps: new Set(battles.map((h) => h.recipe?.id)).size,
       shops: hexes.filter((h) => h.encounter === 'shop' && h.recipe).length,
-      danger: battle ? window.game.dangerRank(battle) : null,
-      declared: battle ? battle.recipe.danger : null,
-      enemies: battle ? battle.enemies.length : 0,
-      authoredSpawns: battle ? (battle.recipe.spawns?.enemies?.length ?? 0) : 0,
-      shopHasRecipe: !!shop,
     };
   });
-  if (!craftedGen.battles) problems.push('no battle tile got a crafted map on seed 777: ' + JSON.stringify(craftedGen));
-  if (craftedGen.declared != null && craftedGen.danger !== craftedGen.declared) problems.push('crafted danger override ignored: ' + JSON.stringify(craftedGen));
-  if (craftedGen.enemies && craftedGen.enemies !== craftedGen.authoredSpawns) problems.push('crafted enemies do not match authored spawns: ' + JSON.stringify(craftedGen));
+  if (craftedGen.withRecipe !== craftedGen.battles) problems.push('a battle tile has no handcrafted map: ' + JSON.stringify(craftedGen));
+  if (!craftedGen.enemiesMatchSpawns) problems.push('a battle tile\'s enemies do not match its map\'s pinned spawns: ' + JSON.stringify(craftedGen));
+  if (!craftedGen.mapFromOwnBand) problems.push('a battle tile rolled a map outside its ring band\'s row: ' + JSON.stringify(craftedGen));
+  if (!craftedGen.seedFromSeedRow) problems.push('the Stasis Seed did not get a seed-row map: ' + JSON.stringify(craftedGen));
+  if (craftedGen.distinctMaps < 5) problems.push('the battle tiles all rolled the same few maps: ' + JSON.stringify(craftedGen));
   // The debug preview: Menu -> Preview map code, paste a code with a wall, an
   // ether hole, fire and one enemy; the camera dives into that arena.
   await page.click('#btn-menu');

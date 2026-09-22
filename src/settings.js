@@ -14,15 +14,18 @@ import { ABILITIES, statusKnobs } from './config/abilities.js';
 // (config/entities.js, 2026-09-10; that file itself renamed from units.js on
 // 2026-09-12).
 import { INTELLECT } from './config/entities.js';
+import { craftedMapIndex } from './battle.js';
+import { mapCodeTitle } from './local/mapcode.js';
 
 const STORAGE_KEY = 'hexmap-settings-v1';
 
 // ----- the Units tab's hand-built editors ------------------------------------
 // The generic form generator is fine for a fixed list of numbers, but it cannot
 // ADD or REMOVE an entry, and the enemy system is a system of entries: a
-// bestiary, groups made of bestiary ids, and pools made of group ids. So the
-// Units tab is written out by hand instead, as three editors that can create
-// and delete rows. They all save the SAME way: the whole collection is stored
+// bestiary of creatures (the line-ups themselves are pinned in the map codes
+// in config/encounters.js, and which map a fight rolls is the Battles table
+// on the Encounters tab). So the Units tab is written out by hand instead, as
+// editors that can create and delete rows. They all save the SAME way: the whole collection is stored
 // as one override (`battle.enemyTypes`, not `battle.enemyTypes.husk.hp`),
 // because an add or a delete is a change to the collection, not to one value.
 
@@ -47,7 +50,6 @@ const BESTIARY_COLS = [
 // A brand new creature: deliberately weak and plain, so an unfinished row that
 // finds its way into a fight cannot wreck a run.
 const NEW_ENEMY = () => ({ name: 'New enemy', shape: 'octahedron', color: 0xe2474b, hp: 10, init: 5, speed: 4, flying: false, intellect: 'C', abilities: ['strike'], triggers: [] });
-const NEW_GROUP = () => ({ title: 'New group', units: [] });
 
 // Colours are written two ways in the config: as CSS strings ('#a1254a', what the
 // abilities and the bestiary use) and as JS numbers (0xa1254a, what the tile types,
@@ -75,7 +77,7 @@ const ROSTER_COLS = [
 ];
 // Keys of `battle` the hand-built editors own; the leftovers render as an
 // ordinary group of numbers so nothing silently disappears from the tab.
-const BATTLE_OWNED = new Set(['enemyTypes', 'enemyGroups', 'spawns']);
+const BATTLE_OWNED = new Set(['enemyTypes', 'maps']);
 
 // Which config sections live on which tab (mirrors the config files). Labels and
 // notes come from the locale tables (settings.tab.<id>, settings.note.<id>).
@@ -197,14 +199,14 @@ export function createSettings({ config, defaults, onChange, getUiScale, getUiSc
 
   function open() { render(); win.classList.remove('hidden'); }
   function refresh() { if (isOpen()) render(); }
-  function close() { closeGroupPicker(); win.classList.add('hidden'); if (onClose) onClose(); }
+  function close() { closeMapPicker(); win.classList.add('hidden'); if (onClose) onClose(); }
   function isOpen() { return !win.classList.contains('hidden'); }
 
   // ----- rendering ---------------------------------------------------------
   function render() {
     // A picker anchored to a "+" that is about to be replaced would be left
     // floating over the new tab (it is appended to <body>, not to the table).
-    closeGroupPicker();
+    closeMapPicker();
     tabsEl.innerHTML = TABS.map((tab) => `<button class="tab ${tab.id === activeTab ? 'active' : ''}" data-tab="${tab.id}">${t(`settings.tab.${tab.id}`)}</button>`).join('');
     tabsEl.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { activeTab = b.dataset.tab; render(); }));
     const tab = TABS.find((x) => x.id === activeTab);
@@ -337,10 +339,10 @@ export function createSettings({ config, defaults, onChange, getUiScale, getUiSc
       note: t('settings.units.bestiary.note'), wide: true,
     }));
 
-    // The groups: a title and a line-up of bestiary ids.
-    wide.push(groupsTable(b));
-    // (Which groups spawn where, and the battle numbers themselves, are on the
-    // Encounters tab.)
+    // (Which handcrafted map - and so which line-up - each kind of fight rolls,
+    // and the battle numbers themselves, are on the Encounters tab. The enemy
+    // GROUPS table that used to sit here went with the random arena on
+    // 2026-09-16: a fight's line-up is pinned in its map code now.)
   }
 
   // A table of records that can grow and shrink. `coll` is the config path of
@@ -403,40 +405,38 @@ export function createSettings({ config, defaults, onChange, getUiScale, getUiSc
     return `<button class="small rt-reset" data-reset="${coll}">${t('settings.units.resetTable')}</button>`;
   }
 
-  // The group table: a title plus the line-up. `units` accepts repeats - two
-  // huskss in a group is two husks on the arena, numbered "Husk 2".
-  function groupsTable(b) {
-    const typeIds = Object.keys(b.enemyTypes ?? {});
-    const cols = [
-      { key: 'title', kind: 'text', w: 130 },
-      { key: 'units', kind: 'idlist', w: 330, valid: () => typeIds },
-    ];
-    return recordTable({
-      title: t('settings.units.groups'), coll: 'battle.enemyGroups', obj: b.enemyGroups,
-      cols, addLabel: t('settings.units.addGroup'), rowLabel: t('settings.units.id'),
-      note: t('settings.units.groups.note'), wide: true,
-    });
-  }
-
   // ----- Settings > Encounters > Battles ------------------------------------
-  // Which groups each kind of fight may roll, as a grid: a ROW per kind (the ring
-  // bands, then the Colonies and the Seed) and a COLUMN per layer of the
-  // worldflake. A cell holds group buttons - press one to take it out - and a "+"
-  // that opens a searchable list of every group there is.
-  // (Until 2026-09-06 this was a wall of tick boxes on the Units tab with no layer
-  // dimension at all.)
+  // Which handcrafted MAPS each kind of fight may roll, as a grid: a ROW per
+  // kind (the ring bands, then the Colonies and the Seed) and a COLUMN per
+  // layer of the worldflake. A cell holds map buttons - press one to take it
+  // out - and a "+" that opens a searchable list of every crafted combat map
+  // (config.craftedMaps.combat.maps, by the id in each code). A map brings its
+  // own enemies, so this table is the whole answer to "what fight is this".
+  // (Until 2026-09-16 the cells held enemy GROUP ids; until 2026-09-06 this
+  // was a wall of tick boxes on the Units tab with no layer dimension at all.)
+  // The map codes themselves are not editable here - they are text in
+  // config/encounters.js, previewed through Menu -> Preview map code.
+  function mapTitles() {
+    const out = {};
+    for (const [id, code] of Object.entries(craftedMapIndex(config))) out[id] = mapCodeTitle(code);
+    return out;
+  }
   function battlesBlock() {
     const b = config.battle;
-    const spawns = b.spawns ?? {};
-    const rows = Object.keys(spawns);
-    const layers = [...new Set(rows.flatMap((r) => Object.keys(spawns[r] ?? {}).map(Number)))].sort((x, y) => x - y);
-    const title = (gid) => b.enemyGroups?.[gid]?.title ?? gid;
+    const maps = b.maps ?? {};
+    const rows = Object.keys(maps);
+    const layers = [...new Set(rows.flatMap((r) => Object.keys(maps[r] ?? {}).map(Number)))].sort((x, y) => x - y);
+    const titles = mapTitles();
+    // An id no code declares shows in red: the fight would fall through to the
+    // rest of its cell and warn in the console.
+    const title = (mid) => titles[mid] ?? mid;
+    const known = (mid) => mid in titles;
     const head = `<tr><th></th>${layers.map((n) => `<th>${t('settings.battles.layer', { n })}</th>`).join('')}</tr>`;
     const body = rows.map((row) => {
       const cells = layers.map((n) => {
-        const chosen = spawns[row]?.[n] ?? [];
-        const chips = chosen.map((gid) => `<button class="spawn-chip" data-drop="${row}|${n}|${escapeAttr(gid)}"
-          title="${escapeAttr(t('settings.battles.remove', { name: title(gid) }))}">${escapeAttr(title(gid))}</button>`).join('');
+        const chosen = maps[row]?.[n] ?? [];
+        const chips = chosen.map((mid) => `<button class="spawn-chip${known(mid) ? '' : ' rt-bad'}" data-drop="${row}|${n}|${escapeAttr(mid)}"
+          title="${escapeAttr(t('settings.battles.remove', { name: title(mid) }))}">${escapeAttr(title(mid))}</button>`).join('');
         return `<td><div class="spawn-cell">${chips}<button class="spawn-add" data-pick="${row}|${n}">+</button></div></td>`;
       }).join('');
       const label = t(`settings.battles.row.${row}`) === `settings.battles.row.${row}` ? row : t(`settings.battles.row.${row}`);
@@ -451,13 +451,12 @@ export function createSettings({ config, defaults, onChange, getUiScale, getUiSc
     </div>`;
   }
 
-  // The picker: every group, filtered as you type. Opens under the "+" it belongs
-  // to, closes on pick, on Escape, or on a click anywhere else.
-  function openGroupPicker(anchor, row, layer) {
-    closeGroupPicker();
-    const b = config.battle;
-    const chosen = new Set(config.battle.spawns?.[row]?.[layer] ?? []);
-    const all = Object.entries(b.enemyGroups ?? {}).map(([gid, g]) => ({ gid, title: g.title ?? gid }));
+  // The picker: every crafted combat map, filtered as you type. Opens under the
+  // "+" it belongs to, closes on pick, on Escape, or on a click anywhere else.
+  function openMapPicker(anchor, row, layer) {
+    closeMapPicker();
+    const chosen = new Set(config.battle.maps?.[row]?.[layer] ?? []);
+    const all = Object.entries(mapTitles()).map(([gid, title]) => ({ gid, title }));
     const el = document.createElement('div');
     el.className = 'spawn-picker';
     el.innerHTML = `<input type="text" class="spawn-search" placeholder="${escapeAttr(t('settings.battles.search'))}">
@@ -477,7 +476,7 @@ export function createSettings({ config, defaults, onChange, getUiScale, getUiSc
         : `<p class="muted">${escapeAttr(t('settings.battles.none'))}</p>`;
       list.querySelectorAll('.spawn-opt').forEach((btn) => btn.addEventListener('click', () => {
         addToSlot(row, layer, btn.dataset.gid);
-        closeGroupPicker();
+        closeMapPicker();
       }));
     };
     search.addEventListener('input', draw);
@@ -488,18 +487,18 @@ export function createSettings({ config, defaults, onChange, getUiScale, getUiSc
     document.addEventListener('keydown', escPicker);
   }
   let pickerEl = null;
-  const outsidePicker = (e) => { if (pickerEl && !pickerEl.contains(e.target)) closeGroupPicker(); };
-  const escPicker = (e) => { if (e.key === 'Escape') closeGroupPicker(); };
-  function closeGroupPicker() {
+  const outsidePicker = (e) => { if (pickerEl && !pickerEl.contains(e.target)) closeMapPicker(); };
+  const escPicker = (e) => { if (e.key === 'Escape') closeMapPicker(); };
+  function closeMapPicker() {
     if (!pickerEl) return;
     pickerEl.remove();
     pickerEl = null;
     document.removeEventListener('mousedown', outsidePicker);
     document.removeEventListener('keydown', escPicker);
   }
-  // A slot is one cell of the table: battle.spawns.<row>.<layer>, a list of group
-  // ids. Repeats are allowed - listing a group twice doubles its odds.
-  function slotPath(row, layer) { return `battle.spawns.${row}.${layer}`; }
+  // A slot is one cell of the table: battle.maps.<row>.<layer>, a list of map
+  // ids. Repeats are allowed - listing a map twice doubles its odds.
+  function slotPath(row, layer) { return `battle.maps.${row}.${layer}`; }
   function addToSlot(row, layer, gid) {
     const path = slotPath(row, layer);
     setPath(config, path, [...(getPath(config, path) ?? []), gid]);
@@ -518,7 +517,7 @@ export function createSettings({ config, defaults, onChange, getUiScale, getUiSc
     bodyEl.querySelectorAll('[data-pick]').forEach((btn) => btn.addEventListener('click', (e) => {
       e.stopPropagation();
       const [row, layer] = btn.dataset.pick.split('|');
-      openGroupPicker(btn, row, Number(layer));
+      openMapPicker(btn, row, Number(layer));
     }));
     bodyEl.querySelectorAll('[data-drop]').forEach((btn) => btn.addEventListener('click', () => {
       const [row, layer, gid] = btn.dataset.drop.split('|');
@@ -571,10 +570,7 @@ export function createSettings({ config, defaults, onChange, getUiScale, getUiSc
         const coll = btn.dataset.add;
         const c = getPath(config, coll);
         if (Array.isArray(c)) c.push(NEW_ROSTER());
-        else {
-          const make = coll === 'battle.enemyGroups' ? NEW_GROUP : NEW_ENEMY;
-          c[freshId(c, coll === 'battle.enemyGroups' ? 'group' : 'enemy')] = make();
-        }
+        else c[freshId(c, 'enemy')] = NEW_ENEMY();
         commitColl(coll);
         render();
       });
@@ -747,7 +743,7 @@ export function createSettings({ config, defaults, onChange, getUiScale, getUiSc
       // "color", the per-layer biome palette ("color0".."color6"), anything
       // ending in "Color" (groundColor, cloudColor...), and the whole colors
       // section get a colour picker instead of a raw number.
-      const isColor = key === 'color' || /^color\d+$/.test(key) || /Color$/.test(key) || (path.startsWith('colors.') && !/tint|height/i.test(key));
+      const isColor = key === 'color' || /^color\d+$/.test(key) || /Color$/.test(key) || (path.startsWith('colors.') && !/tint|height|opacity/i.test(key));
       return isColor ? 'color' : 'number';
     }
     return 'text';

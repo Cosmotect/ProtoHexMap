@@ -15,9 +15,12 @@ import { createBattle } from './local/battle/engine.js';
 import { COMBAT_CONFIG } from './config/localmap.js';
 import { resolvedAbilitiesFor, availableUpgrades, triggersFor } from './upgrades.js';
 import { recipeFromCode } from './local/mapcode.js';
+// EXPERIMENT: the Hack encounter. Everything about it lives in src/local/hack/;
+// main.js only creates the bridge and routes three moments to it (see DESIGN.md).
+import { createHackBridge, HACK_TYPE } from './local/hack/hackbridge.js';
 import { makeEnemyOfType } from './battle.js';
 import { t, tn, initLanguage, applyStaticTexts, onLanguageChange } from './i18n.js';
-import { tc } from './text.js';
+import { tc, tFatigue } from './text.js';
 import { initAudio } from './audio.js';
 
 initLanguage();
@@ -129,6 +132,12 @@ const cinematic = createCombatCinematic({
   onModeChange: (isLocal) => document.body.classList.toggle('local-mode', isLocal),
 });
 window.__cinematic = cinematic; // for debugging / automated tests
+// EXPERIMENT (src/local/hack/): the hack encounter's own bridge to the arena.
+const hackBridge = createHackBridge({
+  config: CONFIG, getGame: () => game, getUi: () => ui, cinematic, renderer,
+  worldNeighborsFor: (hex) => worldNeighborsFor(hex), worldEdgesFor: (hex) => worldEdgesFor(hex),
+  escapeHtml: (s) => escapeHtml(s),
+});
 const COMBAT_TYPES = new Set(['battle', 'stasisSeed', 'stasisColony']);
 
 // ----- the start flow -------------------------------------------------------
@@ -456,6 +465,7 @@ function abortBattle() {
   cinematic.localView.cancelDeployment();
   ui.setDeployBar(null);
   ui.setBattleMode(null);
+  hackBridge.abort();   // EXPERIMENT (src/local/hack/)
 }
 
 // Starts the dive. The work is split across the two moments the cinematic
@@ -621,6 +631,11 @@ ui = createUI(CONFIG, {
       startCombatDive(game.state.position, () => game.enter(false));
       return;
     }
+    // EXPERIMENT (src/local/hack/): a hack dives into the arena the same way.
+    if (action.kind === 'encounter' && action.type === HACK_TYPE) {
+      hackBridge.enter(game.state.position, () => game.enter(false));
+      return;
+    }
     game.enter(false);
   },
   onLoadSeed: (value) => startRun(resolveSeed(value)),
@@ -762,6 +777,7 @@ function startRun(seed, opts = {}) {
   // Fights are played out on the local map. Camera already down in the arena:
   // start straight away. Not there yet (the Nomads event): dive first. Anything
   // in between should not happen; refusing makes the fight auto-resolve safely.
+  game.hackDelegate = (ctx) => hackBridge.delegate(ctx);   // EXPERIMENT (src/local/hack/)
   game.combatDelegate = (ctx) => {
     if (battle) return false;
     // The arena is on screen, or the dive has passed its swap point and is
@@ -853,8 +869,9 @@ function startRun(seed, opts = {}) {
 // The upgrade reward chooser: one RANDOM available upgrade per living unit is
 // offered (game.upgradeOffers()); the player unlocks exactly one of them.
 // `left` picks run back to back; onDone runs after the last (or a skip).
-function askUpgradePick(left, onDone) {
-  const offers = game.upgradeOffers();
+// `options` (optional) caps how many offers each pick shows (a graded reward).
+function askUpgradePick(left, onDone, options = null) {
+  const offers = game.upgradeOffers(options);
   if (!offers.length) { onDone(); return; }
   ui.chooseUpgrade({
     game,
@@ -862,7 +879,7 @@ function askUpgradePick(left, onDone) {
     left,
     onPick: (offer) => {
       game.applyUpgradePick(offer);
-      if (left > 1) askUpgradePick(left - 1, onDone); else onDone();
+      if (left > 1) askUpgradePick(left - 1, onDone, options); else onDone();
     },
     onSkip: onDone,
   });
@@ -883,7 +900,7 @@ function showDialog(d) {
     if (d.canCamp) {
       actions.push({
         label: t('dialog.campFirst', { cost: d.campCost }),
-        sub: t('dialog.campFirst.sub', { fit: Math.min(d.amount, d.amount - d.overflow + d.campCost), amount: d.amount, partial: d.amount - d.overflow }),
+        sub: tFatigue('dialog.campFirst.sub', CONFIG, { fit: Math.min(d.amount, d.amount - d.overflow + d.campCost), amount: d.amount, partial: d.amount - d.overflow }),
         onClick: () => { game.claimSupplies(true); ui.closeDialog(); },
       });
     }
@@ -946,7 +963,7 @@ function showDialog(d) {
     // sees the children the first pick opened.
     const picksNow = () => (r.reward ? (r.rewardPicks ?? 1) : 0);
     const picks = picksNow();
-    const askPick = (left, onDone = () => ui.closeDialog()) => askUpgradePick(left, onDone);
+    const askPick = (left, onDone = () => ui.closeDialog()) => askUpgradePick(left, onDone, r.rewardOptions ?? null);
     const flavour = r.won && r.lore ? `<p class="flavour">${escapeHtml(t(r.lore))}</p>` : '';
     const salvage = r.won && r.supplies
       ? `<div class="effect">${escapeHtml(r.supplies < r.suppliesFull ? t('battle.supplies.partial', { got: r.supplies, n: r.suppliesFull }) : t('battle.supplies', { n: r.supplies }))}</div>`
@@ -954,7 +971,7 @@ function showDialog(d) {
     ui.openDialog({
       title: d.intro ? d.intro.title : r.stasis ? (r.title ? t('battle.stasis.title', { title: tn(r.title) }) : t('battle.stasis.untitled')) : t('battle.title'),
       html: `${intro}<div class="battle-sum ${r.won ? 'won' : 'lost'}">${t(r.won ? 'battle.victory' : 'battle.defeat', { n: r.rounds })} ${t(r.partyFirst ? 'battle.partyFirst' : 'battle.enemiesFirst')}</div>
-             ${debuffs}${flavour}${salvage}<p class="muted">${escapeHtml(t('battle.enemies', { list: enemies }))}</p><div class="battle-lines">${lines.join('')}</div>`,
+             ${debuffs}${flavour}${salvage}${enemies ? `<p class="muted">${escapeHtml(t('battle.enemies', { list: enemies }))}</p>` : ''}<div class="battle-lines">${lines.join('')}</div>`,
       actions: [{
         label: picks ? t('dialog.continueReward', { n: picks }) : t('dialog.continue'),
         onClick: () => {
@@ -997,14 +1014,23 @@ function showDialog(d) {
     };
     const build = (g) => ({
       title: t('shop.title'),
-      html: `${d.lore ? `<p class="flavour">${escapeHtml(t(d.lore))}</p>` : ''}<p>${t('shop.text', { supplies: g.state.supplies, fatigue: g.state.fatigue })}</p><span class="muted">${t('shop.note')}</span>`,
+      // The header names the two numbers a purchase is weighed against. With
+      // fatigue off (the 2026-09-22 experiment) the second one is no longer
+      // fatigue but how much of the pack's ceiling is still unfilled.
+      html: `${d.lore ? `<p class="flavour">${escapeHtml(t(d.lore))}</p>` : ''}<p>${g.fatigueEnabled()
+        ? t('shop.text', { supplies: g.state.supplies, fatigue: g.state.fatigue })
+        : t('shop.text.supplies', { supplies: g.state.supplies, max: g.state.maxSupplies })
+      }</p><span class="muted">${t(g.fatigueEnabled() ? 'shop.note' : 'shop.note.supplies')}</span>`,
       actions: [
         ...stock.options.map((id) => {
           const blocker = g.shopBlocker(hex, id);
           const sold = blocker === 'sold';
           return {
             label: sold ? t('shop.option.sold', { label: t(`shop.${id}.name`) }) : t('shop.option', { label: t(`shop.${id}.name`), cost: g.shopCost(id) }),
-            sub: sold ? t('shop.sold.sub') : blocker === 'useless' ? t(`shop.${id}.useless`) : t(`shop.${id}.sub`, subParams),
+            // A rest's description ends with "resets fatigue", so it goes through
+            // tFatigue; the other options say nothing about fatigue and do not.
+            sub: sold ? t('shop.sold.sub') : blocker === 'useless' ? t(`shop.${id}.useless`)
+              : id === 'rest' ? tFatigue('shop.rest.sub', CONFIG, subParams) : t(`shop.${id}.sub`, subParams),
             disabled: !!blocker,
             cls: sold ? 'sold' : '',
             onClick: clickFor[id] ?? (() => {}),
