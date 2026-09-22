@@ -136,7 +136,7 @@ export const ABILITIES = {
   lance: A({ name: 'Lance', icon: '⚡', color: '#5fc7e0', desc: 'A piercing thrust that strikes three tiles in a row, aimed by direction.', damage: 3, castZone: ringOffsets(1, 1), dmgZone: [[0, 0], [1, 0], [2, 0]], rotatable: true }),
   burst: A({ name: 'Ember Burst', icon: '🔥', color: '#ff9950', desc: 'A thrown blast: damages the target and everything around it, and leaves fire burning where it lands.', damage: 2, castZone: ringOffsets(1, 3), dmgZone: ringOffsets(0, 1), tagZone: [[0, 0]], tagId: 'fire', cost: { move: 1 } }),
   bolt: A({ name: 'Bolt', icon: '☄️', color: '#c66dff', desc: 'A heavy arcane hit on one nearby target.', damage: 4, castZone: ringOffsets(1, 2), dmgZone: [[0, 0]], cost: { hp: 1 } }),
-  mend: A({ name: 'Mend', icon: '🏥', color: '#a8e05f', desc: 'Heals one ally standing on or next to the caster.', heal: 4, castZone: ringOffsets(0, 1), dmgZone: [[0, 0]], cost: { supplies: 1 } }),
+  mendingTouch: A({ name: 'Mend', icon: '🏥', color: '#a8e05f', desc: 'Heals one ally standing on or next to the caster.', heal: 2, castZone: ringOffsets(0, 1), dmgZone: [[0, 0]], cost: { supplies: 1 } }),
   guard: A({ name: 'Guard', icon: '🛡️', color: '#5fc7e0', desc: 'Shields a nearby ally: the next hit or shove against them is blocked outright.', statusEffect: 'shield', castZone: ringOffsets(0, 1), dmgZone: [[0, 0]], cost: { hp: -1 } }),
   clawSwipe: A({ name: 'Claw Swipe', icon: '🔪', color: '#5fc7e0', desc: 'Clawed slashes that tear through.', damage: 3, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], rotatable: true }),
   glaive: A({ name: 'Glaive Strike', icon: '⚔️', color: '#e0b25f', desc: 'Downward jab with a sleek glaive.', damage: 4, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], rotatable: true }),
@@ -565,11 +565,38 @@ export const ABILITY_UPGRADES = {
   },
 
   glaive: {// A longer range melee attack
+    //level 1
     lunge: U({
       dmgZoneAdd: [[1, 0]],
       name: "Glaive Lunge", icon: '➡️➡️', desc: 'Can reach a tile further than directly in front.', short: '+1 range'
-    })
+    }),
+    power: U({
+      add: { damage: 1 },
+      name: 'Strength', icon: '🦾', desc: 'With strengthened sinews, Gorm hits harder'
+    }),
+  },
 
+  mendingTouch: {
+    soothe: U({
+      add: { heal: 1 },
+      name: 'Soothe', icon: '💚', desc: '+1 healing',
+    }),
+    tend: U({
+      castZoneAdd: ringOffsets(2, 2),
+      name: 'Tend', icon: '📏', desc: 'can heal from 2 tiles away',
+    }),
+    bloom: U({
+      dmgZoneAdd: ringOffsets(1, 1),
+      name: 'Bloom', icon: '🌸', desc: 'also heals everyone around the target', requires: ['soothe'],
+    }),
+    mercy: U({
+      add: { heal: 1 },
+      name: 'Mercy', icon: '🙏', desc: '+1 healing', requires: ['tend'],
+    }),
+    renewal: U({
+      add: { heal: 2 },
+      name: 'Renewal', icon: '✨', desc: '+2 healing', requires: ['bloom', 'mercy'],
+    }),
   },
 
 
@@ -620,15 +647,6 @@ export const ABILITY_UPGRADES = {
     surge: U({ name: 'Surge', icon: '⚡', desc: '+1 damage', requires: ['charge'], add: { damage: 1 } }),
     farcast: U({ name: 'Farcast', icon: '🔭', desc: 'range grows to 4 tiles', requires: ['arc'], castZoneAdd: ringOffsets(4, 4) }),
     thunder: U({ name: 'Thunder', icon: '🌪️', desc: '+2 damage', requires: ['surge', 'farcast'], add: { damage: 2 } }),
-  },
-  // Mend: the heal. Stronger, further, then a healing splash around the target.
-  // (The splash heals every unit standing in it - stand apart from enemies.)
-  mend: {
-    soothe: U({ name: 'Soothe', icon: '💚', desc: '+1 healing', add: { heal: 1 } }),
-    tend: U({ name: 'Tend', icon: '📏', desc: 'can heal from 2 tiles away', castZoneAdd: ringOffsets(2, 2) }),
-    bloom: U({ name: 'Bloom', icon: '🌸', desc: 'also heals everyone around the target', requires: ['soothe'], dmgZoneAdd: ringOffsets(1, 1) }),
-    mercy: U({ name: 'Mercy', icon: '🙏', desc: '+1 healing', requires: ['tend'], add: { heal: 1 } }),
-    renewal: U({ name: 'Renewal', icon: '✨', desc: '+2 healing', requires: ['bloom', 'mercy'], add: { heal: 2 } }),
   },
   // Guard: the shield. Learns to patch wounds and to reach further.
   guard: {
