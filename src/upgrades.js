@@ -12,6 +12,7 @@
 //  same code serves the world map, the combat engine and the UI.
 // =====================================================================
 import { ABILITIES, ABILITY_UPGRADES, STATUSES, checkTrigger } from './config/abilities.js';
+import { addDamage } from './damage.js';
 import { combatStatsFor } from './config/entities.js';
 import { t, hasKey } from './i18n.js';
 import { tc } from './text.js';
@@ -90,7 +91,12 @@ export function resolveAbility(abilityId, unlocked = []) {
   for (const [nodeId, node] of Object.entries(tree)) {
     if (!have.has(nodeId)) continue;
     // `add: { damage, heal }` - plain numbers summed onto the ability's own.
-    for (const [k, v] of Object.entries(node.add ?? {})) def[k] = (Number(def[k]) || 0) + v;
+    // `damage` speaks the "X damage Y times" notation (src/damage.js): 4 or
+    // "4x" is +4 base, "x4" is +4 times, "4x4" both.
+    for (const [k, v] of Object.entries(node.add ?? {})) {
+      if (k === 'damage') def.damage = addDamage(def.damage, v);
+      else def[k] = (Number(def[k]) || 0) + v;
+    }
     // `statusEffectAdd: { field: n }` - summed onto the numbers of the status the
     // ability applies: on top of its own statusEffectOverride where it has one
     // for that field, otherwise on top of the table's value for the row.

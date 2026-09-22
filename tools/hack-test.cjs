@@ -94,7 +94,7 @@ fs.mkdirSync(OUT, { recursive: true });
     const covers = (ab, from, anchor, node) => ab.dmgZone.some((o) => add(anchor, rot(o, ab.rotatable ? aimRot(from, anchor) : 0)) === node);
     const out = { locks: [], node: null, preview: null };
     const nodes = Object.keys(sb.tags).filter((k) => sb.tags[k].defId === 'node');
-    const lockable = (u, id) => { const ab = h.abilityFor(u, id); return !!ab && ab.damage > 0; };
+    const lockable = (u, id) => { const ab = h.abilityFor(u, id); return !!ab && h.damageOf(ab).base > 0; };
     // Pick the node closest to the party.
     const dist = (a, b) => { const [q1, r1] = PK(a), [q2, r2] = PK(b); return (Math.abs(q1 - q2) + Math.abs(r1 - r2) + Math.abs(q1 + r1 - q2 - r2)) / 2; };
     const node = nodes.sort((a, b) => Math.min(...sb.units.map((u) => dist(u.pos, a))) - Math.min(...sb.units.map((u) => dist(u.pos, b))))[0];
@@ -118,9 +118,11 @@ fs.mkdirSync(OUT, { recursive: true });
         if (plan) break;
       }
       if (!plan) { out.locks.push({ uid: u.uid, skipped: true }); continue; }
-      if (plan.from !== u.pos) { h.clickTile(plan.from); await wait(1200); }
+      if (plan.from !== u.pos) { h.clickTile(plan.from); for (let g = 0; g < 60 && sb.busy; g++) await wait(100); }
+      h.activate(u.uid); await wait(30);
       h.selectAbility(plan.id);
       await wait(50);
+      if (!sb.aimMap) { out.locks.push({ uid: u.uid, skipped: 'ability refused', id: plan.id, busy: sb.busy, cur: h.curPlayer()?.uid }); continue; }
       // The preview under the cursor: the engine's own query.
       const before = h.previewTotals(null).get(node);
       const anchorClick = Object.keys(sb.aimMap).find((k) => sb.aimMap[k] === plan.anchor) ?? plan.anchor;
@@ -128,7 +130,7 @@ fs.mkdirSync(OUT, { recursive: true });
       h.clickTile(anchorClick);
       await wait(100);
       const lu = sb.units.find((x) => x.uid === u.uid);
-      out.locks.push({ uid: u.uid, pos: lu.pos, id: plan.id, locked: !!lu.lock, coversNode: !!lu.lock && lu.lock.tiles.includes(node), pvN: pv?.n, pvMult: pv?.mult, pvTotal: pv?.total, beforeN: before?.n ?? 0 });
+      out.locks.push({ uid: u.uid, pos: lu.pos, id: plan.id, locked: !!lu.lock, coversNode: !!lu.lock && lu.lock.tiles.includes(node), pvN: pv?.n, pvBonus: pv?.bonus, pvTotal: pv?.total, beforeN: before?.n ?? 0 });
     }
     out.preview = h.previewTotals(null).get(node) ?? null;
     out.nodeHpBefore = sb.tags[node].hp;
@@ -139,29 +141,50 @@ fs.mkdirSync(OUT, { recursive: true });
   const locked = turn.locks.filter((l) => l.locked && l.coversNode).length;
   check(locked >= 2, `at least two units locked an aim on the same node (${locked})`);
   if (turn.preview) {
-    const mults = await page.evaluate(() => window.game.config.combat.stack.multipliers);
-    check(turn.preview.n === locked && turn.preview.mult === mults[Math.min(locked, mults.length) - 1], `preview stacks ${turn.preview.n} abilities at x${turn.preview.mult} = ${turn.preview.total}`);
-    check(turn.preview.parts && turn.preview.parts.length === locked && turn.preview.raw === turn.preview.parts.reduce((a, p) => a + p.dmg, 0), `preview lists each ability's damage (${(turn.preview.parts || []).map((p) => p.dmg).join('+')})`);
+    const per = await page.evaluate(() => window.game.config.combat.stack.bonusPerOverlap);
+    const parts = turn.preview.parts || [];
+    const expectTotal = parts.reduce((a, p) => a + (p.dmg + (locked - 1) * per) * p.times, 0);
+    check(turn.preview.n === locked && turn.preview.bonus === (locked - 1) * per && turn.preview.total === expectTotal, `overlap: ${locked} abilities give each +${turn.preview.bonus} base -> ${turn.preview.total} (${parts.map((p) => `(${p.dmg}+${p.bonus})x${p.times}`).join('+')})`);
   }
   await page.screenshot({ path: path.join(OUT, 'hack-2-locked.png') });
   const fx = await page.evaluate(() => ({ labels: window.__localView.lockLabels.length, marks: window.__localView.lockFx.length, plaques: window.__localView.tokens.filter((t) => t.userData.plaque && t.userData.plaque.visible).length }));
   check(fx.labels > 0 && fx.marks > 0, `the arena draws lock marks and billboards (${fx.marks} marks, ${fx.labels} billboards)`);
   check(fx.plaques === 0, 'overhead unit cards are off');
 
-  // Fire.
+  // The panel: cards numbered in firing order and draggable; reordering through
+  // the engine flips the numbers.
+  const panel = await page.evaluate(() => {
+    const h = window.__hack;
+    const before = [...document.querySelectorAll('#party-units .unit')].map((c) => ({ i: c.getAttribute('data-party'), n: c.querySelector('.fire-order')?.textContent, drag: c.getAttribute('draggable') }));
+    const order = h.fireOrder();
+    h.setFireOrder(order.slice().reverse());
+    const after = [...document.querySelectorAll('#party-units .unit')].map((c) => ({ i: c.getAttribute('data-party'), n: c.querySelector('.fire-order')?.textContent }));
+    h.setFireOrder(order);   // back to how it was
+    return { before, after, order };
+  });
+  console.log('  panel:', JSON.stringify(panel));
+  check(panel.before.every((c) => c.drag === 'true') && panel.before.map((c) => c.n).join('') === '123', 'party cards are numbered 1-2-3 and draggable');
+  check(panel.after.map((c) => c.i).join('') === panel.before.map((c) => c.i).join('').split('').reverse().join(''), 'reordering the firing order re-lists the cards');
+  // Fire - and catch the volley mid-way: the locks go one at a time.
+  const midway = await page.evaluate(async () => {
+    const h = window.__hack; const sb = h.state;
+    const n0 = h.lockedUnits().length;
+    h.endTurn();
+    await new Promise((r) => setTimeout(r, 120));
+    const n1 = h.lockedUnits().length;
+    return { n0, n1, busy: sb.busy };
+  });
+  console.log('  midway:', JSON.stringify(midway));
+  check(midway.n0 >= 2 && midway.n1 > 0 && midway.n1 < midway.n0, `the volley is sequenced: ${midway.n0} locks, ${midway.n1} still waiting 120ms in`);
   const fired = await page.evaluate(async () => {
     const h = window.__hack; const sb = h.state;
-    const node = Object.keys(sb.tags).find((k) => sb.tags[k].defId === 'node' && h.previewTotals(null).has(k));
-    const hp0 = node ? sb.tags[node].hp : null;
-    const pv = node ? h.previewTotals(null).get(node) : null;
-    const r0 = sb.round;
-    h.endTurn();
-    await new Promise((r) => setTimeout(r, 2400));
-    return { node, hp0, expected: pv ? pv.dealt : null, hp1: node ? (sb.tags[node] ? sb.tags[node].hp : 0) : null, r0, r1: sb.round, lastTurn: sb.ext.hack.lastTurn, busy: sb.busy, over: sb.over, locks: h.lockedUnits().length, turnsText: document.querySelector('#hack-bar .hack-turns')?.textContent, round: document.getElementById('battle-round').textContent };
+    // (endTurn was pressed above; wait for the volley to land.)
+    await new Promise((r) => setTimeout(r, 2600));
+    return { r1: sb.round, lastTurn: sb.ext.hack.lastTurn, busy: sb.busy, over: sb.over, locks: h.lockedUnits().length, turnsText: document.querySelector('#hack-bar .hack-turns')?.textContent, round: document.getElementById('battle-round').textContent };
   });
   console.log('  fired:', JSON.stringify(fired));
-  check(fired.node && fired.hp0 - fired.hp1 === fired.expected, `the node took what the billboard promised (${fired.hp0} -> ${fired.hp1}, promised ${fired.expected})`);
-  check(fired.r1 === fired.r0 + 1 && !fired.busy && !fired.over, 'a new turn started');
+  check(turn.node && await page.evaluate(({ node, exp, hp0 }) => { const t = window.__hack.state.tags[node]; return (t ? hp0 - t.hp : hp0) === exp; }, { node: turn.node, hp0: turn.nodeHpBefore, exp: Math.min(turn.preview?.total ?? 0, turn.nodeHpBefore) }), `the node took what the billboard promised (${turn.preview?.total} of ${turn.nodeHpBefore} hp)`);
+  check(fired.r1 === 2 && !fired.busy && !fired.over, 'a new turn started');
   check(fired.locks === 0, 'locks are cleared after firing');
   check(/Turn 2 \/ 5/.test(fired.turnsText ?? ''), `the panel counts the turn (${fired.turnsText})`);
   await page.screenshot({ path: path.join(OUT, 'hack-3-fired.png') });
@@ -190,15 +213,19 @@ fs.mkdirSync(OUT, { recursive: true });
           const node = tiles.find((t) => nodes.includes(t));
           if (!node) continue;
           if (tiles.filter((t) => sb.tags[t]).length !== 1) continue;
-          if (from !== u.pos) { h.clickTile(from); await wait(1200); }
+          if (from !== u.pos) { h.clickTile(from); for (let g = 0; g < 60 && sb.busy; g++) await wait(100); }
+          h.activate(u.uid); await wait(30);
+          // "X damage Y times": make this one a 2x3 for the test.
+          const saved = ab.damage;
+          if (u.abilityDefs && u.abilityDefs[id]) u.abilityDefs[id].damage = '2x3';
           h.selectAbility(id); await wait(30);
-          if (!sb.aimMap || sb.aimMap[anchor] === undefined) { h.cancel(); continue; }
-          sb.tags[node].hp = 2;
+          if (!sb.aimMap || sb.aimMap[anchor] === undefined) { h.cancel(); if (u.abilityDefs && u.abilityDefs[id]) u.abilityDefs[id].damage = saved; continue; }
+          sb.tags[node].hp = 5;
           const pv = h.previewTotals(anchor).get(node);
           h.clickTile(anchor); await wait(60);
           const c0 = sb.ext.hack.cleared;
           h.endTurn(); await wait(2400);
-          return { found: true, dmg: ab.damage, c0, c1: sb.ext.hack.cleared, pvDealt: pv?.dealt, pvOver: pv?.over, nodeGone: !sb.tags[node], last: sb.ext.hack.lastTurn, badges: sb.ext.hack.badges, lit: document.querySelectorAll('#hack-bar .badge.lit').length };
+          return { found: true, dmg: '2x3', c0, c1: sb.ext.hack.cleared, pvParts: pv?.parts?.map((p) => `${p.dmg}x${p.times}`), pvTotal: pv?.total, pvDealt: pv?.dealt, pvOver: pv?.over, nodeGone: !sb.tags[node], last: sb.ext.hack.lastTurn, badges: sb.ext.hack.badges, lit: document.querySelectorAll('#hack-bar .badge.lit').length };
         }
       }
     }
@@ -207,7 +234,7 @@ fs.mkdirSync(OUT, { recursive: true });
   console.log('  clear:', JSON.stringify(over));
   if (over.found) {
     check(over.c1 === over.c0 + 1 && over.nodeGone, `a node brought down counts as cleared (${over.c0} -> ${over.c1})`);
-    check(over.pvDealt === 2 && over.pvOver === over.dmg - 2, `preview split the hit into dealt ${over.pvDealt} + over ${over.pvOver}`);
+    check(over.pvTotal === 6 && over.pvDealt === 5 && over.pvOver === 1 && (over.pvParts || []).join() === '2x3', `a 2x3 ability previews as three hits of 2 (${over.pvParts}, total ${over.pvTotal}, dealt ${over.pvDealt}, over ${over.pvOver})`);
     check(over.lit === over.badges, `badges lit match badges earned (${over.lit})`);
   } else console.log('  (no clean single-node aim available - skipped)');
 
@@ -284,7 +311,7 @@ fs.mkdirSync(OUT, { recursive: true });
     // ability on it. If nobody can reach, lock anywhere and just check the flow.
     const me = sb.units.find((u) => !u.isEnemy && u.hp > 0);
     b.activate(me.uid); await wait(30);
-    const ab = me.abilityIds.map((id) => b.abilityFor(me, id)).find((a) => a && a.damage > 0);
+    const ab = me.abilityIds.map((id) => b.abilityFor(me, id)).find((a) => a && b.damageOf(a).base > 0);
     const id = me.abilityIds.find((i) => b.abilityFor(me, i) === ab);
     b.selectAbility(id); await wait(30);
     const keys = Object.keys(sb.aimMap || {});
@@ -294,8 +321,23 @@ fs.mkdirSync(OUT, { recursive: true });
     const enemyEntry = pv.get(enemy.pos) ?? null;
     b.clickTile(target); await wait(60);
     const afterLock = { hp: enemy.hp, locked: !!me.lock, phase: sb.phase, round: sb.round };
-    b.endTurn(); await wait(3000);
-    return { keys: keys.length, atEnemy: !!atEnemy, enemyEntry: enemyEntry && { kind: enemyEntry.kind, hp: enemyEntry.target?.hp, total: enemyEntry.total, dealt: enemyEntry.dealt }, afterLock, after: { hp: enemy.hp, round: sb.round, phase: sb.phase, over: sb.over } };
+    // A CHARGE at the enemy (Gorm's headbutt shoves it and dashes after it):
+    // the play-out must report the movement, and the arena draw ghosts for it.
+    let ghosts = null;
+    const gorm = sb.units.find((u) => !u.isEnemy && u.hp > 0 && u.abilityIds.includes('chargeHeadbutt'));
+    if (gorm) {
+      b.activate(gorm.uid); await wait(30);
+      b.selectAbility('chargeHeadbutt'); await wait(30);
+      const at = sb.aimMap && sb.aimMap[enemy.pos] !== undefined ? enemy.pos : null;
+      if (at) {
+        const moves = b.previewMoves(at);
+        b.clickTile(at); await wait(800);
+        const v = window.__localView;
+        ghosts = { moves, fx: v.lockFx.length, sig: v.lockSig, bound: v.battle === b, busy: sb.busy, ghostMeshes: v.lockFx.filter((o) => o.isMesh && o.geometry === (v.battleTokens.get(gorm.uid) || {}).geometry).length };
+      } else { b.cancel(); ghosts = { skipped: 'enemy not in charge range' }; }
+    }
+    b.endTurn(); await wait(4500);
+    return { keys: keys.length, atEnemy: !!atEnemy, enemyEntry: enemyEntry && { kind: enemyEntry.kind, hp: enemyEntry.target?.hp, total: enemyEntry.total, dealt: enemyEntry.dealt }, afterLock, ghosts, after: { hp: enemy.hp, round: sb.round, phase: sb.phase, over: sb.over } };
   });
   console.log('  fight:', JSON.stringify(fight));
   check(fight.afterLock.locked && fight.afterLock.hp === 9, 'in a regular battle a click locks the aim and nothing fires yet');
@@ -303,11 +345,21 @@ fs.mkdirSync(OUT, { recursive: true });
     check(fight.enemyEntry && fight.enemyEntry.kind === 'enemy' && fight.enemyEntry.hp === 9 && fight.enemyEntry.total > 0, `the billboard reads the enemy (${JSON.stringify(fight.enemyEntry)})`);
     check(fight.after.hp < 9, `End turn fired the lock (enemy 9 -> ${fight.after.hp})`);
   } else console.log('  (enemy out of reach on this layout - only the lock flow was checked)');
+  if (fight.ghosts && !fight.ghosts.skipped) {
+    const mv = fight.ghosts.moves || [];
+    check(mv.length > 0 && mv.some((m) => m.kind === 'unit'), `the play-out reports what a charge moves (${mv.map((m) => `${m.name ?? m.kind}:${m.from}->${m.to}${m.dead ? ' dead' : ''}`).join(', ')})`);
+    check(fight.ghosts.ghostMeshes > 0, `the arena drew a ghost for the charging unit (${fight.ghosts.ghostMeshes})`);
+  } else console.log('  (charge preview skipped: ' + (fight.ghosts?.skipped ?? 'no charger') + ')');
   await page.screenshot({ path: path.join(OUT, 'hack-3c-battle.png') });
   await page.evaluate(() => window.__battle && window.__battle.debugResolve(true));
   await page.waitForFunction(() => !document.getElementById('dialog').classList.contains('hidden'), null, { timeout: 15000 });
-  await dismissDialog(); await page.waitForTimeout(300);
-  if (await dialogOpen()) { await page.evaluate(() => { const c = document.querySelector('#dialog-actions button'); if (c) c.click(); }); await page.waitForTimeout(300); if (await dialogOpen()) await dismissDialog(); }
+  // Click through whatever windows the win opens (report, chooser, anything new).
+  for (let i = 0; i < 8 && await dialogOpen(); i++) {
+    await page.evaluate(() => { const c = document.querySelector('#dialog .upg-card') || document.querySelector('#dialog-actions button'); if (c) c.click(); });
+    await page.waitForTimeout(350);
+    await page.evaluate(() => { const c = document.getElementById('confirm'); if (c && !c.classList.contains('hidden')) document.getElementById('btn-confirm-yes')?.click(); });
+    await page.waitForTimeout(150);
+  }
   await page.waitForFunction(() => window.__cinematic.mode() === 'idle', null, { timeout: 30000 });
   await page.waitForTimeout(600);
   await startEnter();
@@ -335,14 +387,15 @@ fs.mkdirSync(OUT, { recursive: true });
   await page.screenshot({ path: path.join(OUT, 'hack-4-won.png') });
   await dismissDialog();
   await page.waitForTimeout(300);
-  const chooser = await page.evaluate(() => ({ open: !document.getElementById('dialog').classList.contains('hidden'), buttons: [...document.querySelectorAll('#dialog-actions button')].map((b) => b.textContent.trim().slice(0, 30)) }));
+  const chooser = await page.evaluate(() => ({ open: !document.getElementById('dialog').classList.contains('hidden'), cards: document.querySelectorAll('#dialog .upg-card').length, buttons: [...document.querySelectorAll('#dialog-actions button')].map((b) => b.textContent.trim().slice(0, 30)) }));
   console.log('  chooser:', JSON.stringify(chooser));
-  check(chooser.open && chooser.buttons.length === 2, `the chooser offers exactly one upgrade (plus skip): ${chooser.buttons.length} buttons`);
+  check(chooser.open && chooser.cards === 1, `the chooser offers exactly one upgrade card: ${chooser.cards}`);
   await page.screenshot({ path: path.join(OUT, 'hack-4b-choice.png') });
-  if (chooser.open) {
-    await page.evaluate(() => { const c = document.querySelector('#dialog-actions button'); if (c) c.click(); });
-    await page.waitForTimeout(300);
-    if (await dialogOpen()) await dismissDialog();
+  for (let i = 0; i < 8 && await dialogOpen(); i++) {
+    await page.evaluate(() => { const c = document.querySelector('#dialog .upg-card') || document.querySelector('#dialog-actions button'); if (c) c.click(); });
+    await page.waitForTimeout(350);
+    await page.evaluate(() => { const c = document.getElementById('confirm'); if (c && !c.classList.contains('hidden')) document.getElementById('btn-confirm-yes')?.click(); });
+    await page.waitForTimeout(150);
   }
   await page.waitForFunction(() => window.__cinematic.mode() === 'idle', null, { timeout: 30000 }).catch(() => problems.push('did not fly back out after the win'));
   const tileAfterWin = await page.evaluate(() => window.game.state.position.encounter);

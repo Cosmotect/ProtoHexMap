@@ -519,7 +519,10 @@ export const en = {
   // aim; End turn fires every lock at once.
   'battle.ui.aimFree': 'Move freely, pick an ability and click a tile to lock the aim.',
   'battle.ui.aimLocked': 'Aim locked: {ability} (re-aim or walk to change).',
-  'battle.ui.aimed': '{n}/{total} aimed - End turn fires all.',
+  'battle.ui.aimed': '{n}/{total} aimed - End turn fires all, top card first.',
+  // The party panel in a fight: the cards stand in firing order and can be dragged.
+  'party.order.title': 'Fires {n}. of the party this turn - drag the card to change the order',
+  'party.order.drag': 'Drag up or down to change when this unit fires',
   'battle.ui.locked': 'Position locked. Cast an ability or end the turn.',
   'battle.ui.moveLeft.title': 'Movement points left this round (after walking and ability costs)',
   'battle.ui.supplies.title': 'The run\'s supplies - some abilities cost them',
@@ -529,6 +532,7 @@ export const en = {
   'battle.ui.enemyPhase': 'Enemy turn...',
   'battle.ui.over': 'The fight is over.',
   'battle.ui.dmg': '{n} damage',
+  'battle.ui.dmgTimes': '{n} damage {t} times',
   // ----- ability costs (the chips on a battle button) ----------------------
   'battle.cost.hp': 'costs {n} HP',
   'battle.cost.supplies': 'costs {n} supplies',

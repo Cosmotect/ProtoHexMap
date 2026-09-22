@@ -151,6 +151,8 @@ export function createHackBridge({ config, getGame, getUi, cinematic, renderer, 
     if (hackView) { hackView.dispose(); hackView = null; }
     ui.setBattleMode(null);
     cinematic.localView.endBattle();
+    // The firing order the player arranged in the panel carries to the next fight.
+    if (h.orderedParty) game.applyPartyOrder(h.orderedParty().map((u) => u.partyIndex));
     const rounds = h.state.round;
     const hx = h.state.ext.hack ?? { cleared: 0, badges: 0, total: 0 };
     const fill = (text) => text

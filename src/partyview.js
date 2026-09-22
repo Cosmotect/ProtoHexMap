@@ -28,6 +28,7 @@
 //  so the portrait is the unit, not a picture of it.
 // =====================================================================
 import * as THREE from 'three';
+import { hasDamage, parseDamage } from './damage.js';
 import { t, tn } from './i18n.js';
 import { ABILITIES, ABILITY_UPGRADES, STATUSES, checkTrigger } from './config/abilities.js';
 import { combatStatsFor } from './config/entities.js';
@@ -93,7 +94,7 @@ export function createPartyView({ config, getGame, getBattle, onClose, onUnitCha
 
   function abilityNumbers(ab) {
     const parts = [];
-    if (ab.damage > 0) parts.push(t('battle.ui.dmg', { n: ab.damage }));
+    if (hasDamage(ab.damage)) { const d = parseDamage(ab.damage); parts.push(d.times > 1 ? t('battle.ui.dmgTimes', { n: d.base, t: d.times }) : t('battle.ui.dmg', { n: d.base })); }
     if (ab.heal > 0) parts.push(t('battle.ui.heal', { n: ab.heal }));
     if (ab.statusEffect && STATUSES[ab.statusEffect]) parts.push(statusInfo(ab.statusEffect).name);
     for (const res of ['hp', 'supplies', 'move']) {

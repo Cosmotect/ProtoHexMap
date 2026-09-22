@@ -1030,6 +1030,17 @@ export class Game {
     this.consume(hex, 'hack', false);
     return true;
   }
+  // The party's FIRING ORDER (aim locks) outlives the fight: the party is
+  // re-listed so the next arena opens with the same order the player left.
+  // `order` is the party indices in firing order; anyone not named (dead,
+  // absent) keeps their place after them.
+  applyPartyOrder(order) {
+    const party = this.state.party;
+    const next = [];
+    for (const i of order ?? []) { const u = party[i]; if (u && !next.includes(u)) next.push(u); }
+    for (const u of party) if (!next.includes(u)) next.push(u);
+    if (next.some((u, i) => u !== party[i])) { this.state.party = next; this.emit('change'); }
+  }
   finishHack(ctx, { won, rounds, badges = 0 }) {
     // The hack's reward is GRADED: as many upgrade options as badges earned
     // (finishCombat reads ctx.rewardOptions; the chooser shows only that many).

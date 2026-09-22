@@ -1538,7 +1538,7 @@ export class LocalMapView {
     }
   }
   clearLockFx() {
-    for (const m of this.lockFx ?? []) { this.scene?.remove(m); m.material.dispose(); }
+    for (const m of this.lockFx ?? []) { this.scene?.remove(m); m.material.dispose(); if (m.isLine) m.geometry.dispose(); }
     this.lockFx = [];
     for (const l of this.lockLabels ?? []) { this.scene?.remove(l); l.material.dispose(); }
     this.lockLabels = [];
@@ -1555,7 +1555,7 @@ export class LocalMapView {
     const sig = `${locks}|${key ?? ''}|${sb.selAb ?? ''}|${sb.activeUid ?? ''}|${sb.phase}|${sb.over ?? ''}|${sb.busy ? 1 : 0}|${hp}|${Object.keys(sb.tags).length}`;
     if (sig === this.lockSig) return;
     this.lockSig = sig;
-    for (const m of this.lockFx) { this.scene.remove(m); m.material.dispose(); }
+    for (const m of this.lockFx) { this.scene.remove(m); m.material.dispose(); if (m.isLine) m.geometry.dispose(); }
     this.lockFx = [];
     for (const l of this.lockLabels) { this.scene.remove(l); l.material.dispose(); }
     this.lockLabels = [];
@@ -1576,6 +1576,61 @@ export class LocalMapView {
       const label = this.makeSegmentLabel(segs);
       label.position.set(tile.x, tile.top + 1.05, -tile.y);
       this.scene.add(label); this.lockLabels.push(label);
+    }    // The GHOSTS: everything the volley would move, drawn where it ends up.
+    this.syncGhosts(b.previewMoves ? b.previewMoves(key) : []);
+  }
+  // ----- ghost previews ----------------------------------------------------
+  // For every unit or barrier the volley would move (a shove, a crash, a fall,
+  // a crush chain, a charge, a corpse pushed along - the engine plays the whole
+  // volley out and reports the RESULT, so whatever moved it, it shows here): a
+  // translucent copy of its body on the tile it ends up on, a faint line from
+  // where it stands, a ring under the ghost; a skull over whatever dies,
+  // "VOID" where something goes over the edge, a burst where a barrier
+  // breaks. Same idea as hex-box's prediction ghosts, in the arena's 3D.
+  syncGhosts(moves) {
+    for (const m of moves) {
+      const fromTile = this.map.hexes.get(m.from);
+      const toTile = this.map.hexes.get(m.to);
+      if (!fromTile) continue;
+      const moved = m.to !== m.from && toTile && !m.voided;
+      if (moved) {
+        let ghost = null;
+        if (m.kind === 'unit') {
+          const tok = this.battleTokens.get(m.uid);
+          if (tok && tok.geometry) {
+            const color = tok.material?.color ? tok.material.color.clone() : new THREE.Color(m.isEnemy ? 0xe2474b : 0xffd166);
+            ghost = new THREE.Mesh(tok.geometry, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.38, depthWrite: false }));
+            ghost.rotation.y = tok.rotation.y;
+          }
+        } else {
+          ghost = this.makePortrait(m.icon ?? '⭐');
+          ghost.material = ghost.material.clone();
+          ghost.material.transparent = true; ghost.material.opacity = 0.45;
+          ghost.scale.setScalar(0.5);
+        }
+        if (ghost) {
+          ghost.position.set(toTile.x, toTile.top + (m.kind === 'unit' ? 0 : 0.35), -toTile.y);
+          ghost.renderOrder = 8;
+          this.scene.add(ghost); this.lockFx.push(ghost);
+        }
+        // The ring under the ghost, and the line it travels.
+        const ring = new THREE.Mesh(this.hlRingGeo, new THREE.MeshBasicMaterial({ color: 0xe8eef8, transparent: true, opacity: 0.55, depthWrite: false, side: THREE.DoubleSide }));
+        ring.position.set(toTile.x, toTile.top + 0.07, -toTile.y);
+        ring.renderOrder = 5;
+        this.scene.add(ring); this.lockFx.push(ring);
+        const pts = [new THREE.Vector3(fromTile.x, fromTile.top + 0.4, -fromTile.y), new THREE.Vector3(toTile.x, toTile.top + 0.4, -toTile.y)];
+        const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0xe8eef8, transparent: true, opacity: 0.6, depthWrite: false }));
+        line.renderOrder = 9;
+        this.scene.add(line); this.lockFx.push(line);
+      }
+      // What happens to it, over where it ends up.
+      const mark = m.voided ? { text: 'VOID', color: '#c66dff' } : m.dead ? { text: '☠', color: '#ff5d73' } : m.destroyed ? { text: '✸', color: '#ff9950' } : null;
+      if (mark) {
+        const at = moved ? toTile : fromTile;
+        const label = this.makeSegmentLabel([mark]);
+        label.position.set(at.x, at.top + (moved ? 0.95 : 1.5), -at.y);
+        this.scene.add(label); this.lockLabels.push(label);
+      }
     }
   }
   // The reading over one covered tile, as coloured segments (see syncLockFx).
@@ -1587,9 +1642,14 @@ export class LocalMapView {
       if (!e.parts.length && !e.note) return segs;   // a heal or a buff: nothing to add up
       segs.push({ text: String(t.hp), color: white, row: 0 });
       if (e.parts.length) {
-        const calc = e.parts.length > 1 || e.mult > 1
-          ? `(${e.parts.map((p) => p.dmg).join('+')})x${e.mult}=${e.total}`
-          : `-${e.total}`;
+        // One term per ability: base, "+bonus" for the overlap, "xN" for its
+        // hits - "(2+1)x4+(5+1)=18". A lone single hit stays a plain "-5".
+        const term = (p) => {
+          const base = p.bonus > 0 ? `(${p.dmg}+${p.bonus})` : `${p.dmg}`;
+          return p.times > 1 ? `${base}x${p.times}` : base;
+        };
+        const simple = e.parts.length === 1 && e.parts[0].times <= 1 && !(e.parts[0].bonus > 0);
+        const calc = simple ? `-${e.total}` : `${e.parts.map(term).join('+')}=${e.total}`;
         segs.push({ text: calc, color: gold, row: 1 });
       }
       const left = Math.max(0, t.hp - e.dealt);

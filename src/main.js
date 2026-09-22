@@ -453,6 +453,8 @@ function finishInteractiveBattle(won) {
   }
   ui.setBattleMode(null);
   cinematic.localView.endBattle();
+  // The firing order the player arranged in the panel carries to the next fight.
+  if (b.orderedParty) game.applyPartyOrder(b.orderedParty().map((u) => u.partyIndex));
   game.finishCombat(ctx, { won, rounds: b.state.round, interactive: true });
 }
 

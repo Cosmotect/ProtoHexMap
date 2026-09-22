@@ -33,7 +33,12 @@ import { ringOffsets, lineOffsets, DIRS } from '../local/battle/bhex.js';
 //
 //  ----- 2. WHAT IT DOES, in the order it happens ----------------------
 //    dmgZone    offsets FROM THE AIM POINT that take the damage / heal / status.
-//    damage     flat damage to every unit in dmgZone. Height matters: 2+ levels
+//    damage     damage to every unit in dmgZone, in the "X damage Y times"
+//               notation (src/damage.js): 5 = five damage once, "5x4" = five
+//               damage four times (four separate hits). Statuses, height, the
+//               overlap bonus and the Stasis debuff all change the BASE, so
+//               every hit. Upgrades add with 4 / "4x" (base), "x4" (times) or
+//               "4x4" (both). Height matters: 2+ levels
 //               above adds combat.highBonus, 2+ below removes combat.lowPenalty.
 //    heal       flat healing to every unit in dmgZone (applied after damage).
 //    statusEffect  the id of a status from STATUSES below, applied to every unit
@@ -141,6 +146,8 @@ export const ABILITIES = {
   clawSwipe: A({ name: 'Claw Swipe', icon: '🔪', color: '#5fc7e0', desc: 'Clawed slashes that tear through.', damage: 3, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], rotatable: true }),
   glaive: A({ name: 'Glaive Strike', icon: '⚔️', color: '#e0b25f', desc: 'Downward jab with a sleek glaive.', damage: 4, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], rotatable: true }),
   plasmaBolt: A({ name: 'Plasma Bolt', icon: '☄️', color: '#e0b25f', desc: 'A bolt of plasma, eerily calm, searing.', damage: 2, castZone: ringOffsets(1, 3), dmgZone: [[0, 0]] }),
+
+  spikeShot: A({ name: 'Spike Shot', icon: '🖊', color: '#e0b25f', desc: 'A sparce cloud of toxin tipped spikes.', damage: 2, castZone: ringOffsets(1, 2), dmgZone: [[0, 0]] }),
 
   //Hack Abilities
   hackMelee: A({ name: 'Hack Melee', icon: '⚔️', color: '#e0b25f', desc: 'A close, directional blow.', damage: 3, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]] }),
@@ -465,7 +472,9 @@ export function checkTrigger(e, quiet = false) {
 //                              [] / absent = a root, available from the start
 //  ----- 2. WHAT THE NODE CHANGES --------------------------------------
 //    add          { damage, heal } - numbers SUMMED onto the ability's own:
-//                   add: { damage: 1 }         hits 1 harder
+//                   add: { damage: 1 }         hits 1 harder (base; same as "1x")
+//                   add: { damage: "x1" }      hits one more time
+//                   add: { damage: "1x1" }     +1 base and one more hit
 //                   add: { heal: 2 }           heals 2 more
 //                   add: { damage: -1 }        hits 1 softer (a trade-off node)
 //                 Two nodes touching one number stack. Nothing else belongs in

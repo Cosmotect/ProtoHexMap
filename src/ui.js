@@ -1,6 +1,7 @@
 // The HUD: plain HTML elements layered over the 3D canvas.
 // (In Godot terms: a CanvasLayer with Labels and Buttons.)
 import { describeHex, lerpTable } from './game.js';
+import { hasDamage, damageLabel, parseDamage } from './damage.js';
 import { terrainInfo, terrainName, encounterLabel, encounterInfo, tc, tFatigue } from './text.js';
 import { t, tn, hasKey } from './i18n.js';
 import { playFatigueStep, playFatigueClear, clearStaggerMs } from './audio.js';
@@ -28,7 +29,7 @@ function abilityTip(id, ab) {
   const desc = t(`ability.${id}.desc`);
   if (desc && desc !== `ability.${id}.desc`) parts.push(desc);
   const nums = [];
-  if (ab.damage > 0) nums.push(t('battle.ui.dmg', { n: ab.damage }));
+  if (hasDamage(ab.damage)) nums.push(damageText(ab.damage));
   if (ab.heal > 0) nums.push(t('battle.ui.heal', { n: ab.heal }));
   if (ab.statusEffect) nums.push(statusInfo(ab.statusEffect).name);
   if (nums.length) parts.push(nums.join(', '));
@@ -847,13 +848,72 @@ export function createUI(config, handlers) {
   // sockets come from the combat engine's instances - shields and stuns only
   // exist there - so it is redrawn on every engine change as well as on every
   // world-map update.
+  // In a fight with aim locks, the cards stand in FIRING ORDER (the engine's
+  // fireOrder: the top card's lock fires first) and carry a number saying so;
+  // dragging a card into a new place changes the order (see the handlers
+  // below). Out of a fight the party is listed as it is.
   function renderPartyPanel() {
     if (!lastGame) return;
     const live = battleRef ? battleRef.state.units : [];
-    els.party.innerHTML = lastGame.state.party
-      .map((u, i) => unitCard(u, config, i, live.find((x) => x.partyIndex === i) ?? null))
-      .join('');
+    const party = lastGame.state.party;
+    let rows = party.map((u, i) => ({ u, i, live: live.find((x) => x.partyIndex === i) ?? null }));
+    const ordered = battleRef && battleRef.state.lockedAim && battleRef.orderedParty ? battleRef.orderedParty() : null;
+    if (ordered) {
+      const rank = new Map(ordered.map((x, n) => [x.partyIndex, n]));
+      rows = rows.slice().sort((a, b) => (rank.get(a.i) ?? 99) - (rank.get(b.i) ?? 99));
+    }
+    els.party.innerHTML = rows.map((r) => {
+      const n = ordered && r.live ? (ordered.findIndex((x) => x.uid === r.live.uid) + 1) : 0;
+      return unitCard(r.u, config, r.i, r.live, n > 0 ? n : null, !!ordered && !!r.live && r.live.hp > 0);
+    }).join('');
     markHovered();
+  }
+  // Drag a card up or down the list to change the firing order (HTML5 drag and
+  // drop, delegated on the panel). Only party cards in a fight are draggable
+  // (unitCard sets `draggable`); the drop hands the engine the new order.
+  let dragIndex = null;
+  els.party.addEventListener('dragstart', (e) => {
+    const card = e.target.closest('.unit[draggable="true"]');
+    if (!card || !battleRef) { e.preventDefault(); return; }
+    dragIndex = Number(card.getAttribute('data-party'));
+    card.classList.add('dragging');
+    try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(dragIndex)); } catch { /* some browsers */ }
+  });
+  els.party.addEventListener('dragover', (e) => {
+    if (dragIndex == null) return;
+    const card = e.target.closest('.unit[draggable="true"]');
+    if (!card) return;
+    e.preventDefault();
+    const r = card.getBoundingClientRect();
+    const below = e.clientY > r.top + r.height / 2;
+    els.party.querySelectorAll('.unit').forEach((c) => c.classList.remove('drop-before', 'drop-after'));
+    card.classList.add(below ? 'drop-after' : 'drop-before');
+  });
+  els.party.addEventListener('dragleave', (e) => {
+    const card = e.target.closest && e.target.closest('.unit');
+    if (card && !card.contains(e.relatedTarget)) card.classList.remove('drop-before', 'drop-after');
+  });
+  els.party.addEventListener('drop', (e) => {
+    if (dragIndex == null || !battleRef) return;
+    e.preventDefault();
+    const card = e.target.closest('.unit[draggable="true"]');
+    const cards = [...els.party.querySelectorAll('.unit[draggable="true"]')];
+    if (!card || !cards.length) { endDrag(); return; }
+    const r = card.getBoundingClientRect();
+    const below = e.clientY > r.top + r.height / 2;
+    const order = cards.map((c) => Number(c.getAttribute('data-party'))).filter((i) => i !== dragIndex);
+    let at = order.indexOf(Number(card.getAttribute('data-party')));
+    if (at < 0) at = order.length; else if (below) at += 1;
+    order.splice(at, 0, dragIndex);
+    const units = battleRef.state.units;
+    const uids = order.map((i) => units.find((x) => x.partyIndex === i)?.uid).filter(Boolean);
+    endDrag();
+    if (battleRef.setFireOrder) battleRef.setFireOrder(uids);
+  });
+  els.party.addEventListener('dragend', endDrag);
+  function endDrag() {
+    dragIndex = null;
+    els.party.querySelectorAll('.unit').forEach((c) => c.classList.remove('dragging', 'drop-before', 'drop-after'));
   }
 
   function updateBattle() {
@@ -888,7 +948,7 @@ export function createUI(config, handlers) {
         const ab = battleRef.abilityFor(c, id);   // the unit's UPGRADED def
         if (!ab) return '';
         const sel = sb.selAb === id ? 'selected' : c.lock && c.lock.abId === id ? 'locked' : '';
-        const num = ab.damage > 0 ? `⚔${ab.damage}` : ab.heal > 0 ? `+${ab.heal}` : '';
+        const num = hasDamage(ab.damage) ? `⚔${damageLabel(ab.damage)}` : ab.heal > 0 ? `+${ab.heal}` : '';
         const slot = slots.indexOf(id);
         const key = slot >= 0 && slot < 3 ? ` [${slot + 1}]` : '';
         // What it costs, and whether this unit can pay for it right now. `short`
@@ -898,7 +958,7 @@ export function createUI(config, handlers) {
         const costs = costChips(ab);
         const tip = [
           `${ab.name}${key}`,
-          ab.damage > 0 ? t('battle.ui.dmg', { n: ab.damage }) : '',
+          hasDamage(ab.damage) ? damageText(ab.damage) : '',
           ab.heal > 0 ? t('battle.ui.heal', { n: ab.heal }) : '',
           costText(ab),
           short ? t(`battle.cost.short.${short}`) : '',
@@ -1211,7 +1271,9 @@ function unitCardBody({ portrait, name, hpText, pct, segPct, slots, statuses }) 
 // A party member. `live` is its instance inside the combat engine when a fight
 // is running - the only place its shields and stuns exist; out of a fight there
 // is none and every status socket is simply empty.
-function unitCard(u, config, index, live) {
+// `order` (1, 2, 3...) is the unit's place in the firing order during a fight
+// with aim locks; `draggable` lets the card be dragged to a new place.
+function unitCard(u, config, index, live, order = null, draggable = false) {
   const pct = Math.max(0, Math.min(100, (u.hp / u.maxHp) * 100));
   const segPct = (config.party.hpSegment / u.maxHp) * 100;
   const cls = !u.alive ? 'dead' : pct < 50 ? 'hurt' : '';
@@ -1229,7 +1291,8 @@ function unitCard(u, config, index, live) {
   // The relic slot. Relics do not exist yet; the socket is here so the space is
   // designed for from the start rather than bolted on later.
   abs.push(slotBox('relic', u.relic?.icon ?? null, u.relic ? tn(u.relic.name) : t('slot.relic.empty')));
-  return `<div class="unit ${cls}" data-party="${index}">
+  return `<div class="unit ${cls}" data-party="${index}"${draggable ? ' draggable="true" title="' + escapeAttr(t('party.order.drag')) + '"' : ''}>
+    ${order ? `<span class="fire-order" title="${escapeAttr(t('party.order.title', { n: order }))}">${order}</span>` : ''}
     ${unitCardBody({
     portrait: u.icon,
     name: tn(u.name),
@@ -1262,6 +1325,11 @@ function hex(n) {
 }
 function escapeHtml(s) {
   return s.replace(/[&<>]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[ch]));
+}
+// "X damage" or "X damage Y times" (src/damage.js notation), for tooltips.
+function damageText(v) {
+  const d = parseDamage(v);
+  return d.times > 1 ? t('battle.ui.dmgTimes', { n: d.base, t: d.times }) : t('battle.ui.dmg', { n: d.base });
 }
 function escapeAttr(s) {
   return String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));

@@ -27,15 +27,20 @@ export const COMBAT_CONFIG = {
     voidEdges: false,   // true = shoves over the map edge kill instead of crashing
     // ----- AIM LOCKS - the party fires together (since 2026-09-15) -----------
     // true: picking an ability and clicking a target LOCKS the unit's aim; End
-    // turn then fires every lock at once, in party order, and a tile covered by
-    // several damaging locks takes their damage multiplied by stack.multipliers
-    // [count] (two abilities x2, three x3, the last entry repeats). Re-aiming
+    // turn then fires the locks, and a hex covered by several damaging locks
+    // gives each of them +stack.bonusPerOverlap BASE damage there for every
+    // OTHER lock on it (two abilities: +1 each; three: +2 each). Re-aiming
     // replaces a lock, walking takes it back; nothing fires before End turn.
+    // (Until 2026-09-22 the overlap DOUBLED / TRIPLED the damage instead.)
     // false: the older flow - a click casts at once and the phase ends by itself
     // when everyone has cast (kept for comparison and for tools/engine-test.mjs).
     // Grew out of the Hack experiment (src/local/hack/, see DESIGN.md).
     lockedAim: true,
-    stack: { multipliers: [1, 2, 3] },
+    stack: { bonusPerOverlap: 1 },
+    // The volley is SEQUENCED (since 2026-09-22): the locks fire one after
+    // another, this many ms apart, in the order of the party panel's cards
+    // (drag them to reorder) - so an earlier shove can set up a later blow.
+    volleyStepMs: 450,
     // (What popping a shield is worth to the enemy AI used to live here as
     // `shieldStripScore`. It moved into the shield's own row in the status table
     // below, as `aiValue`, so every status carries its own worth in one place.)
