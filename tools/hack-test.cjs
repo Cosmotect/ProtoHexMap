@@ -1,5 +1,5 @@
-// Headless playtest of the HACK encounter (src/local/hack/ - an EXPERIMENT,
-// see DESIGN.md). Opens the built game, plants a hack on the party's tile,
+// Headless playtest of the HACK terminal (config.hack - see DESIGN.md "The
+// Hack terminal"). Opens the built game, plants a hack on the party's tile,
 // presses E, and plays a turn by hand through the engine's public surface:
 // walks a unit, locks three aims on one node, checks the stacked preview,
 // fires, checks the progress bar - then wins via debugResolve and checks the
@@ -59,8 +59,10 @@ fs.mkdirSync(OUT, { recursive: true });
   const s0 = await page.evaluate(() => {
     const h = window.__hack; const sb = h.state;
     return {
-      units: sb.units.length, nodes: Object.values(sb.tags).filter((t) => t.defId === 'node').length,
-      mines: Object.values(sb.tags).filter((t) => t.defId === 'mine').length,
+      units: sb.units.filter((u) => !u.isEnemy).length, nodes: sb.objects.filter((u) => u.kind === 'hackNode').length,
+      mines: sb.objects.filter((u) => u.kind === 'hackMine').length,
+      tags: Object.keys(sb.tags).length, enemies: sb.units.filter((u) => u.isEnemy).length, radius: h.hackConfig.radius,
+      farNodes: sb.objects.filter((u) => u.kind === 'hackNode' && (() => { const [q, r] = u.pos.split(',').map(Number); return Math.max(Math.abs(q), Math.abs(r), Math.abs(q + r)) > 5; })()).length,
       flat: new Set(Object.values(sb.heights)).size === 1,
       bar: !!document.getElementById('hack-bar'), battleBar: !document.getElementById('battle-bar').classList.contains('hidden'),
       round: document.getElementById('battle-round').textContent, active: sb.activeUid, abilities: document.querySelectorAll('#battle-abilities button').length,
@@ -68,6 +70,26 @@ fs.mkdirSync(OUT, { recursive: true });
     };
   });
   check(s0.units === 3, `three party units on the board (${s0.units})`);
+  check(s0.tags === 0 && s0.enemies === 0, 'nodes and mines are the engine\'s OBJECTS: no tags, no enemy units on the board');
+  if (s0.radius > 5) check(s0.farNodes > 0, `nodes reach the rings a radius-5 board did not have (${s0.farNodes} past ring 5 on radius ${s0.radius})`);
+  // Nodes are HackNode objects with hp rolled in H.nodeHp: every node's hp is
+  // inside the range, they are not all the same, and the arena shows each
+  // node as exactly hp discs.
+  const rolls = await page.evaluate(() => {
+    const sb = window.__hack.state; const H = window.__hack.hackConfig;
+    const nodes = sb.objects.filter((u) => u.kind === 'hackNode');
+    const hps = nodes.map((u) => u.hp);
+    const range = Array.isArray(H.nodeHp) ? [Math.min(...H.nodeHp), Math.max(...H.nodeHp)] : null;
+    const row = range ? range.join('-') : null;
+    const hv = window.__hackView;
+    const discs = hv ? nodes.map((u) => ({ hp: u.hp, discs: hv.discCount(u.uid) })) : null;
+    return { row, range, hps, distinct: new Set(hps).size, discs, mines: hv ? hv.mineCount() : null, mineUnits: sb.objects.filter((u) => u.kind === 'hackMine').length };
+  });
+  console.log('  node hp rolls:', JSON.stringify(rolls));
+  check(rolls.range && rolls.hps.length && rolls.hps.every((h) => h >= rolls.range[0] && h <= rolls.range[1]), `every node's hp is rolled inside H.nodeHp ${rolls.row}`);
+  check(rolls.distinct > 1, `the rolls differ between nodes (${rolls.distinct} distinct values)`);
+  check(rolls.discs && rolls.discs.every((d) => d.discs === d.hp), 'every node stands as exactly hp discs');
+  check(rolls.mines === rolls.mineUnits && rolls.mines > 0, `every mine has its icon on the tile (${rolls.mines})`);
   check(s0.nodes > 0 && s0.mines > 0, `nodes and mines placed (${s0.nodes} / ${s0.mines})`);
   check(s0.flat, 'the board is flat');
   check(s0.bar && s0.battleBar, 'hack panel and battle bar are shown');
@@ -76,8 +98,6 @@ fs.mkdirSync(OUT, { recursive: true });
   check(/Turn 1 \/ \d+/.test(s0.round), `battle bar reads the turn (${s0.round})`);
   check(!!s0.active && s0.abilities >= 2, `a unit is selected with its ability buttons (${s0.abilities})`);
   check(s0.lockedAim, 'aim locks are on (config.combat.lockedAim)');
-  const layoutInfo = await page.evaluate(() => ({ layout: window.__hack.layout, desc: document.getElementById('li-desc').textContent }));
-  check(!!layoutInfo.layout?.id && layoutInfo.desc.includes(layoutInfo.layout.name), `a layout was drawn and named (${layoutInfo.layout?.id})`);
   await page.screenshot({ path: path.join(OUT, 'hack-1-open.png') });
 
   // ----- 3. play a turn: three aims on one node -----------------------------
@@ -93,13 +113,16 @@ fs.mkdirSync(OUT, { recursive: true });
     const aimRot = (a, b) => { if (a === b) return 0; const [q1, r1] = PK(a), [q2, r2] = PK(b); const dq = q2 - q1, dr = r2 - r1; const x = Math.sqrt(3) * (dq + dr / 2), y = 1.5 * dr; const ang = Math.atan2(y, x) * 180 / Math.PI; return ((Math.round(ang / 60) % 6) + 6) % 6; };
     const covers = (ab, from, anchor, node) => ab.dmgZone.some((o) => add(anchor, rot(o, ab.rotatable ? aimRot(from, anchor) : 0)) === node);
     const out = { locks: [], node: null, preview: null };
-    const nodes = Object.keys(sb.tags).filter((k) => sb.tags[k].defId === 'node');
+    const nodeAt = (k) => sb.objects.find((u) => u.kind === 'hackNode' && u.hp > 0 && u.pos === k);
+    const nodes = sb.objects.filter((u) => u.kind === 'hackNode' && u.hp > 0).map((u) => u.pos);
     const lockable = (u, id) => { const ab = h.abilityFor(u, id); return !!ab && h.damageOf(ab).base > 0; };
     // Pick the node closest to the party.
     const dist = (a, b) => { const [q1, r1] = PK(a), [q2, r2] = PK(b); return (Math.abs(q1 - q2) + Math.abs(r1 - r2) + Math.abs(q1 + r1 - q2 - r2)) / 2; };
-    const node = nodes.sort((a, b) => Math.min(...sb.units.map((u) => dist(u.pos, a))) - Math.min(...sb.units.map((u) => dist(u.pos, b))))[0];
+    const party = sb.units.filter((u) => !u.isEnemy && u.hp > 0);
+    const node = nodes.sort((a, b) => Math.min(...party.map((u) => dist(u.pos, a))) - Math.min(...party.map((u) => dist(u.pos, b))))[0];
     out.node = node;
-    for (const u of sb.units) {
+    out.nodeUid = nodeAt(node).uid;
+    for (const u of party) {
       h.activate(u.uid);
       await wait(50);
       const reach = h.reachFor();
@@ -133,7 +156,7 @@ fs.mkdirSync(OUT, { recursive: true });
       out.locks.push({ uid: u.uid, pos: lu.pos, id: plan.id, locked: !!lu.lock, coversNode: !!lu.lock && lu.lock.tiles.includes(node), pvN: pv?.n, pvBonus: pv?.bonus, pvTotal: pv?.total, beforeN: before?.n ?? 0 });
     }
     out.preview = h.previewTotals(null).get(node) ?? null;
-    out.nodeHpBefore = sb.tags[node].hp;
+    out.nodeHpBefore = nodeAt(node).hp;
     out.lockedCount = h.lockedUnits().length;
     return out;
   });
@@ -180,6 +203,8 @@ fs.mkdirSync(OUT, { recursive: true });
     const to = Object.keys(reach.d).filter((k) => !reach.occ.has(k) && !sb.tags[k] && k !== walker.pos).sort((a, b) => reach.d[b] - reach.d[a])[0];
     if (!to) return { skipped: 'nowhere to walk' };
     const marksBefore = v.lockFx.filter((o) => o.userData.tile).length;
+    // A walk takes the walker's OWN lock back (if it had one); the others stay.
+    const own = walker.lock ? walker.lock.tiles.length : 0;
     h.clickTile(to);
     let minMarks = Infinity, samples = 0, sawBusy = false;
     for (let g = 0; g < 60 && (sb.busy || g < 3); g++) {
@@ -187,10 +212,12 @@ fs.mkdirSync(OUT, { recursive: true });
       if (sb.busy) sawBusy = true;
       minMarks = Math.min(minMarks, v.lockFx.filter((o) => o.userData.tile).length); samples++;
     }
-    return { from: walker.pos, to, marksBefore, minMarks, samples, sawBusy, locks: h.lockedUnits().length };
+    // A long walk under headless software rendering can outlast the sampling.
+    for (let g = 0; g < 200 && sb.busy; g++) await wait(100);
+    return { from: walker.pos, to, marksBefore, own, minMarks, samples, sawBusy, done: !sb.busy, locks: h.lockedUnits().length };
   });
   console.log('  walk:', JSON.stringify(walk));
-  if (!walk.skipped) check(walk.marksBefore > 0 && walk.minMarks >= walk.marksBefore, `a walk leaves the other units' lock marks standing (${walk.minMarks} of ${walk.marksBefore} throughout)`);
+  if (!walk.skipped) check(walk.marksBefore > 0 && walk.minMarks >= walk.marksBefore - walk.own, `a walk leaves the other units' lock marks standing (${walk.minMarks} of ${walk.marksBefore} throughout, ${walk.own} of them the walker's own)`);
 
   // The panel: cards numbered in firing order and draggable; reordering through
   // the engine flips the numbers.
@@ -224,13 +251,23 @@ fs.mkdirSync(OUT, { recursive: true });
     return { r1: sb.round, lastTurn: sb.ext.hack.lastTurn, busy: sb.busy, over: sb.over, locks: h.lockedUnits().length, turnsText: document.querySelector('#hack-bar .hack-turns')?.textContent, round: document.getElementById('battle-round').textContent };
   });
   console.log('  fired:', JSON.stringify(fired));
-  check(turn.node && await page.evaluate(({ node, exp, hp0 }) => { const t = window.__hack.state.tags[node]; return (t ? hp0 - t.hp : hp0) === exp; }, { node: turn.node, hp0: turn.nodeHpBefore, exp: Math.min(turn.preview?.total ?? 0, turn.nodeHpBefore) }), `the node took what the billboard promised (${turn.preview?.total} of ${turn.nodeHpBefore} hp)`);
+  // A node takes ONE damage per attack, whatever the attack is worth: the two
+  // locked abilities take 2 (or all it had).
+  const expDmg = Math.min(turn.preview?.parts?.length ?? 0, turn.nodeHpBefore);
+  check(turn.node && await page.evaluate(({ uid, exp, hp0 }) => { const u = window.__hack.state.objects.find((x) => x.uid === uid); return hp0 - u.hp === exp; }, { uid: turn.nodeUid, hp0: turn.nodeHpBefore, exp: expDmg }), `the node took one damage per attack (${expDmg} of ${turn.nodeHpBefore} hp, the arithmetic said ${turn.preview?.total})`);
+  const stack = await page.evaluate(async (uid) => {
+    const hv = window.__hackView;
+    for (let g = 0; g < 60 && !hv.settled(uid); g++) await new Promise((r) => setTimeout(r, 100));   // the survivors settle (slow frames headless)
+    const u = window.__hack.state.objects.find((x) => x.uid === uid);
+    return { hp: u ? u.hp : 0, discs: hv.discCount(uid), settled: hv.settled(uid), iconAbove: hv.iconAboveStack(uid) };
+  }, turn.nodeUid);
+  check(stack.discs === stack.hp && stack.settled && (stack.hp === 0 || stack.iconAbove), `the hit node lost that many discs from the bottom and the rest settled on the tile, icon on top (${JSON.stringify(stack)})`);
   check(fired.r1 === 2 && !fired.busy && !fired.over, 'a new turn started');
   check(fired.locks === 0, 'locks are cleared after firing');
   check(/Turn 2 \/ 5/.test(fired.turnsText ?? ''), `the panel counts the turn (${fired.turnsText})`);
   await page.screenshot({ path: path.join(OUT, 'hack-3-fired.png') });
 
-  // CLEARING a node counts: cut one to 2 hp, hit it with one ability, and the
+  // CLEARING a node counts: cut one to 1 hp, hit it with one ability, and the
   // cleared count goes up by one (badges only from H.badges[0] on).
   const over = await page.evaluate(async () => {
     const h = window.__hack; const sb = h.state; const H = h.hackConfig;
@@ -239,8 +276,10 @@ fs.mkdirSync(OUT, { recursive: true });
     const rot = (o, k) => { let q = o[0], r = o[1]; for (let i = 0; i < k; i++) { const nq = -r, nr = q + r; q = nq; r = nr; } return [q, r]; };
     const aimRot = (a, b) => { if (a === b) return 0; const [q1, r1] = PK(a), [q2, r2] = PK(b); const dq = q2 - q1, dr = r2 - r1; const x = Math.sqrt(3) * (dq + dr / 2), y = 1.5 * dr; const ang = Math.atan2(y, x) * 180 / Math.PI; return ((Math.round(ang / 60) % 6) + 6) % 6; };
     const add = (k, o) => { const [q, r] = PK(k); return K(q + o[0], r + o[1]); };
-    const nodes = Object.keys(sb.tags).filter((k) => sb.tags[k].defId === 'node');
-    for (const u of sb.units) {
+    const nodeAt = (k) => sb.objects.find((v) => v.kind === 'hackNode' && v.hp > 0 && v.pos === k);
+    const isPiece = (k) => sb.objects.some((v) => v.hp > 0 && v.pos === k);
+    const nodes = sb.objects.filter((v) => v.kind === 'hackNode' && v.hp > 0).map((v) => v.pos);
+    for (const u of sb.units.filter((v) => !v.isEnemy && v.hp > 0)) {
       h.activate(u.uid); await wait(30);
       const reach = h.reachFor();
       const stands = [u.pos, ...Object.keys(reach.d).filter((k) => !reach.occ.has(k) && !sb.tags[k])];
@@ -253,7 +292,7 @@ fs.mkdirSync(OUT, { recursive: true });
           const tiles = ab.dmgZone.map((o) => add(anchor, rot(o, rk)));
           const node = tiles.find((t) => nodes.includes(t));
           if (!node) continue;
-          if (tiles.filter((t) => sb.tags[t]).length !== 1) continue;
+          if (tiles.filter(isPiece).length !== 1) continue;
           if (from !== u.pos) { h.clickTile(from); for (let g = 0; g < 60 && sb.busy; g++) await wait(100); }
           h.activate(u.uid); await wait(30);
           // "X damage Y times": make this one a 2x3 for the test.
@@ -261,12 +300,21 @@ fs.mkdirSync(OUT, { recursive: true });
           if (u.abilityDefs && u.abilityDefs[id]) u.abilityDefs[id].damage = '2x3';
           h.selectAbility(id); await wait(30);
           if (!sb.aimMap || sb.aimMap[anchor] === undefined) { h.cancel(); if (u.abilityDefs && u.abilityDefs[id]) u.abilityDefs[id].damage = saved; continue; }
-          sb.tags[node].hp = 5;
+          const nu = nodeAt(node);
+          nu.hp = 1;
           const pv = h.previewTotals(anchor).get(node);
+          // Hover the aim (as the mouse would): the disc the aim would take goes dark.
+          let dark = null;
+          if (window.__hackView) {
+            const v = window.__localView; v.hoverKey = anchor; v.lockSig = null;
+            for (let g = 0; g < 50 && window.__hackView.darkDiscs(nu.uid) === 0; g++) await wait(100);
+            dark = window.__hackView.darkDiscs(nu.uid);
+            v.hoverKey = null;
+          }
           h.clickTile(anchor); await wait(60);
           const c0 = sb.ext.hack.cleared;
           h.endTurn(); await wait(2400);
-          return { found: true, dmg: '2x3', c0, c1: sb.ext.hack.cleared, pvParts: pv?.parts?.map((p) => `${p.dmg}x${p.times}`), pvTotal: pv?.total, pvDealt: pv?.dealt, pvOver: pv?.over, nodeGone: !sb.tags[node], last: sb.ext.hack.lastTurn, badges: sb.ext.hack.badges, lit: document.querySelectorAll('#hack-bar .badge.lit').length };
+          return { found: true, dmg: '2x3', c0, c1: sb.ext.hack.cleared, pvParts: pv?.parts?.map((p) => `${p.dmg}x${p.times}`), pvTotal: pv?.total, pvDealt: pv?.dealt, pvOver: pv?.over, dark, nodeGone: nu.hp <= 0, last: sb.ext.hack.lastTurn, badges: sb.ext.hack.badges, lit: document.querySelectorAll('#hack-bar .badge.lit').length };
         }
       }
     }
@@ -275,7 +323,8 @@ fs.mkdirSync(OUT, { recursive: true });
   console.log('  clear:', JSON.stringify(over));
   if (over.found) {
     check(over.c1 === over.c0 + 1 && over.nodeGone, `a node brought down counts as cleared (${over.c0} -> ${over.c1})`);
-    check(over.pvTotal === 6 && over.pvDealt === 5 && over.pvOver === 1 && (over.pvParts || []).join() === '2x3', `a 2x3 ability previews as three hits of 2 (${over.pvParts}, total ${over.pvTotal}, dealt ${over.pvDealt}, over ${over.pvOver})`);
+    check(over.pvTotal === 6 && over.pvDealt === 1 && over.pvOver === 5 && (over.pvParts || []).join() === '2x3', `a 2x3 ability on a 1-hp node: the arithmetic says 6, the node loses 1 (${over.pvParts}, total ${over.pvTotal}, dealt ${over.pvDealt}, over ${over.pvOver})`);
+    if (over.dark !== null) check(over.dark === 1, `the disc the aim would take is drawn dark while aiming (${over.dark})`);
     check(over.lit === over.badges, `badges lit match badges earned (${over.lit})`);
   } else console.log('  (no clean single-node aim available - skipped)');
 
@@ -285,8 +334,9 @@ fs.mkdirSync(OUT, { recursive: true });
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     const PK = (k) => k.split(',').map(Number);
     const K = (q, r) => q + ',' + r;
-    const mines = Object.keys(sb.tags).filter((k) => sb.tags[k].defId === 'mine');
-    for (const u of sb.units) {
+    const mineAt = (k) => sb.objects.find((v) => v.kind === 'hackMine' && v.hp > 0 && v.pos === k);
+    const mines = sb.objects.filter((v) => v.kind === 'hackMine' && v.hp > 0).map((v) => v.pos);
+    for (const u of sb.units.filter((v) => !v.isEnemy && v.hp > 0)) {
       h.activate(u.uid); await wait(30);
       const reach = h.reachFor();
       const stands = [u.pos, ...Object.keys(reach.d).filter((k) => !reach.occ.has(k) && !sb.tags[k])];
@@ -302,10 +352,14 @@ fs.mkdirSync(OUT, { recursive: true });
             h.selectAbility(id); await wait(30);
             if (!sb.aimMap || sb.aimMap[anchor] === undefined) { h.cancel(); continue; }
             const hp0 = u.hp;
+            const mu = mineAt(anchor);
+            // The forecast on the caster's own card shows the mine's cost.
+            const ps = h.previewState(anchor);
+            const fc = ps && ps.after[u.uid] ? ps.after[u.uid].hp : null;
             h.clickTile(anchor); await wait(60);
             const lock = sb.units.find((x) => x.uid === u.uid).lock;
             h.endTurn(); await wait(2400);
-            return { found: true, hp0, hp1: sb.units.find((x) => x.uid === u.uid).hp, mineGone: !sb.tags[anchor], lock: !!lock, over: sb.over };
+            return { found: true, hp0, fc, hp1: sb.units.find((x) => x.uid === u.uid).hp, mineGone: mu.hp <= 0, lock: !!lock, over: sb.over };
           }
         }
       }
@@ -316,7 +370,8 @@ fs.mkdirSync(OUT, { recursive: true });
   if (mine.found) {
     const H = await page.evaluate(() => window.__hack.hackConfig);
     check(mine.hp1 === Math.max(1, mine.hp0 - H.mineDamage), `the aiming unit took mine damage (${mine.hp0} -> ${mine.hp1})`);
-    check(mine.mineGone === !!H.mineDetonates, 'the mine detonated');
+    check(mine.fc === mine.hp1, `the forecast on its card said so beforehand (${mine.hp0} -> ${mine.fc})`);
+    check(mine.mineGone, 'the mine detonated (spent by the blow)');
   } else console.log('  (no reachable mine for a plain aim this layout - skipped)');
 
   // ----- 3c. a REGULAR battle uses the same volley --------------------------

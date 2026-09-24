@@ -23,10 +23,9 @@ export const ENCOUNTERS = {
       // below caps it at one. Entering it unlocks the next layer of the
       // worldflake (config.layers.unlockOrder; the chain is meta-progression,
       // remembered by the browser across runs).
-      gate: 1,
-      // EXPERIMENT: the Hack encounter (src/local/hack/, see DESIGN.md). A modest
-      // weight so a few show up per map while it is being playtested; set to 0
-      // to keep it off generated maps.
+      gate: 0.02,
+      // The Hack terminal (see `hack` below and DESIGN.md): a few per map; 0
+      // keeps it off generated maps.
       hack: 1.5,
     },
     guaranteed: { acolyte: 1 },   // ...but at least this many per map
@@ -48,7 +47,7 @@ export const ENCOUNTERS = {
       stasisColony: { color: 0x6e2c8f, shape: 'cone' },
       acolyte: { color: 0xfff3b0, shape: 'icosahedron' },
       gate: { color: 0x35d17a, shape: 'pyramid', neverForced: true },   // the green pyramid
-      hack: { color: 0x7dff5f, shape: 'box' },       // EXPERIMENT: the hack terminal (src/local/hack/)
+      hack: { color: 0x7dff5f, shape: 'box' },       // the hack terminal
       // The waypoint that completes a scenario (tutorial) map. Never generated on
       // normal maps, so it is hidden from the legend.
       goal: { color: 0x9fd9ff, shape: 'cone', hidden: true },
@@ -1835,16 +1834,20 @@ radius: 6
 0,6: ground 0`,
       ],
     },
+    // SHOP MAPS: entering a shop opens the local map on one of these (every
+    // shop tile rolls one at world generation, by seed). No enemies, no
+    // turns: the party stands around, and the KEEPER stands on the tile
+    // pinned with `@shopkeeper` - click the keeper to open the shop window
+    // (the keeper is a Shopkeeper entity, src/local/battle/entity.js; the
+    // flow is main.js's shop bridge). A map without an `@shopkeeper` line
+    // seats the keeper in the middle.
     shop: {
-      rate: 0.25,             // chance a shop tile carries one of these. Shops do
-      // not open a local map yet: the recipe is stored on the tile now so the
-      // flow can use it later (the only place a crafted-map RATE still exists)
       maps: [
         `# A calm terraced hollow for a wayside trader: no enemies, just a bowl of
-# steps sheltered by two standing stones.
+# steps sheltered by two standing stones, the keeper's stall at the bottom.
 id: wayside-hollow
 radius: 3
-0,0: ground 1
+0,0: ground 1 @shopkeeper
 1,0: ground 1
 0,1: ground 1
 1,-1: ground 2
@@ -1978,6 +1981,13 @@ radius: 3
   //   relic      for now identical to "upgrade": one ability upgrade pick
   //   rumors     reveals events.rumorsCount hidden battles within events.rumorsRadius
   //   spareParts the Acolyte's service: one disabled unit returns at acolyte.reviveFraction HP
+  // The shop is a LOCAL-MAP encounter (since 2026-09-24): entering it dives
+  // into its handcrafted map (craftedMaps.shop above) where the KEEPER
+  // stands; clicking the keeper opens the window, with one big card per
+  // option (icon, name, price, what it does - `icons` below are the cards'
+  // icons). An option that opens a window of its own (Training's upgrade
+  // chooser, Spare Parts' unit pick) replaces the shop window until that
+  // one is done, then the shop window is back.
   shop: {
     guaranteed: ['upgrade', 'map'],
     pool: ['rest', 'relic', 'rumors', 'spareParts'],
@@ -1988,10 +1998,77 @@ radius: 3
     relicCost: 25,
     rumorsCost: 15,
     sparePartsCost: 30,
+    icons: { upgrade: '📘', map: '🗺️', rest: '🛏️', relic: '🔮', rumors: '🗣️', spareParts: '🔧' },
+    // The keeper standing in the shop's arena: its icon plate and body colour
+    // (the name is the locale row shop.keeper.name).
+    keeper: { icon: '🧔', color: 0x45c7d1 },
   },
 
   // ----- Treasure -----------------------------------------------------
   treasure: { supplies: 40 },
+
+  // ----- The Hack terminal --------------------------------------------
+  // A flat board strewn with NODES (objects of 1-3 discs; every attack that
+  // lands on one takes exactly one disc) and MINES (a blow on one hurts the
+  // caster). The party aims and fires the ordinary way (aim locks, the
+  // volley) for `turns` volleys; nodes brought down are graded into BADGES,
+  // and the badge count is how many upgrade OPTIONS the reward window
+  // offers (one badge = take what was rolled, two = choose between two,
+  // three = between three; none = no reward, the terminal is consumed).
+  // The board is GENERATED, not handcrafted: buildHackRecipe in
+  // src/local/localmap.js seats the party and spreads the pieces evenly
+  // over the rest of the board (a blue-noise spread; the numbers below are
+  // its knobs). There are no handcrafted hack boards today - if any are
+  // written, they are map codes and go in `craftedMaps` above, next to the
+  // combat and shop maps. The pieces are HackNode / HackMine in
+  // src/local/battle/entity.js, the rules createHackRules in
+  // src/local/battle/engine.js, the panel and the disc stacks
+  // createHackView in src/local/localview.js, and the flow lives in main.js
+  // (the Hack section) and game.js (startHack / finishHack). The texts are
+  // locale rows (hack.*).
+  hack: {
+    // ----- the board -------------------------------------------------
+    radius: 7,          // rings of local hexes (the arena is completely flat)
+    nodes: 16,          // nodes on the board
+    mines: 8,           // mines on the board
+    nodeHp: [1, 3],     // every node's hp (its discs) is a seeded roll in this range, both ends included
+    // The spread: the pieces are scattered at random but at the WIDEST
+    // spacing the board can fit that many at, so they come out evenly spaced
+    // over the whole board. These are the floors under that spacing - two
+    // nodes are never nearer than nodeSpacing (2 = never adjacent), two
+    // mines never nearer than mineSpacing; a mine may sit next to a node.
+    nodeSpacing: 2,
+    mineSpacing: 1,
+    // Where the party is seated: 'centre' (within partyRingMax of the
+    // middle) or 'edge' (a cluster on one random side of the rim). The first
+    // ring around the party is always free of pieces.
+    partyStart: 'centre',
+    partyRingMax: 1,
+
+    // ----- the rules -------------------------------------------------
+    turns: 5,           // End-turn volleys the player gets; the encounter ends after the last
+    // The BADGES: nodes that must be down to earn each one, lowest first. The
+    // count earned is the number of upgrade OPTIONS the reward window offers.
+    // (Later: better upgrades should also turn up more often with more badges.)
+    badges: [10, 12, 15],
+    mineDamage: 3,      // hp the aiming unit loses per blow that lands on a mine
+    mineLethal: false,  // false = mine damage never takes a unit below 1 hp
+
+    // ----- presentation ----------------------------------------------
+    // A node's body is a STACK of bevelled discs, one per hp, in the node's
+    // colour; damage takes discs off the BOTTOM and the rest settle down onto
+    // the tile. The node's icon rides on top; a mine is its icon on the
+    // tile. Discs the planned volley would take are drawn darker.
+    discs: {
+      radius: 0.7,        // of the tile radius (1 = the whole tile)
+      height: 0.5,        // world units per disc
+      gap: 0.012,         // air between two discs
+      bevel: 0.018,       // the rounded edge, world units
+      settleMs: 1000,     // how long the survivors take to drop
+    },
+  },
+
+
 
   // ----- Event effects (see events.js for the texts) ------------------
   events: {
@@ -2008,6 +2085,8 @@ radius: 3
     blackMarketHpFraction: 1 / 3,  // max HP sacrificed for the black market upgrade
     // "Merchant caravan" acts as a rest site: same healing as a camp (rest.healFraction).
   },
+
+
 
   // ----- Fatigue -----------------------------------------------------
   // *** DISABLED AS AN EXPERIMENT, 2026-09-22 ***
@@ -2051,7 +2130,7 @@ radius: 3
       event: 'optional',
       treasure: 'never',
       gate: 'never',
-      hack: 'always',     // EXPERIMENT (src/local/hack/): a hack, won or lost, is a rest of sorts
+      hack: 'always',     // a hack, won or lost, is a rest of sorts
     },
     // Notes for the 'optional' ones are in the locale tables (reset.note.<type>).
     // Which encounters the party can be FORCED into on arrival. With fatigue

@@ -43,6 +43,9 @@ export function placeholders(config) {
     damageMin: c.battle.damageMin,
     damageMax: c.battle.damageMax,
     victorySupplies: c.battle.victorySupplies ?? 0,
+    // The Hack terminal (config.hack): its turn budget and badge thresholds.
+    turns: c.hack?.turns ?? 5,
+    badge1: c.hack?.badges?.[0] ?? '?', badge2: c.hack?.badges?.[1] ?? '?', badge3: c.hack?.badges?.[2] ?? '?',
   };
 }
 

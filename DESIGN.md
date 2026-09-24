@@ -10,8 +10,9 @@ drift; when in doubt, read `src/config/*`.
 The world map (level select) of a larger roguelike in the Slay the Spire / Into the
 Breach spirit, plus its combat layer: the player picks where to go between fights on a
 fogged hex map, and combat encounters are played out on a local arena map with a
-tactics engine. Non-combat encounters (shops, events, treasure, the Acolyte) resolve
-through dialogs.
+tactics engine. The Hack terminal and the shop are played on that same local map
+(a hack with the engine, a shop with nothing but a keeper to click); the other
+non-combat encounters (events, treasure, the Acolyte) resolve through dialogs.
 
 ### Difficulty scale guideline
 
@@ -47,7 +48,7 @@ and the combat cinematic, and dispatches every `Game` event to them from one
 `game.on(...)` block.
 
 Current event types: `change`, `log`, `move`, `end`, `arrive`, `wither`, `stasis`,
-`colony`, `encounter`, `forced`, `dialog`, `camp`, `reveal`.
+`colony`, `encounter`, `forced`, `dialog`, `shop`, `camp`, `reveal`.
 
 **The local-map boundary.** `src/local/` knows nothing of fog, fatigue or encounter
 types - only hex/tile data and the combat engine's own state. It connects to the rest
@@ -56,14 +57,17 @@ of the game through a small number of hooks on `Game`, all wired in `main.js`:
 `game.combatIntro(hex, resume)` (forced-encounter dives), `game.finishCombat(ctx, result)`
 (the arena reports back `{ won, rounds, interactive: true }` and `Game` applies
 deaths/rewards/state transitions), and `game.hackDelegate` (the same pattern for the
-Hack experiment). The camera transition (`src/local/transition.js`,
+Hack terminal). The shop needs no delegate: `Game` emits `shop` when the encounter
+opens and `main.js`'s shop bridge, already in the arena by then, stands the keeper
+up (see "The shop"). The camera transition (`src/local/transition.js`,
 `createCombatCinematic`) reaches into the shared renderer through exactly one hook,
 `renderer.overrideFrame`, swapping in the local arena's own Three.js scene mid-flight
 without touching world meshes or `Game` state.
 
 **`src/local/`:**
 * `localmap.js` - pure data: builds the flat local hex grid (opposite orientation to
-  the world grid) and lays a handcrafted recipe onto it.
+  the world grid) and lays a handcrafted recipe onto it; also generates the Hack
+  board (`buildHackRecipe`).
 * `localview.js` - `LocalMapView`, the Three.js side of the arena: its own
   scene/camera/controls, tile painting, unit bodies, status plaques, deployment and
   tile picking.
@@ -72,9 +76,15 @@ without touching world meshes or `Game` state.
 * `battle/engine.js` - `createBattle`, the turn-based combat rules engine (movement,
   ability resolution, statuses, enemy AI); pure state and callbacks
   (`onChange`, `onFloater`, `onLog`, `onAnim`, `onEnd`), no DOM or Three.js.
+* `battle/entity.js` - `Entity`, anything interactive that stands on the board, and
+  `Unit`, the Entity with agency (what the player and the AI control); see
+  "Entities and units" below. The Hack's node and mine and the shop's keeper are
+  its subclasses.
 * `battle/bhex.js` - hex math for ability shapes (`ringOffsets`, `lineOffsets`, `DIRS`).
-* `hack/` - the Hack encounter, an isolated experimental play mode (see its own
-  section below).
+* (The Hack terminal has no folder of its own since 2026-09-24: its board builder
+  is in `localmap.js`, its pieces in `battle/entity.js`, its rules in
+  `battle/engine.js`, its panel and disc stacks in `localview.js`, its flow in
+  `main.js`, its knobs in `config/encounters.js` - see "The Hack terminal" below.)
 
 **`src/config/`** - every tunable number; `config.js` spreads the pieces into one
 `CONFIG` object so the rest of the code always reads `CONFIG.<section>`:
@@ -308,6 +318,32 @@ to the outline on its own - for a pattern whose shape does not cover its own anc
 tile, that anchor must not be drawn as if it were part of the hit zone
 (`localview.js addAimOutlines`).
 
+**Entities and units** (`local/battle/entity.js`, since 2026-09-24). An ENTITY is any
+potentially interactive object on the board: a tile, a name, hp, and the hooks the
+engine calls without knowing what the thing is - `blocks(mover)`, `pushable`,
+`takeDamage(amt, ctx)`, `onDeath(ctx)`, `interact(unit, ctx)` (the last is the hook
+for a door or a lever; the shop's keeper is what wires it to input) - plus `clone()`, how a
+simulation copies it. The base answers plainly (blocks its tile, cannot be shoved,
+damage comes off hp, does nothing when used); an object with rules of its own is a
+subclass overriding what it needs, constructed by the encounter and handed to
+`createBattle` as `entities`, and the engine keeps it in `sb.objects`, treating it
+through the hooks alone: it blocks walking like a barrier, takes an ability's blow,
+is shoved if pushable (crash, fall, crush, the void apply), dies, and shows in the
+forecast (`previewState` covers objects; a moved one is a ghost). The `ctx` a hook
+gets says which board the blow lands on (the real one or a simulation's copy), who
+struck, and carries a token per cast (`cast`), so an object can count attacks.
+A UNIT extends Entity with agency: the fighting stats (speed, flying, abilities,
+initiative, intellect), the status bag and triggers, the aim lock and the turn's
+bookkeeping. Its construction from a def and its simulation copy live in the
+class; the rules that read those - statuses, walking, casting, the AI - stay in the
+engine, since they lean on the config tables and the rest of the board. The Hack's
+node and mine are the first Entity subclasses (the bottom of `entity.js`); a door, a
+barrel that rolls when shoved and leaves fire when it bursts, an emitter that turns
+when used are the kind of thing the class is for. None of it is config: the
+bestiary describes creatures only. The shop's keeper (`Shopkeeper`, same file) is
+the first entity that never fights: it stands on its tile and, used (clicked),
+opens the shop window - see "The shop".
+
 **Rules/tags plugin hooks.** `createBattle` accepts optional `rules` and `tags`
 objects that let a caller extend the engine without forking it. `rules` may supply:
 `attach(sb)` (once, before anything happens), `onBarrierHit(...)` (a real hit on a
@@ -315,8 +351,9 @@ barrier tag), `onHazardHit(...)` (a hazard tag under a fired ability's zone, hit
 not), `onTurnFired(sb, {fired})` (after a volley resolves), `checkEnd(sb)` (returns
 `'win'|'lose'|falsy`; when present it fully replaces the last-side-standing check),
 `decoratePreview(entry, sb)` (annotate a damage-preview entry), and
-`debugResolve(sb, won)` (override the debug instant-win/loss helper). This is
-generic engine surface, not hack-specific - the Hack encounter is simply its one
+`debugResolve(sb, won)` (override the debug instant-win/loss helper). `entities`
+is a list of Entity objects to stand on the board (see "Entities and units"). This
+is generic engine surface, not hack-specific - the Hack encounter is simply its one
 current consumer (see below).
 
 **Enemy AI.** Each enemy scores every (ability, reachable tile, target) combination
@@ -384,8 +421,13 @@ and enemy ability definitions, places units, and constructs `createBattle` with 
 of the engine's callbacks bound to the arena view.
 
 **Debug handles.** `window.__battle`, `__deaths`, `__renderer`, `__cinematic`,
-`__localView`, `__partyView`, `__startScreen`, and (for the Hack experiment)
-`__hack` are exposed for manual and automated inspection.
+`__localView`, `__partyView`, `__startScreen`, (in a hack) `__hack` and
+`__hackView`, and (in a shop) `__shop` are exposed for manual and automated
+inspection. Menu -> **Win encounter** / **Restart encounter** act on whatever
+encounter the local map is running - a fight or a hack (a shop has nothing to win
+or restart): the win is the engine's `debugResolve`, the restart rebuilds the same
+fight (same tiles, same enemies) or the same hack board (same recipe) with the
+party's HP back to what it was on entry.
 
 ### Handcrafted local maps - map codes (src/local/mapcode.js)
 
@@ -396,12 +438,14 @@ statement.
 
 * **Format**: header lines `id:` (required), `title:` (optional, defaults to the id
   with dashes turned to spaces and capitalised), `radius:` (optional, 1-12, default
-  from config); then tile lines `q,r: <type> [elevation] [tags...] [!Enemy Name]`.
+  from config); then tile lines `q,r: <type> [elevation] [tags...] [!Enemy Name | @npc]`.
   Types: `ground`, `wall` (blocks walking and flying, crashes a shove like the arena
   rim), `ether` (blocks walking, kills a shoved unit like a lethal void edge). Tags
   are ids from `COMBAT_TAGS` and are permanent scenery, unlike a cast's fire. `!`
   pins one bestiary enemy (by id or display name) to a `ground` tile; the pinned
-  enemies are the fight's only enemies. Unlisted tiles stay plain ground at the
+  enemies are the fight's only enemies. `@` pins an NPC instead - a non-fighting
+  entity the encounter builds (`@shopkeeper` on a shop map is where the keeper
+  stands); one occupant per tile. Unlisted tiles stay plain ground at the
   neutral elevation. `parseMapCode` / `buildRecipe` validate everything and report
   readable per-line errors; a broken code is skipped with a console warning, never
   crashes a run.
@@ -412,7 +456,8 @@ statement.
   camera does not zoom).
 * **Storage and count**: codes live as strings in `config.craftedMaps.combat.maps`
   and `config.craftedMaps.shop.maps` (`src/config/encounters.js`). 47 combat maps
-  ship today plus one shop map. `battleMaps` (wired onto `CONFIG.battle.maps`) is a
+  ship today plus one shop map (every shop tile rolls one of the shop maps at
+  world generation - there is no rate; see "The shop"). `battleMaps` (wired onto `CONFIG.battle.maps`) is a
   table of fight kind (`inner`/`middle`/`outer`/`colonies`/`seed`) by worldflake
   layer; only layer 3 is populated (11/11/10/10/5 maps), every other layer falls
   back to the nearest filled layer of the same row.
@@ -430,43 +475,68 @@ statement.
   flies the camera into the built arena with its enemies standing as inert
   mannequins - no battle bound, no game state touched.
 
-### The Hack encounter - an EXPERIMENT (src/local/hack/)
+### The Hack terminal (config.hack)
 
-**A quarantined experiment.** It tries a radical departure from ordinary combat - no
-enemies, just static targets on a hex grid - to see whether pattern-matching on the
-grid can carry a play mode by itself. Two rules protect the rest of the codebase from
-it and double as the rip-out checklist:
+**A second kind of encounter on the same arena.** It began (2026-09-15) as a
+quarantined experiment in its own folder, `src/local/hack/`, to see whether
+pattern-matching on the grid - no enemies, just static targets - could carry a play
+mode by itself. It could, and on 2026-09-24 it became an ordinary part of the game:
+the folder is gone and each piece lives where its kind of code lives, still in one
+clearly marked section per file so the hack's logic stays apart from a fight's:
+* `config/encounters.js` `hack` - every knob (board, rules, badges, discs); on the
+  Settings window's Encounters tab like the rest.
+* `local/localmap.js` "THE HACK BOARD" - `buildHackRecipe`, the board generator.
+* `local/battle/entity.js` "THE HACK'S PIECES" - `HackNode`, `HackMine`.
+* `local/battle/engine.js` "THE HACK'S RULES" - `createHackRules`.
+* `local/localview.js` "THE HACK VIEW" - `createHackView` (the panel, the disc
+  stacks); its styles under "the Hack terminal's panel" in `style.css`.
+* `main.js` "the Hack terminal" - the bridge: `enterHack`, `hackDelegate`,
+  `finishHack`, `abortHack`; `game.js` - `startHack` / `finishHack` and the `'hack'`
+  case in `enter()`; `text.js` - the `turns` / `badgeN` placeholders.
+* `locales/en.js` + `ru.js` - `visual.hack.*`, `log.hack.failed`, `hack.*` (the lore,
+  the win / loss windows, the panel).
+* `tools/hack-test.cjs` - the headless playtest.
 
-1. **All of its code lives in `src/local/hack/`.** It imports from the rest of the
-   game (hex math, the ability table, the upgrade resolver, the arena view's public
-   methods) but nothing outside the folder imports from it except the bridge line in
-   `main.js`.
-2. **The rest of the game is unmodified for it.** It reaches shared code only
-   through a short, exact list of IF branches (below). When it needs something the
-   shared code does not offer, the answer is to add it inside the folder, even at
-   the cost of duplication.
+**The idea.** The board holds static NODES and MINES - objects with rules of their
+own (`HackNode` and `HackMine` in `battle/entity.js`, subclasses of the engine's
+Entity, handed to `createBattle` as `entities`). Units aim their ordinary abilities
+and End Turn fires the locks in order. A node takes exactly ONE damage from any
+attack that lands on it, whatever the attack is worth - it remembers the cast its
+last disc went to and ignores that cast's further blows; the overlap bonus and
+multi-hit abilities are for creatures - so a node of 1-3 hp needs that many
+attacks. The party has a turn budget of volleys; nodes cleared are graded into
+BADGES, and the badge count sets how many upgrade choices the reward screen
+offers. A node variant with rules of its own (one that bursts, one that heals its
+neighbours, one that must be hit twice in a volley) is another subclass in the
+folder, overriding what it needs; nothing in the engine or the config knows it.
 
-**The idea.** Instead of enemies, the board holds static NODES with hp. Units aim
-their ordinary abilities and End Turn fires the locks in order; a tile hit by a
-second ability takes +1 base from it, by a third +2 (the engine's ordered overlap
-bonus - it began here as x2/x3 stacking). The party has a turn budget of volleys;
-nodes cleared are graded into BADGES, and the badge count sets how many upgrade
-choices the reward screen offers.
+**The board** (`buildHackRecipe` in `localmap.js`): a flat arena, radius `H.radius`
+(7), no elevation wave; the party seated at the centre (`partyStart: 'centre'`,
+within `partyRingMax`) or in a cluster on one side of the rim (`'edge'`), the first
+ring around them kept free. `H.nodes` (16) nodes and `H.mines` (8) mines are spread
+EVENLY over the rest: a blue-noise scatter - the pieces are thrown down at random
+but at the widest spacing the board can fit that many at (the spacing steps down
+until they all fit), with `nodeSpacing` (2, never adjacent) and `mineSpacing` (1)
+as the floors it never goes below - so every board is different but no board has
+heaps of nodes here and bare ground there. (Until 2026-09-24 the pieces went down
+by one of twenty probabilistic layouts - clusters, rings, noise fields - which
+read on the board as splotches; the layouts are gone. There are no handcrafted
+hack boards; if some are wanted they are map codes and belong in
+`config.craftedMaps`, next to the combat and shop maps.) Each node's hp is a seeded
+roll in `H.nodeHp` ([1, 3]), part of the same stream as the rest of the board; the
+bridge builds the pieces from the recipe's keys and rolls.
+`tools/hack-layouts-sheet.mjs` draws ten seeded boards as an SVG contact sheet to
+eyeball the spread.
 
-**The board** (`hackmap.js` + `hacklayouts.js`): a flat arena, radius 5, no
-elevation wave. Where nodes and mines go is one of 20 seeded layouts (data: node
-count 14-18, mine count 7-15, minimum node spacing, party start position, and
-weighted-placement functions for nodes and mines over the free tiles) - the layout
-is a shape of probability, not a fixed picture. Node hp is rolled per node, 15-30.
-
-**The turn** reuses the ordinary fight's aim-lock flow. Nodes are BARRIER tags
-(block walking; fliers glide over); mines are HAZARD tags (walkable). A node at 0 hp
-is cleared; overkill is wasted. A mine under any hex of a fired ability costs the
-aiming unit `mineDamage` (3) hp per hex, never below 1, detonating once the whole
-volley has landed - multiple hexes on one mine in the same volley all pay.
+**The turn** reuses the ordinary fight's aim-lock flow. Nodes and mines occupy
+their tiles (they block walking; fliers glide over, as over a barrier). A node at 0
+hp is cleared (its `onDeath` tells the rules). A blow on a mine costs the caster
+`mineDamage` (3) hp, never below 1 (`mineLethal`), and spends the mine. The forecast
+on the caster's own card shows the cost beforehand, since the hook runs on the
+play-out's copy too.
 
 **The turn budget and badges.** `turns` (5) volleys, or earlier once every node is
-down. Three badge thresholds (`[4, 5, 6]` nodes cleared) each light up once reached;
+down. Three badge thresholds (`H.badges`, nodes cleared) each light up once reached;
 the badges earned set how many upgrade options the regular post-battle reward screen
 offers (one badge = no real choice, two = a choice of two, three = the usual choice
 of three). Zero badges is a failure: the encounter is consumed with no reward and
@@ -477,30 +547,65 @@ entered like a battle (same dive, no deployment step - the layout seats the part
 but never forceable; it is entered only by choice.
 
 **Architecture.** It runs as a rules plug-in on the shared `createBattle` engine, not
-a separate engine: node/mine tag instances go in through the `tags` option
-(`makeHackTags`), and `hackrules.js`'s `createHackRules` supplies `attach`,
-`onBarrierHit`, `onHazardHit`, `onTurnFired`, `checkEnd`, `decoratePreview` (a
-mine's cost on a `previewTotals` entry - read by the tests, drawn by nothing since
-the billboards went) and `debugResolve`. `hackview.js` layers a turn/badge panel and per-node hp decals onto
-the arena without touching shared rendering code. `hackbridge.js` is the hack's own
-copy of the main combat bridge (dive in, build the engine with its rules, bind,
-finish, abort). `hackengine.js`, an earlier standalone duck-typed engine, is dead
-code - nothing imports it any more.
+a separate engine: the nodes and mines are its objects (`entities`), and
+`createHackRules` (engine.js) supplies `attach`, `nodeCleared` (wired to each
+node's `onCleared`: a node down counts, a badge lights), `onTurnFired`, `checkEnd`,
+`decoratePreview` (a mine's cost on a `previewTotals` entry - read by the tests,
+drawn by nothing since the billboards went) and `debugResolve` (Menu -> Win
+encounter). Menu -> Restart encounter rebuilds the same board from the recipe the
+bridge kept (`hackEntry`), the party's HP back to what it was on entry. `createHackView`
+(localview.js) layers a turn/badge panel and the PIECES onto the arena without
+touching the LocalMapView (the arena draws nothing for an object): a node is a stack of bevelled discs,
+one per hp, in its colour (`H.discs`); damage takes discs off the bottom and the
+survivors settle down onto the tile; the discs the planned volley would take are
+drawn dark (the engine's `previewState`, re-read whenever the arena's forecast
+signature changes); the node's icon rides on the topmost disc, and a mine is its
+icon on the tile. The bridge in `main.js` is the hack's twin of the combat bridge
+(dive in, build the pieces and the engine with its rules, bind, finish, abort);
+`game.js` builds the combat-shaped context and reuses `finishCombat`'s reward path
+for a win. The engine and the config tables carry nothing hack-specific beyond
+`config.hack` itself and the two sections named above: only the generic rules
+hooks and the Entity base are used.
 
-**The IF branches outside the folder (the rip-out checklist):** `main.js` - the
-`hackbridge` import and construction, its `abort()` call, the hack-type branch in
-`onEnter`, `game.hackDelegate`. `game.js` - the `'hack'` case in `enter()`,
-`startHack()`, `finishHack()`. `config/encounters.js` - `weights.hack`,
-`visuals.hack`, `fatigue.resetOn.hack`. `locales/en.js` + `ru.js` -
-`visual.hack.label`, `visual.hack.info`, `log.hack.failed`. `local/battle/engine.js`
-needs no changes at all - only its generic rules/tags hooks are used.
-
-**Open items.** `visual.hack.info` in both locale files still describes an older
-"fill the progress bar" mechanic that badges replaced - it needs rewriting to match
-the current rules. Balance (node counts, hp range, badge thresholds) is a first
+**Open items.** Balance (node counts, hp range, badge thresholds) is a first
 guess pending play. The hex-upgrade progression this mode was built to explore -
 upgrades installed into individual hexes of an ability, changing what happens when
 two units' patterns overlap - is not built yet.
+
+### The shop (config.shop, config.craftedMaps.shop)
+
+**A local-map encounter with nothing to fight** (since 2026-09-24; until then the
+shop was a dialog straight off the world map). Entering a shop tile dives into the
+shop's handcrafted map - every shop tile is given one of `craftedMaps.shop.maps` at
+world generation (`game.js assignShopMaps`, a seeded roll on a rng of its own; a
+scenario's shop tiles roll one too unless authored with a recipe) - with the same
+cloud dive a fight uses. No engine is built, no turn structure exists, and neither
+the battle bar nor the hack panel shows: the party stands around (placed as a
+group), and the KEEPER stands on the tile the map code pinned with `@shopkeeper`
+(the middle if the map pins none). The keeper is a `Shopkeeper` entity
+(`battle/entity.js`) - an Entity, not a Unit, since it never moves or acts;
+`createShopView` (`localview.js`) draws it (a capsule in the shop's colour, its
+icon plate above, a hover glow and a hand cursor) and registers its body as a
+`pickable`, so a click on the body or on its tile reaches the keeper's
+`interact()` hook, which opens the shop window. `config.shop.keeper` holds its icon
+and colour; `shop.keeper.name` its name.
+
+**The window** (`ui.chooseShop`, driven by `main.js showDialog('shop')`) is one big
+card per option the shop stocks, in the upgrade chooser's card language: icon
+(`config.shop.icons`), name, price, what it does. A sold-out option keeps its card,
+struck through and faded; one that cannot be bought right now (too poor, nothing
+it could do) is dimmed with the reason as its description. An option that needs
+a window of its own - Training and the Relic open the upgrade chooser, Spare Parts
+a unit pick - REPLACES the shop window until that one is done (a pick or a skip),
+then the shop window is back; nothing flies the party out meanwhile
+(`onDialogClosed` stands down while `shop` is set). Esc closes the window without
+leaving; the keeper reopens it. **Leave** - the window's button, the floating
+"Leave the shop" button over the arena, or Esc with no window open - flies the
+party back to the world. The shop is not consumed by a visit; it is consumed when
+sold out, as before. `Game`'s side is unchanged apart from the opening: `enter()`
+on a shop rolls/marks the stock and emits `shop` (`{ hex, lore }`) instead of a
+dialog; with no arena on screen (a headless run) the bridge opens the window
+directly, as it always did. `tools/shop-test.cjs` is the headless playtest.
 
 ## Ability upgrades - how the party grows (src/upgrades.js + src/config/abilities.js)
 
@@ -633,7 +738,8 @@ soft-lock a fight.
 
 1. Combat content: more abilities and unit kits, more handcrafted map codes (the
    format, walls/ether/tags/pinned enemies and the preview tool are all live - see
-   "Handcrafted local maps"); still open: set dressing and lighting.
+   "Handcrafted local maps"); more shop maps (one ships); still open: set dressing
+   and lighting.
 2. Rebuild some form of automated playtesting to re-balance the difficulty ladder
    against interactive combat, now that the old tooling is gone.
 3. Path preview on hover (total cost to reach a tile).
@@ -646,7 +752,10 @@ soft-lock a fight.
 * One feature per request, with acceptance criteria in plain words.
 * Numbers go into the config files, never hard-coded elsewhere.
 * No em or en dashes in any text, plain hyphens only.
-* There is currently no automated smoke test in the repo (see "The Virtual
+* The headless playtests that exist are `tools/hack-test.cjs` (the Hack terminal)
+  and `tools/shop-test.cjs` (the shop and the menu's Win / Restart encounter
+  buttons); both need Playwright and a `vite preview` on port 4173 (see each
+  file's header). There is no smoke test of the whole game (see "The Virtual
   Playtester") - verify a change by actually running the build and exercising the
   affected flow before delivery.
 * Parallel work sessions happen: re-read this file (and re-sync the sources) at the

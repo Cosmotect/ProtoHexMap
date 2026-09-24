@@ -93,10 +93,10 @@ export function createUI(config, handlers) {
   $('btn-new').addEventListener('click', () => handlers.onNewMap());
   $('btn-restart').addEventListener('click', () => handlers.onRestart());
   $('btn-reveal').addEventListener('click', () => handlers.onRevealAll());
-  // Debug: ends the current local-map fight as an instant victory.
-  $('btn-win-battle').addEventListener('click', () => { closeMenu(); handlers.onWinBattle && handlers.onWinBattle(); });
-  // Undoes the fight in progress back to the moment it began (a no-op outside one).
-  $('btn-restart-battle').addEventListener('click', () => { closeMenu(); handlers.onRestartBattle && handlers.onRestartBattle(); });
+  // Debug: ends the encounter running on the local map (a fight, a hack) as an instant win.
+  $('btn-win-encounter').addEventListener('click', () => { closeMenu(); handlers.onWinEncounter && handlers.onWinEncounter(); });
+  // Undoes the encounter in progress back to the moment it began (a no-op outside one).
+  $('btn-restart-encounter').addEventListener('click', () => { closeMenu(); handlers.onRestartEncounter && handlers.onRestartEncounter(); });
   $('btn-enter').addEventListener('click', () => handlers.onEnter());
   $('btn-menu').addEventListener('click', () => toggleMenu());
   $('btn-settings').addEventListener('click', () => { closeMenu(); handlers.onOpenSettings(); });
@@ -536,7 +536,9 @@ export function createUI(config, handlers) {
   let dialogRefresh = null;
   let dialogOnClose = null;
   let upgradePick = null;   // { offers, onPick } while chooseUpgrade's card grid is up
+  let cardPick = null;      // { onCard(i) } while any other card grid (the shop) is up
   function openDialog(spec) {
+    cardPick = null;   // a card grid belongs to the window that opened it (chooseShop sets it after this)
     els.dialogTitle.textContent = spec.title;
     els.dialogBody.innerHTML = spec.html ?? '';
     els.dialogActions.innerHTML = '';
@@ -556,6 +558,7 @@ export function createUI(config, handlers) {
   function closeDialog() {
     const wasOpen = dialogOpen();
     dialogRefresh = null;
+    cardPick = null;
     const onClose = dialogOnClose;
     dialogOnClose = null;
     els.dialog.classList.add('hidden');
@@ -574,9 +577,10 @@ export function createUI(config, handlers) {
   // the dialog body, not the actions list, so it wires up its own picks here
   // rather than through openDialog's per-action listeners).
   els.dialogBody.addEventListener('click', (e) => {
-    if (!upgradePick) return;
     const card = e.target.closest('.upg-card');
     if (!card) return;
+    if (cardPick) { if (!card.classList.contains('disabled')) cardPick.onCard(Number(card.dataset.i)); return; }
+    if (!upgradePick) return;
     const o = upgradePick.offers[Number(card.dataset.i)];
     if (o) upgradePick.onPick(o);
   });
@@ -649,6 +653,31 @@ export function createUI(config, handlers) {
       ],
       onClose: () => { upgradePick = null; },
     });
+  }
+
+  // The shop window: one big card per option the shop stocks - icon, name,
+  // price, what it does - in the upgrade chooser's card language (the same
+  // .upg-card squares), instead of the text rows the generic dialog uses.
+  // A sold-out option keeps its card, struck through and dimmed; one that
+  // cannot be bought right now (too poor, nothing it could do) is dimmed with
+  // the reason as its description. `cards` is [{ icon, name, price, desc,
+  // sold, disabled, onClick }]; `actions` the buttons under the grid.
+  function chooseShop({ title, html, cards, actions = [], onRefresh = null }) {
+    const grid = cards.map((c, i) => `<div class="upg-card shop-card${c.sold ? ' sold' : ''}${c.disabled ? ' disabled' : ''}" data-i="${i}" style="animation-delay:${i * 90}ms">
+        <div class="upg-icon">${c.icon ?? ''}</div>
+        <div class="upg-name">${escapeHtml(c.name)}</div>
+        <div class="upg-unit">${escapeHtml(c.price ?? '')}</div>
+        <div class="upg-desc">${escapeHtml(c.desc ?? '')}</div>
+      </div>`).join('');
+    upgradePick = null;
+    openDialog({
+      title,
+      wide: true,
+      html: `${html ?? ''}<div class="upg-grid">${grid}</div>`,
+      actions,
+      onRefresh,
+    });
+    cardPick = { onCard: (i) => { const c = cards[i]; if (c && !c.disabled && c.onClick) c.onClick(); } };
   }
 
   // The black market's second step: exactly the unit picked in chooseUnit,
@@ -1189,7 +1218,7 @@ export function createUI(config, handlers) {
     rosterPick?.onUnitChanged?.(unit);
   });
 
-  return { update, renderLog, setHover, showEnd, hideEnd, openDialog, closeDialog, dialogOpen, flashDialog, confirm, chooseUnit, chooseUpgrade, chooseBlackMarketUpgrade, showBanner, buildLegend, buildFatigueBar, updateBlur, setStartScreen, setLayerSelector, openRoster, closeRoster, rosterOpen, setBattleMode, setDeployBar, updateBattle };
+  return { update, renderLog, setHover, showEnd, hideEnd, openDialog, closeDialog, dialogOpen, flashDialog, confirm, chooseUnit, chooseUpgrade, chooseShop, chooseBlackMarketUpgrade, showBanner, buildLegend, buildFatigueBar, updateBlur, setStartScreen, setLayerSelector, openRoster, closeRoster, rosterOpen, setBattleMode, setDeployBar, updateBattle };
 }
 
 // Log parameters are stored language-neutral and resolved at render time:

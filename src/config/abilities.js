@@ -130,24 +130,28 @@ export const ABILITIES = {
   //heavy strike
   //thundering strike
   //Razeing Antler Swipe
-  chargeHeadbutt: A({ name: 'Charge Headbutt', icon: '🐏💨', color: '#e0b25f', damage: 2, castZone: lineOffsets(1, 3), dmgZone: [[0, 0]], pushZone: [[0, 0, 0]], rotatable: true, moveToTarget: true }),
   //Web
 
 
   //Player Abilities
+  clawSwipe: A({ name: 'Claw Swipe', icon: '🔪', color: '#5fc7e0', desc: 'Clawed slashes that tear through.', damage: 3, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], rotatable: true }),
+  chargeHeadbutt: A({ name: 'Charge Headbutt', icon: '🐏💨', color: '#e0b25f', damage: 2, castZone: lineOffsets(1, 3), dmgZone: [[0, 0]], pushZone: [[0, 0, 0]], rotatable: true, moveToTarget: true }),
+
+  glaive: A({ name: 'Glaive Strike', icon: '⚔️', color: '#e0b25f', desc: 'Downward jab with a sleek glaive.', damage: 4, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], rotatable: true }),
+  shardProjectile: A({ name: 'Volley', icon: '🎯', color: '#a8e05f', desc: 'Bone shard projectile fired out .', damage: 2, castZone: ringOffsets(2, 4), dmgZone: [[0, 0]] }),
+
+  spikeShot: A({ name: 'Spike Shot', icon: '🖊', color: '#e0b25f', desc: 'A sparce cloud of toxin tipped spikes.', damage: "1x2", castZone: ringOffsets(1, 2), dmgZone: [[0, 0]] }),
+  mendingTouch: A({ name: 'Mend', icon: '🏥', color: '#a8e05f', desc: 'Heals one ally standing on or next to the caster.', heal: 2, castZone: ringOffsets(0, 1), dmgZone: [[0, 0]], cost: { supplies: 1 } }),
+
+
   strike: A({ name: 'Strike', icon: '⚔️', color: '#e0b25f', desc: 'A close blow against one adjacent enemy.', damage: 3, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]] }),
   shove: A({ name: 'Shove', icon: '🌀', color: '#ffd75f', desc: 'A light hit that pushes the target away - off a ledge, into a wall, into its friends.', damage: 1, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], pushZone: [[0, 0, 0]], rotatable: true }),
-  volley: A({ name: 'Volley', icon: '🎯', color: '#a8e05f', desc: 'An arrow into a single target at medium range; too close and there is no shot.', damage: 2, castZone: ringOffsets(2, 4), dmgZone: [[0, 0]] }),
   lance: A({ name: 'Lance', icon: '⚡', color: '#5fc7e0', desc: 'A piercing thrust that strikes three tiles in a row, aimed by direction.', damage: 3, castZone: ringOffsets(1, 1), dmgZone: [[0, 0], [1, 0], [2, 0]], rotatable: true }),
   burst: A({ name: 'Ember Burst', icon: '🔥', color: '#ff9950', desc: 'A thrown blast: damages the target and everything around it, and leaves fire burning where it lands.', damage: 2, castZone: ringOffsets(1, 3), dmgZone: ringOffsets(0, 1), tagZone: [[0, 0]], tagId: 'fire', cost: { move: 1 } }),
   bolt: A({ name: 'Bolt', icon: '☄️', color: '#c66dff', desc: 'A heavy arcane hit on one nearby target.', damage: 4, castZone: ringOffsets(1, 2), dmgZone: [[0, 0]], cost: { hp: 1 } }),
-  mendingTouch: A({ name: 'Mend', icon: '🏥', color: '#a8e05f', desc: 'Heals one ally standing on or next to the caster.', heal: 2, castZone: ringOffsets(0, 1), dmgZone: [[0, 0]], cost: { supplies: 1 } }),
   guard: A({ name: 'Guard', icon: '🛡️', color: '#5fc7e0', desc: 'Shields a nearby ally: the next hit or shove against them is blocked outright.', statusEffect: 'shield', castZone: ringOffsets(0, 1), dmgZone: [[0, 0]], cost: { hp: -1 } }),
-  clawSwipe: A({ name: 'Claw Swipe', icon: '🔪', color: '#5fc7e0', desc: 'Clawed slashes that tear through.', damage: 3, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], rotatable: true }),
-  glaive: A({ name: 'Glaive Strike', icon: '⚔️', color: '#e0b25f', desc: 'Downward jab with a sleek glaive.', damage: 4, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], rotatable: true }),
   plasmaBolt: A({ name: 'Plasma Bolt', icon: '☄️', color: '#e0b25f', desc: 'A bolt of plasma, eerily calm, searing.', damage: 2, castZone: ringOffsets(1, 3), dmgZone: [[0, 0]] }),
 
-  spikeShot: A({ name: 'Spike Shot', icon: '🖊', color: '#e0b25f', desc: 'A sparce cloud of toxin tipped spikes.', damage: 2, castZone: ringOffsets(1, 2), dmgZone: [[0, 0]] }),
 
   //Hack Abilities
   hackMelee: A({ name: 'Hack Melee', icon: '⚔️', color: '#e0b25f', desc: 'A close, directional blow.', damage: 3, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]] }),
@@ -591,6 +595,13 @@ export const ABILITY_UPGRADES = {
       name: 'Strength', icon: '🦾', desc: 'With strengthened sinews, Gorm hits harder'
     }),
   },
+  shardProjectile: {
+    barbed: U({ name: 'Barbed Arrows', icon: '🪝', desc: '+1 damage', add: { damage: 1 } }),
+    farsight: U({ name: 'Farsight', icon: '🔭', desc: 'range grows to 5 tiles', castZoneAdd: ringOffsets(5, 5) }),
+    closework: U({ name: 'Close Work', icon: '🎯', desc: 'can fire point blank', requires: ['barbed'], castZoneAdd: ringOffsets(1, 1) }),
+    rain: U({ name: 'Arrow Rain', icon: '🌧️', desc: 'also hits the tiles around the target', requires: ['farsight'], dmgZoneAdd: ringOffsets(1, 1) }),
+    deadeye: U({ name: 'Deadeye', icon: '👁️', desc: '+2 damage', requires: ['closework', 'rain'], add: { damage: 2 } }),
+  },
 
   mendingTouch: {
     soothe: U({
@@ -633,13 +644,7 @@ export const ABILITY_UPGRADES = {
     avalanche: U({ name: 'Avalanche', icon: '🏔️', desc: '+2 damage', requires: ['longarm', 'impact'], add: { damage: 2 } }),
   },
   // Volley: ranged single shot. Range out, range in, then a splash and a payoff.
-  volley: {
-    barbed: U({ name: 'Barbed Arrows', icon: '🪝', desc: '+1 damage', add: { damage: 1 } }),
-    farsight: U({ name: 'Farsight', icon: '🔭', desc: 'range grows to 5 tiles', castZoneAdd: ringOffsets(5, 5) }),
-    closework: U({ name: 'Close Work', icon: '🎯', desc: 'can fire point blank', requires: ['barbed'], castZoneAdd: ringOffsets(1, 1) }),
-    rain: U({ name: 'Arrow Rain', icon: '🌧️', desc: 'also hits the tiles around the target', requires: ['farsight'], dmgZoneAdd: ringOffsets(1, 1) }),
-    deadeye: U({ name: 'Deadeye', icon: '👁️', desc: '+2 damage', requires: ['closework', 'rain'], add: { damage: 2 } }),
-  },
+
   // Lance: the rotating 3-tile line. Longer line, longer arm, harder hit.
   lance: {
     hone: U({ name: 'Hone', icon: '🔪', desc: '+1 damage', add: { damage: 1 } }),

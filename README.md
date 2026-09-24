@@ -83,7 +83,7 @@ hex-world-map/
     hex.js       hex grid maths (axial coordinates, neighbours, distance)
     rng.js       seeded random numbers (same seed = same map)
     render.js    the world-map Three.js scene: tiles, fog, markers, player token, camera, picking
-    local/localmap.js     LOCAL map data (the bare arena grid) + the recipe hook (every fight is a handcrafted map)
+    local/localmap.js     LOCAL map data (the bare arena grid) + the recipe hook (every fight is a handcrafted map) + the Hack board generator
     local/mapcode.js      the map code parser: text -> recipe (arena tiles + pinned enemies)
     local/localview.js    the arena's own Three.js scene, tokens, highlights, rotate-only camera
     local/transition.js   the cloud-dive cinematic between the world and the arena
@@ -94,7 +94,9 @@ hex-world-map/
     tween.js     tiny animation helper
     style.css    HUD styling
   tools/
-    smoke-test.cjs      automated headless-browser test (needs Playwright; see the file header)
+    hack-test.cjs       headless playtest of the Hack terminal (needs Playwright; see the file header)
+    shop-test.cjs       headless playtest of the shop and the menu's Win / Restart encounter buttons
+    hack-layouts-sheet.mjs  draws ten generated hack boards as an SVG sheet, to eyeball the spread
     make-artifact.mjs   converts the single-file build into a self-contained shareable page
   DESIGN.md    rules, decisions, open questions, roadmap. Read this first.
 ```

@@ -13,6 +13,7 @@ import { generateLocalMap, pickRandomTiles, pickClusteredTiles, neutralElevation
 import { hexKey, hexesInRange, hexDistance, axialToPlane } from '../hex.js';
 import { COMBAT_CONFIG } from '../config/localmap.js';
 import { tagDefById } from '../config/entities.js';
+import { HackNode, HackMine } from './battle/entity.js';
 import { createRng } from '../rng.js';
 import { t, hasKey } from '../i18n.js';
 import { statusesFor, badgeNumber, statusInfo } from '../status.js';
@@ -408,7 +409,7 @@ export class LocalMapView {
       // the enemy is on the board while the arena is still falling out of the
       // clouds. awaitingDeployment() is how the caller knows to run that step.
       this.deployPending = party ?? [];
-      this.placement = this.placeUnits([], enemies ?? [], rng, { enemies: recipe?.spawns?.enemies });
+      this.placement = this.placeUnits([], enemies ?? [], rng, { enemies: recipe?.spawns?.enemies, npcs: recipe?.spawns?.npcs });
       this.placement.partyKeys = [];
       this.placedCounts = { party: 0, enemies: (enemies ?? []).length };
     } else {
@@ -1001,6 +1002,9 @@ export class LocalMapView {
     for (const t of this.map.hexes.values()) {
       if (t.type && t.type !== 'ground') used.add(t.key);
     }
+    // A recipe's NPC tiles (`@npc` lines - a shop's keeper) are taken too: the
+    // encounter stands its own entity there.
+    for (const n of fixed?.npcs ?? []) if (n?.key) used.add(n.key);
     const resolve = (defs, authored, spread = 0) => {
       const keys = [];
       for (let i = 0; i < defs.length; i++) {
@@ -1381,7 +1385,10 @@ export class LocalMapView {
       const rect = el.getBoundingClientRect();
       const p = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
       ray.setFromCamera(p, this.camera);
-      const hit = ray.intersectObjects(this.tileMeshes ?? [], false)[0];
+      // Bodies an encounter registered as clickable (pickables, each carrying
+      // its tile key) are tested first, so a click on a shopkeeper's body
+      // counts as a click on the keeper's tile - not on the tile behind it.
+      const hit = ray.intersectObjects([...(this.pickables ?? []), ...(this.tileMeshes ?? [])], false)[0];
       if (hit) onTile(hit.object.userData.key);
     };
     // Hover: remembered here, resolved once per frame in update() (raycasts on
@@ -2310,13 +2317,13 @@ export class LocalMapView {
     // Which tile the cursor is over, resolved once per frame (raycasting on
     // every mousemove would hammer slow machines). Needed by the fight AND by
     // the deployment step before it.
-    if ((this.battle || this.deploy) && this.hoverDirty && this.camera && this.pointer) {
+    if ((this.battle || this.deploy || this.pickables?.length) && this.hoverDirty && this.camera && this.pointer) {
       this.hoverDirty = false;
       // A status badge under the cursor wins over the tile behind it.
       const onBadge = this.battle ? this.resolvePlaqueHover() : false;
       this.hoverRay = this.hoverRay ?? new THREE.Raycaster();
       this.hoverRay.setFromCamera(new THREE.Vector2(this.pointer.x, this.pointer.y), this.camera);
-      const hit = onBadge ? null : this.hoverRay.intersectObjects(this.tileMeshes ?? [], false)[0];
+      const hit = onBadge ? null : this.hoverRay.intersectObjects([...(this.pickables ?? []), ...(this.tileMeshes ?? [])], false)[0];
       this.hoverKey = hit ? hit.object.userData.key : null;
     }
     // Hovering a castable tile paints what the cast would touch. Only rebuilt
@@ -2404,6 +2411,7 @@ export class LocalMapView {
     this.campfire = null;
     this.campSeats = null;
     this.layout = null;
+    this.pickables = null;
     this.placement = null;      // the next arena rolls its own starting positions
     this.placedCounts = null;
     this.inCombat = false;
@@ -2411,4 +2419,316 @@ export class LocalMapView {
     // per-sprite materials but never the textures, and one small texture per
     // glyph is worth reusing for the whole session.
   }
+}
+
+// =====================================================================
+//  THE HACK VIEW (the Hack terminal, config.hack; since 2026-09-24 part of
+//  this file). What a hack shows that a fight does not, layered ON TOP of
+//  the LocalMapView without changing it:
+//    * the HACK panel at the top of the screen - the turn counter and the
+//      three BADGES that light up as nodes go down (a DOM element; its
+//      styles are in style.css under "the Hack terminal's panel");
+//    * NODE bodies: a stack of bevelled DISCS per node, one disc per hp, in
+//      the node's colour; damage takes discs off the bottom and the rest
+//      settle down; the discs the planned volley would take are drawn dark.
+//      The node's icon rides on top of the stack; a mine is its icon on the
+//      tile. (Nodes and mines are the engine's OBJECTS - sb.objects, the
+//      HackNode / HackMine classes in battle/entity.js - and the arena
+//      draws nothing for an object; this does.)
+//    * the battle bar's round counter reads "Turn n / N".
+//  Lock marks and the forecast on the cards are the arena's own (syncLockFx).
+// =====================================================================
+const escapeText = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+export function createHackView({ view, hack, H }) {
+  const scene = view.scene;
+  const cfg = view.config.local;
+  const tileRadius = cfg.hexSize - cfg.gap / SQRT3;
+  const hx = () => hack.state.ext.hack;
+
+  // ----- the hack panel (DOM): turn counter + badges -------------------------
+  // The turn counter, and under it the three BADGES with their node
+  // thresholds, lighting up one by one as nodes go down - the three stars of
+  // a mobile level.
+  const bar = document.createElement('div');
+  bar.id = 'hack-bar';
+  bar.className = 'panel';
+  bar.innerHTML = `
+    <div class="hack-title"><b>${escapeText(t('hack.panel.title'))}</b></div>
+    <div class="hack-turns"></div>
+    <div class="hack-badges">${H.badges.map((n, i) => `<div class="badge" data-badge="${i + 1}"><span class="star">★</span><span class="n">${n}</span></div>`).join('')}</div>
+    <div class="hack-cleared"></div>`;
+  (document.getElementById('hud') ?? document.body).appendChild(bar);
+  document.body.classList.add('hack-mode');
+  const turnsEl = bar.querySelector('.hack-turns');
+  const clearedEl = bar.querySelector('.hack-cleared');
+  const badgeEls = [...bar.querySelectorAll('.badge')];
+
+  function refreshBar() {
+    const sb = hack.state;
+    const h = hx();
+    if (!h) return;
+    const left = H.turns - sb.round + (sb.over ? 0 : 1);
+    turnsEl.className = 'hack-turns' + (sb.over ? ' over' : left <= 1 ? ' last' : '');
+    turnsEl.textContent = sb.over
+      ? (sb.over === 'win' ? t('hack.panel.complete', { badges: h.badges }) : t('hack.panel.failed'))
+      : t('hack.panel.turn', { n: sb.round, max: H.turns });
+    badgeEls.forEach((el, i) => el.classList.toggle('lit', h.badges > i));
+    clearedEl.innerHTML = `${escapeText(t('hack.panel.down'))} <b>${h.cleared}</b> / ${h.total}` + (h.lastTurn ? ` - ${escapeText(t('hack.panel.lastVolley', { n: h.lastTurn.cleared }))}` : '');
+    // The battle bar's round counter reads "Turn n / N" in this mode.
+    const roundEl = document.getElementById('battle-round');
+    if (roundEl) roundEl.textContent = sb.over ? (sb.over === 'win' ? t('hack.won.title') : t('hack.lost.title')) : t('hack.panel.turn', { n: sb.round, max: H.turns });
+  }
+
+  // ----- node bodies: a stack of discs, one per hp -------------------------
+  // A node (a HackNode object on the engine's board) is as tall as it is
+  // healthy: `hp` bevelled discs (a lathe profile with rounded edges) stacked
+  // on its tile, in its colour. Damage takes discs off the BOTTOM - the
+  // survivors then settle down onto the tile over H.discs.settleMs - so a
+  // node visibly shrinks as it is worn down; a heal adds discs on top. Its
+  // icon rides on the topmost disc. The discs the PLANNED volley would take
+  // (the engine's forecast, previewState) are drawn darker, as the cards'
+  // bars do for units. A mine is its icon on the tile. (Until 2026-09-23 a
+  // node was a hex column with its hp as a flat decal.)
+  const D = H.discs ?? {};
+  const discR = tileRadius * (D.radius ?? 0.36), discH = D.height ?? 0.5, discGap = D.gap ?? 0.012;
+  const bevel = Math.min(D.bevel ?? 0.018, discH / 2, discR / 2);
+  const step = discH + discGap;                 // one disc's share of the stack's height
+  const settleMs = Math.max(1, D.settleMs ?? 260);
+  // The bevelled disc: a lathe of its silhouette (bottom bevel, wall, top bevel).
+  const profile = [];
+  const arc = (cx, cy, a0, a1, n) => { for (let i = 0; i <= n; i++) { const a = a0 + (a1 - a0) * i / n; profile.push(new THREE.Vector2(cx + Math.cos(a) * bevel, cy + Math.sin(a) * bevel)); } };
+  profile.push(new THREE.Vector2(0, 0));
+  arc(discR - bevel, bevel, -Math.PI / 2, 0, 4);          // bottom edge
+  arc(discR - bevel, discH - bevel, 0, Math.PI / 2, 4);   // top edge
+  profile.push(new THREE.Vector2(0, discH));
+  const discGeo = new THREE.LatheGeometry(profile, 28);
+  const discMats = new Map();   // colour|dark -> material (shared by every node of that colour)
+  const discMat = (color, dark = false) => {
+    const key = color + (dark ? '|d' : '');
+    let m = discMats.get(key);
+    if (!m) {
+      const c = new THREE.Color(color);
+      if (dark) c.multiplyScalar(0.38);
+      m = new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: dark ? 0.1 : 0.22, roughness: 0.4, metalness: 0.15 });
+      discMats.set(key, m);
+    }
+    return m;
+  };
+  const nodes = new Map();   // uid -> { tile, color, discs: [mesh, bottom first], hp, icon, lose }
+  const mines = new Map();   // uid -> icon sprite
+  const yOf = (i) => i * step;   // a disc's rest height in the stack, by its index from the bottom
+  function addDisc(n, i, y) {
+    const m = new THREE.Mesh(discGeo, discMat(n.color));
+    m.position.set(n.tile.x, n.tile.top + (y ?? yOf(i)), -n.tile.y);
+    m.userData.targetY = n.tile.top + yOf(i);
+    m.castShadow = true;
+    scene.add(m);
+    return m;
+  }
+  function dropNode(uid) {
+    const n = nodes.get(uid); if (!n) return;
+    for (const m of n.discs) scene.remove(m);
+    if (n.icon) { scene.remove(n.icon); n.icon.material.dispose(); }
+    nodes.delete(uid);
+  }
+  function dropMine(uid) {
+    const m = mines.get(uid); if (!m) return;
+    scene.remove(m); m.material.dispose();
+    mines.delete(uid);
+  }
+  const colorOf = (o) => {
+    const c = o.color ?? '#5fc7e0';
+    return typeof c === 'number' ? '#' + c.toString(16).padStart(6, '0') : c;
+  };
+  function syncNodes() {
+    const sb = hack.state;
+    const live = sb.objects.filter((o) => o.alive);
+    const wantNodes = new Set(live.filter((o) => o instanceof HackNode).map((o) => o.uid));
+    const wantMines = new Set(live.filter((o) => o instanceof HackMine).map((o) => o.uid));
+    for (const uid of nodes.keys()) if (!wantNodes.has(uid)) dropNode(uid);
+    for (const uid of mines.keys()) if (!wantMines.has(uid)) dropMine(uid);
+    for (const u of live) {
+      const tile = view.map.hexes.get(u.pos);
+      if (!tile) continue;
+      if (wantMines.has(u.uid)) {
+        if (!mines.has(u.uid)) {
+          const s = view.makePortrait(u.icon ?? '💣');
+          s.material = s.material.clone();
+          s.scale.setScalar(0.5);
+          s.position.set(tile.x, tile.top + 0.35, -tile.y);
+          scene.add(s); mines.set(u.uid, s);
+        }
+        continue;
+      }
+      if (!wantNodes.has(u.uid)) continue;
+      let n = nodes.get(u.uid);
+      if (!n) {
+        const icon = view.makePortrait(u.icon ?? '🔷');
+        icon.material = icon.material.clone();
+        icon.scale.setScalar(0.5);
+        icon.position.set(tile.x, tile.top + 0.35, -tile.y);
+        scene.add(icon);
+        n = { tile, color: colorOf(u), discs: [], hp: 0, icon, lose: 0 };
+        nodes.set(u.uid, n);
+      }
+      const hp = Math.max(0, Math.round(u.hp));
+      if (hp < n.hp) {
+        // Damage: the bottom discs go, the rest keep their height for now and
+        // settle down to their new places (the per-frame tick below).
+        const gone = n.discs.splice(0, n.hp - hp);
+        for (const m of gone) scene.remove(m);
+        n.discs.forEach((m, i) => { m.userData.targetY = tile.top + yOf(i); });
+      } else if (hp > n.hp) {
+        // A heal (or the first build): new discs on top, already in place.
+        for (let i = n.hp; i < hp; i++) n.discs.push(addDisc(n, i));
+      }
+      n.hp = hp;
+    }
+  }
+  // The forecast: how many discs each node would lose to the planned volley,
+  // read off the engine's play-out whenever the arena's own forecast changes
+  // (view.lockSig - the same signature that rebuilds the lock fx and the
+  // cards). Those discs, from the bottom, wear the dark material.
+  let lastSig;
+  function syncForecast() {
+    const sig = view.lockSig ?? null;
+    if (sig === lastSig) return;
+    lastSig = sig;
+    const sb = hack.state;
+    const ps = sb.over || sb.phase !== 'player' || sb.firing || !hack.previewState ? null : hack.previewState(view.aimFxKey ?? null);
+    for (const [uid, n] of nodes) {
+      const u = sb.objects.find((x) => x.uid === uid);
+      const a = ps && ps.after ? ps.after[uid] : null;
+      const lose = u && a ? Math.max(0, Math.min(n.discs.length, u.hp - a.hp)) : 0;
+      if (lose === n.lose) continue;
+      n.lose = lose;
+      n.discs.forEach((m, i) => { m.material = discMat(n.color, i < lose); });
+    }
+  }
+  // The icon sits on the topmost disc.
+  function placeIcons() {
+    for (const n of nodes.values()) {
+      const top = n.discs.length ? Math.max(...n.discs.map((m) => m.position.y)) + discH : n.tile.top;
+      n.icon.position.y = top + 0.32;
+    }
+  }
+
+  // ----- per-change / per-frame -----------------------------------------------
+  function refresh() {
+    syncNodes();
+    lastSig = undefined;   // the board changed: re-read the forecast
+    syncForecast();
+    placeIcons();
+    refreshBar();
+  }
+  let raf = 0, last = performance.now();
+  (function tick(now = performance.now()) {
+    raf = requestAnimationFrame(tick);
+    const dt = Math.min(100, now - last); last = now;
+    if (!view.scene || view.scene !== scene) return;
+    // Discs above a gap settle down onto the tile: a constant-rate drop, so
+    // one lost disc and ten lost discs both take about settleMs.
+    for (const n of nodes.values()) {
+      for (const m of n.discs) {
+        const ty = m.userData.targetY;
+        if (m.position.y > ty) m.position.y = Math.max(ty, m.position.y - (step * 8) * dt / settleMs);
+      }
+    }
+    syncForecast();
+    placeIcons();
+  })();
+
+  function dispose() {
+    cancelAnimationFrame(raf);
+    for (const k of [...nodes.keys()]) dropNode(k);
+    for (const k of [...mines.keys()]) dropMine(k);
+    discGeo.dispose();
+    for (const m of discMats.values()) m.dispose();
+    discMats.clear();
+    bar.remove();
+    document.body.classList.remove('hack-mode');
+  }
+
+  refresh();
+  // The last three are for the tests (tools/hack-test.cjs).
+  // (by the node unit's uid)
+  return {
+    refresh, dispose,
+    discCount: (uid) => nodes.get(uid)?.discs.length ?? 0,
+    darkDiscs: (uid) => nodes.get(uid)?.lose ?? 0,
+    settled: (uid) => { const n = nodes.get(uid); return !n || n.discs.every((m) => Math.abs(m.position.y - m.userData.targetY) < 1e-6); },
+    iconAboveStack: (uid) => { const n = nodes.get(uid); return !!n && n.discs.every((m) => n.icon.position.y > m.position.y + discH); },
+    mineCount: () => mines.size,
+  };
+}
+
+// =====================================================================
+//  THE SHOP VIEW (config.shop; since 2026-09-24). A shop is an arena with
+//  no fight in it: the party stands on the shop's handcrafted map
+//  (config.craftedMaps.shop) and the KEEPER - a Shopkeeper entity
+//  (battle/entity.js), not a unit, since it never moves - stands on the
+//  tile the map code pinned with `@shopkeeper`. This draws the keeper's
+//  body on that tile, makes it clickable (the body is registered as a
+//  pickable, so a click on it - or on its tile - reaches onClick), and
+//  lifts it a little while the cursor is on it. No engine, no turn
+//  structure, no battle bar: the shop window is the whole interaction.
+// =====================================================================
+export function createShopView({ view, keeper, onClick }) {
+  const scene = view.scene;
+  const tile = view.map.hexes.get(keeper.pos);
+  if (!tile) return { dispose() {} };
+  const colorOf = (c) => (typeof c === 'number' ? c : new THREE.Color(c ?? '#45c7d1').getHex());
+  const color = colorOf(keeper.color);
+
+  // The body: a stout capsule in the shop's colour with a soft glow, the
+  // keeper's icon plate riding above it, a ground ring like a unit's.
+  const body = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.26, 0.34, 6, 14),
+    new THREE.MeshStandardMaterial({ color, roughness: 0.45, emissive: color, emissiveIntensity: 0.18 })
+  );
+  body.geometry.translate(0, 0.45, 0);
+  body.position.set(tile.x, tile.top, -tile.y);
+  body.castShadow = true;
+  body.userData.key = keeper.pos;   // what a click on the body means
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(0.3, 0.44, 28).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8, side: THREE.DoubleSide })
+  );
+  ring.position.set(tile.x, tile.top + 0.02, -tile.y);
+  const icon = view.makePortrait(keeper.icon ?? '🧔');
+  icon.material = icon.material.clone();
+  icon.scale.setScalar(0.62);
+  icon.position.set(tile.x, tile.top + 1.15, -tile.y);
+  scene.add(body, ring, icon);
+  view.pickables = [...(view.pickables ?? []), body];
+
+  // Clicks: the keeper's tile (or its body) opens the shop; anything else is
+  // nothing. Right click is nothing too - there is no selection to cancel.
+  view.enableTilePicking((k) => { if (k === keeper.pos) onClick(); }, () => {});
+
+  // Hover: the keeper brightens and the cursor becomes a hand.
+  let raf = 0;
+  const el = view.domElement;
+  (function tick() {
+    raf = requestAnimationFrame(tick);
+    if (!view.scene || view.scene !== scene) return;
+    const hot = view.hoverKey === keeper.pos;
+    body.material.emissiveIntensity = hot ? 0.55 : 0.18;
+    ring.material.opacity = hot ? 1 : 0.8;
+    icon.position.y = tile.top + 1.15 + Math.sin(performance.now() / 700) * 0.04;
+    if (el) el.style.cursor = hot ? 'pointer' : '';
+  })();
+
+  function dispose() {
+    cancelAnimationFrame(raf);
+    if (el) el.style.cursor = '';
+    if (view.pickables) view.pickables = view.pickables.filter((m) => m !== body);
+    view.disableTilePicking();
+    scene.remove(body, ring, icon);
+    body.geometry.dispose(); body.material.dispose();
+    ring.geometry.dispose(); ring.material.dispose();
+    icon.material.dispose();
+  }
+  return { dispose, keeperTile: keeper.pos };
 }

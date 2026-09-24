@@ -15,9 +15,10 @@ import { createBattle } from './local/battle/engine.js';
 import { COMBAT_CONFIG } from './config/localmap.js';
 import { resolvedAbilitiesFor, availableUpgrades, triggersFor } from './upgrades.js';
 import { recipeFromCode } from './local/mapcode.js';
-// EXPERIMENT: the Hack encounter. Everything about it lives in src/local/hack/;
-// main.js only creates the bridge and routes three moments to it (see DESIGN.md).
-import { createHackBridge, HACK_TYPE } from './local/hack/hackbridge.js';
+import { buildHackRecipe } from './local/localmap.js';
+import { createHackRules } from './local/battle/engine.js';
+import { HackNode, HackMine, Shopkeeper } from './local/battle/entity.js';
+import { createHackView, createShopView } from './local/localview.js';
 import { makeEnemyOfType } from './battle.js';
 import { t, tn, initLanguage, applyStaticTexts, onLanguageChange } from './i18n.js';
 import { tc, tFatigue } from './text.js';
@@ -132,13 +133,8 @@ const cinematic = createCombatCinematic({
   onModeChange: (isLocal) => document.body.classList.toggle('local-mode', isLocal),
 });
 window.__cinematic = cinematic; // for debugging / automated tests
-// EXPERIMENT (src/local/hack/): the hack encounter's own bridge to the arena.
-const hackBridge = createHackBridge({
-  config: CONFIG, getGame: () => game, getUi: () => ui, cinematic, renderer,
-  worldNeighborsFor: (hex) => worldNeighborsFor(hex), worldEdgesFor: (hex) => worldEdgesFor(hex),
-  escapeHtml: (s) => escapeHtml(s),
-});
 const COMBAT_TYPES = new Set(['battle', 'stasisSeed', 'stasisColony']);
+const HACK_TYPE = 'hack';
 
 // ----- the start flow -------------------------------------------------------
 // The game boots straight into the local map of the starting tile: the party
@@ -268,7 +264,8 @@ function syncPartyPanel() {
 
 // Snapshot of a fight at the instant it began (HP + exact tile layout), kept so
 // "Restart battle" can undo every step, hit and death back to that moment
-// without re-rolling anything (see restartBattle() below).
+// without re-rolling anything (see restartBattle() below; restartHack is the
+// hack's twin).
 let battleEntry = null;
 
 // The fight waiting for the player to place the party (see startDeployment).
@@ -393,6 +390,302 @@ function beginInteractiveBattle(ctx, placementOverride = null) {
   tutorial.onEvent('combatStart', {}, game);
 }
 
+// ----- the Hack terminal (config.hack) ---------------------------------------
+// The hack's own bridge to the arena, the twin of the combat bridge above
+// (startCombatDive / combatDelegate / finishInteractiveBattle): the Enter key
+// on a hack tile dives in with the hack's flat recipe (localmap.js
+// buildHackRecipe), game.startHack asks for it to be played (hackDelegate),
+// and the engine's end hands the result back to game.finishHack. It runs on
+// the ORDINARY combat engine (createBattle): no enemies, the nodes and mines
+// as its OBJECTS (HackNode / HackMine, battle/entity.js, `entities`), and a
+// `rules` object (engine.js createHackRules) supplying the node count, the
+// badge grading and the end condition. Aim locks, the volley and the forecast
+// are the engine's and the arena's own; the panel and the disc stacks are
+// localview.js createHackView. The world-map side is game.js startHack /
+// finishHack; the texts are locale rows (hack.*).
+let hack = null;         // the running engine (createBattle with the hack rules)
+let hackCtx = null;      // the context game.startHack handed over
+let hackView = null;     // the panel and the disc stacks
+let pendingHack = null;  // { hex, recipe } between the dive and the engine
+
+// The Enter key on a hack tile: dive into the arena built from the hack
+// recipe, and let the game start the encounter at the peak of the clouds.
+function enterHack(hex, resume) {
+  if (!game || cinematic.isActive()) return false;
+  const H = CONFIG.hack;
+  const recipe = buildHackRecipe(H, game.seed, hex, game.livingUnits().length);
+  pendingHack = { hex, recipe };
+  let turnBack = false;
+  return cinematic.flyIn({
+    worldHex: hex,
+    baseColor: renderer.targetColorFor(hex).getHex(),
+    party: game.livingUnits(),
+    enemies: [],
+    seed: game.seed,
+    recipe,
+    neighbors: worldNeighborsFor(hex),
+    edges: worldEdgesFor(hex),
+    deployParty: false,       // the recipe seats the party itself
+    partySpread: 0,
+    onSwap: () => {
+      // The wither may have eaten the encounter while we were in the air.
+      if (hex.encounter === HACK_TYPE) resume();
+      else turnBack = true;
+    },
+    onArrived: () => {
+      if (turnBack) { pendingHack = null; cinematic.flyOut({}); }
+      else if (hack) hack.start();
+    },
+  });
+}
+
+// game.hackDelegate: the game has prepared the encounter (ctx) and asks for
+// it to be played. Only possible with the arena on screen (or committed to).
+function hackDelegate(ctx) {
+  if (hack || !cinematic.inArena()) return false;
+  const recipe = (pendingHack && pendingHack.hex === ctx.hex) ? pendingHack.recipe
+    : buildHackRecipe(CONFIG.hack, game.seed, ctx.hex, game.livingUnits().length);
+  pendingHack = null;
+  beginHack(ctx, recipe);
+  // The camera is already down (the encounter was started from inside the
+  // arena): open at once. Mid-dive, onArrived does it on landing.
+  if (cinematic.mode() === 'local') hack.start();
+  return true;
+}
+
+// Snapshot of the hack at the instant it began (the recipe and the party's
+// HP), so "Restart encounter" can rebuild the very same board (see
+// restartHack below). The twin of battleEntry.
+let hackEntry = null;
+
+// Builds the hack on the arena from its recipe: the party seated by the
+// recipe, the pieces, the engine with the hack rules, the panel. Used by the
+// delegate for a fresh hack and by restartHack for the same one again.
+function beginHack(ctx, recipe) {
+  const H = CONFIG.hack;
+  const view = cinematic.localView;
+  const partyDefs = game.state.party
+    .map((u, i) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.maxHp, partyIndex: i, alive: u.alive, abilityDefs: resolvedAbilitiesFor(u), triggers: triggersFor(u) }))
+    .filter((u) => u.alive && u.hp > 0);
+  const placement = view.beginBattle({ party: partyDefs, enemies: [] });
+  hackCtx = ctx;
+  hackEntry = { ctx, recipe, partyHp: partyDefs.map((u) => ({ index: u.partyIndex, hp: u.hp })) };
+  const rules = createHackRules(H, { onFloater: (k, text, color) => view.addFloater(k, text, color) });
+  // The board's pieces: the nodes (as many discs as the recipe rolled) and
+  // the mines, on the recipe's tiles - the engine's `entities`.
+  const fallbackHp = Array.isArray(H.nodeHp) ? H.nodeHp[0] : 1;
+  const pieces = [
+    ...recipe.nodeKeys.map((k) => new HackNode({ pos: k, hp: recipe.nodeHp?.[k] ?? fallbackHp, onCleared: (node, hookCtx) => rules.nodeCleared(node, hookCtx) })),
+    ...recipe.mineKeys.map((k) => new HackMine({ pos: k, damage: H.mineDamage, lethal: !!H.mineLethal })),
+  ];
+  hack = createBattle({
+    config: CONFIG,
+    radius: view.map?.radius ?? H.radius,
+    heights: placement.heights,
+    party: partyDefs,
+    enemies: [],
+    partyKeys: placement.partyKeys,
+    enemyKeys: [],
+    forced: false,
+    deferOpening: true,
+    noFlee: true,
+    rules,
+    entities: pieces,
+    onChange: () => {
+      view.syncBattle();
+      ui.updateBattle();
+      syncHackPartyPanel();
+      if (hackView) hackView.refresh();
+    },
+    onFloater: (k, text, color) => view.addFloater(k, text, color),
+    onLog: () => {},
+    onAnim: (anim, done) => view.runMoveAnim(anim, done),
+    onEnd: (won) => setTimeout(() => finishHack(won), 900),
+  });
+  hack.hackConfig = H;
+  window.__hack = hack;   // for debugging / automated tests
+  view.bindBattle(hack);
+  ui.setBattleMode(hack, { title: t('hack.title'), lore: null, debuffs: [] });
+  hackView = createHackView({ view, hack, H });
+  window.__hackView = hackView;   // for the tests
+  // The Local Map Info panel: its lore line is a locale KEY in a fight; the
+  // hack's carries config numbers ({turns}), so it is written straight in.
+  const desc = document.getElementById('li-desc');
+  if (desc) {
+    desc.textContent = tc('hack.lore', CONFIG);
+    desc.classList.remove('hidden');
+  }
+}
+
+// "Restart encounter" on a hack: the same board again (the same recipe -
+// same nodes, same mines, same hp rolls, same seats), the party's HP back
+// to what it was on entry, the turn counter at 1. Nothing is reported; the
+// terminal is not consumed. The twin of restartBattle.
+function restartHack() {
+  if (!hack || !hackCtx || !hackEntry) return;
+  const entry = hackEntry;
+  const view = cinematic.localView;
+  if (hackView) { hackView.dispose(); hackView = null; window.__hackView = null; }
+  view.endBattle();
+  for (const snap of entry.partyHp) {
+    const p = game.state.party[snap.index];
+    if (p) p.hp = snap.hp;
+  }
+  hack = null; hackCtx = null; window.__hack = null;
+  ui.setBattleMode(null);
+  beginHack(entry.ctx, entry.recipe);
+  hack.start();
+  ui.update(game);
+}
+
+// Wounds from mines show in the party panel as they happen.
+function syncHackPartyPanel() {
+  if (!hack) return;
+  let changed = false;
+  for (const u of hack.state.units) {
+    if (u.partyIndex == null) continue;
+    const p = game.state.party[u.partyIndex];
+    if (p && p.hp !== u.hp) { p.hp = u.hp; changed = true; }
+  }
+  if (changed) ui.update(game);
+}
+
+function finishHack(won) {
+  if (!hack || !hackCtx) return;
+  const H = CONFIG.hack;
+  const ctx = hackCtx;
+  const h = hack;
+  hack = null; hackCtx = null; hackEntry = null; window.__hack = null;
+  for (const u of h.state.units) {
+    if (u.partyIndex == null) continue;
+    const p = game.state.party[u.partyIndex];
+    if (p) p.hp = u.hp;
+  }
+  if (hackView) { hackView.dispose(); hackView = null; window.__hackView = null; }
+  ui.setBattleMode(null);
+  cinematic.localView.endBattle();
+  // The firing order the player arranged in the panel carries to the next fight.
+  if (h.orderedParty) game.applyPartyOrder(h.orderedParty().map((u) => u.partyIndex));
+  const rounds = h.state.round;
+  const hx = h.state.ext.hack ?? { cleared: 0, badges: 0, total: 0 };
+  if (won && hx.badges > 0) {
+    // The regular reward path: the battle dialog with an upgrade pick - as
+    // many OPTIONS to pick from as badges earned (game.finishHack passes it on).
+    ctx.opts.intro = { title: t('hack.won.title'), text: t('hack.won.text', { cleared: hx.cleared, badges: hx.badges }) };
+    game.finishHack(ctx, { won: true, rounds, badges: hx.badges, cleared: hx.cleared });
+  } else {
+    game.finishHack(ctx, { won: false, rounds, badges: 0, cleared: hx.cleared });
+    // Our own small window; closing it flies the party back out (onDialogClosed
+    // does that for any dialog closed inside the arena).
+    ui.openDialog({
+      title: t('hack.lost.title'),
+      html: `<p>${escapeHtml(t('hack.lost.text', { cleared: hx.cleared }))}</p><div class="effect">${escapeHtml(t('hack.lost.detail', { cleared: hx.cleared, total: hx.total, rounds, first: H.badges[0] }))}</div>`,
+      actions: [{ label: t('dialog.continue'), onClick: () => ui.closeDialog() }],
+    });
+  }
+}
+
+// Restart / new map while a hack is open: drop it, nothing is reported.
+function abortHack() {
+  if (hackView) { hackView.dispose(); hackView = null; window.__hackView = null; }
+  if (hack) ui?.setBattleMode(null);
+  hack = null; hackCtx = null; hackEntry = null; pendingHack = null; window.__hack = null;
+}
+
+// ----- the Shop (config.shop, config.craftedMaps.shop) ----------------------
+// A shop is a local-map encounter with nothing to fight (since 2026-09-24;
+// until then it was a dialog straight off the world map). The Enter key on
+// a shop tile dives into the shop's handcrafted map (the recipe rolled onto
+// the tile at world generation, game.js assignShopMaps); the party stands
+// around, and the KEEPER - a Shopkeeper entity (battle/entity.js), not a
+// unit, since it never moves - stands on the tile the map code pinned with
+// `@shopkeeper` (the middle when the map pins none). createShopView
+// (localview.js) draws the keeper and routes a click on it to its
+// interact() hook, which opens the shop window (showDialog 'shop'): one big
+// card per option. An option that opens a window of its own (Training or
+// the Relic -> the upgrade chooser, Spare Parts -> the unit pick) replaces
+// the shop window until it is done, then the shop window is back. "Leave"
+// (the window's button, the floating button, Esc) flies the party out. No
+// engine runs and no battle bar or hack panel shows; a dialog closing in
+// here never flies out by itself (onDialogClosed checks `shop`).
+let shop = null;   // { hex, lore, keeper, view } while the party is in a shop's arena
+
+// The Enter key on a shop tile: dive into the shop's arena; at the peak of
+// the clouds the game opens the encounter (game.enter -> the 'shop' event ->
+// openShopArena stands the keeper up).
+function enterShop(hex, resume) {
+  if (!game || cinematic.isActive()) return false;
+  let turnBack = false;
+  return cinematic.flyIn({
+    worldHex: hex,
+    baseColor: renderer.targetColorFor(hex).getHex(),
+    party: game.livingUnits(),
+    enemies: [],
+    seed: game.seed,
+    recipe: hex.recipe ?? null,
+    neighbors: worldNeighborsFor(hex),
+    edges: worldEdgesFor(hex),
+    deployParty: false,
+    // The party arrives as a group, as customers do.
+    partySpread: CONFIG.local.deploy?.maxSpread ?? 2,
+    onSwap: () => {
+      // The wither may have eaten the shop while we were in the air.
+      if (hex.encounter === 'shop') resume();
+      else turnBack = true;
+    },
+    onArrived: () => { if (turnBack || !shop) cinematic.flyOut({}); },
+  });
+}
+
+// The 'shop' event: the shop has opened (its stock is rolled and seen). With
+// the arena on screen, the keeper is stood up and the window waits for a
+// click on it; with no arena (a headless run, a scenario script), the
+// window opens by itself as it always did.
+function openShopArena({ hex, lore }) {
+  if (shop || !cinematic.inArena()) { showDialog({ kind: 'shop', lore }); return; }
+  const view = cinematic.localView;
+  const K = CONFIG.shop.keeper ?? {};
+  const npcs = hex.recipe?.spawns?.npcs ?? [];
+  const pinned = npcs.find((n) => n.id === 'shopkeeper') ?? npcs[0];
+  const keeper = new Shopkeeper({
+    pos: pinned?.key ?? keeperFallbackTile(view),
+    name: t('shop.keeper.name'), icon: K.icon, color: K.color,
+    onOpen: () => { if (shop) showDialog({ kind: 'shop', lore: shop.lore }); },
+  });
+  shop = { hex, lore, keeper, view: createShopView({ view, keeper, onClick: () => keeper.interact(null, {}) }) };
+  window.__shop = shop;   // for the tests
+  document.getElementById('shop-exit')?.classList.remove('hidden');
+}
+
+// A map with no `@shopkeeper` line: the middle tile, or the nearest free
+// ground tile to it.
+function keeperFallbackTile(view) {
+  const taken = new Set([...(view.placement?.partyKeys ?? []), ...(view.placement?.enemyKeys ?? [])]);
+  const tiles = [...view.map.hexes.values()].filter((tt) => (!tt.type || tt.type === 'ground') && !taken.has(tt.key));
+  tiles.sort((a, b) => (a.ring ?? 0) - (b.ring ?? 0));
+  return tiles[0]?.key ?? '0,0';
+}
+
+// Leaving: the window goes, the keeper goes, the party flies back out. The
+// shop is not consumed (it stays on the tile until sold out).
+function leaveShop() {
+  if (!shop) return;
+  const sh = shop;
+  ui.closeDialog();   // still inside the shop: onDialogClosed does not fly out
+  sh.view.dispose();
+  shop = null; window.__shop = null;
+  document.getElementById('shop-exit')?.classList.add('hidden');
+  cinematic.flyOut({});
+}
+
+// Restart / new map while in a shop: drop it, nothing is reported.
+function abortShop() {
+  if (!shop) return;
+  shop.view.dispose();
+  shop = null; window.__shop = null;
+  document.getElementById('shop-exit')?.classList.add('hidden');
+}
+
 // ----- deployment: the player places the party ------------------------------
 // Runs the moment the camera lands in an arena that kept the party off the
 // board. The view owns the cursor decal and the clicks; here we only drive the
@@ -467,7 +760,8 @@ function abortBattle() {
   cinematic.localView.cancelDeployment();
   ui.setDeployBar(null);
   ui.setBattleMode(null);
-  hackBridge.abort();   // EXPERIMENT (src/local/hack/)
+  abortHack();
+  abortShop();
 }
 
 // Starts the dive. The work is split across the two moments the cinematic
@@ -594,11 +888,14 @@ ui = createUI(CONFIG, {
   onMapCodePreview: () => openMapCodeDialog(),
   onEscape: () => {
     if (mapPreview) { endMapPreview(); return; }
+    // In a shop: Esc closes the window first, a second Esc leaves.
+    if (shop) { if (ui.dialogOpen()) ui.closeDialog(); else leaveShop(); return; }
     if (partyView.isOpen()) { partyView.close(); return; }
     if (settings.isOpen()) { settings.close(); ui.updateBlur(); }
   },
   onDialogClosed: () => {
     if (mapPreview) return;   // the preview leaves through its own exit button / Esc
+    if (shop) return;         // the shop leaves through leaveShop (its Leave button, the floating one, Esc)
     const finishEnd = () => { if (pendingEnd && game.state.status !== 'playing' && !tutorial.isBlocking()) { pendingEnd = false; ui.showEnd(game); } };
     // The results window just closed inside the arena: fly back out first.
     // (Not on the start screen - there the arena stays until Begin journey.)
@@ -618,10 +915,11 @@ ui = createUI(CONFIG, {
     game && game.state.status === 'won' && activeScenario?.next && scenarioById(activeScenario.next)
       ? t('end.nextMap') : null),
   onRevealAll: () => game.revealAll(),
-  // Debug: instantly win the fight running on the local map (does nothing outside one).
-  onWinBattle: () => { if (battle) battle.debugResolve(true); },
-  // Undo the fight in progress back to the moment it began (does nothing outside one).
-  onRestartBattle: () => restartBattle(),
+  // Debug: instantly win the encounter running on the local map - a fight or
+  // a hack, whichever is up (does nothing outside one; a shop has no win).
+  onWinEncounter: () => { if (battle) battle.debugResolve(true); else if (hack) hack.debugResolve(true); },
+  // Undo the encounter in progress back to the moment it began (same rule).
+  onRestartEncounter: () => { if (battle) restartBattle(); else if (hack) restartHack(); },
   onEnter: () => {
     if (startScreen) {
       if (!layerRolling && !ui.rosterOpen() && !settings.isOpen()) beginJourney();
@@ -633,9 +931,14 @@ ui = createUI(CONFIG, {
       startCombatDive(game.state.position, () => game.enter(false));
       return;
     }
-    // EXPERIMENT (src/local/hack/): a hack dives into the arena the same way.
+    // A hack dives into the arena the same way (see "the Hack terminal" below).
     if (action.kind === 'encounter' && action.type === HACK_TYPE) {
-      hackBridge.enter(game.state.position, () => game.enter(false));
+      enterHack(game.state.position, () => game.enter(false));
+      return;
+    }
+    // So does a shop (see "the Shop" below).
+    if (action.kind === 'encounter' && action.type === 'shop') {
+      enterShop(game.state.position, () => game.enter(false));
       return;
     }
     game.enter(false);
@@ -644,6 +947,8 @@ ui = createUI(CONFIG, {
 });
 // The map code preview's floating exit button (index.html; shown by startMapPreview).
 document.getElementById('preview-exit')?.addEventListener('click', () => endMapPreview());
+// The shop arena's floating exit button (index.html; shown by openShopArena).
+document.getElementById('shop-exit')?.addEventListener('click', () => leaveShop());
 const tutorial = createTutorial({ config: CONFIG, ui, renderer });
 // The end screen waits for the guide's last card.
 tutorial.setOnIdle(() => { if (pendingEnd && game && game.state.status !== 'playing' && !ui.dialogOpen()) { pendingEnd = false; ui.showEnd(game); } });
@@ -779,7 +1084,7 @@ function startRun(seed, opts = {}) {
   // Fights are played out on the local map. Camera already down in the arena:
   // start straight away. Not there yet (the Nomads event): dive first. Anything
   // in between should not happen; refusing makes the fight auto-resolve safely.
-  game.hackDelegate = (ctx) => hackBridge.delegate(ctx);   // EXPERIMENT (src/local/hack/)
+  game.hackDelegate = (ctx) => hackDelegate(ctx);   // the Hack terminal, below
   game.combatDelegate = (ctx) => {
     if (battle) return false;
     // The arena is on screen, or the dive has passed its swap point and is
@@ -845,6 +1150,7 @@ function startRun(seed, opts = {}) {
       holdDialogsUntil = performance.now() + CONFIG.anim.forcedBannerMs;
     }
     if (type === 'dialog') showDialog(payload);
+    if (type === 'shop') openShopArena(payload);
     if (type === 'change') { renderer.syncState(); ui.update(game); }
     tutorial.onEvent(type, payload, game);
     if (type === 'log') ui.renderLog(game);
@@ -989,22 +1295,29 @@ function showDialog(d) {
       }],
     });
   } else if (d.kind === 'shop') {
-    // The window is built from the shop's own stock (2 guaranteed + random picks).
-    // Sold-out options stay in the list, greyed out, so the player sees what was here.
+    // The shop window: one big CARD per option of the shop's own stock (2
+    // guaranteed + random picks) - icon, name, price, what it does. Sold-out
+    // options keep their card, struck through, so the player sees what was
+    // here; an option that cannot be bought right now is dimmed with the
+    // reason. Opened by a click on the keeper in the shop's arena (the shop
+    // bridge), or straight away when there is no arena.
     const hex = game.state.position;
     const stock = hex.shop ?? { options: [], bought: {} };
+    const reopen = () => showDialog({ kind: 'shop', lore: d.lore });
+    // An option that needs a window of its own REPLACES the shop window
+    // (openDialog swaps the contents) and comes back to it when done.
     const unitOption = (id, filter) => () => ui.chooseUnit({
       title: t(`shop.${id}.title`),
       html: `<p>${t(`shop.${id}.text`, { cost: game.shopCost(id), pct: `${Math.round(CONFIG.acolyte.reviveFraction * 100)}%` })}</p>`,
       filter,
       game,
-      onPick: (i) => { game.shopBuy(id, i); showDialog({ kind: 'shop' }); },
-      skip: { text: t('shop.pick.skip'), onSkip: () => showDialog({ kind: 'shop' }) },
+      onPick: (i) => { game.shopBuy(id, i); reopen(); },
+      skip: { text: t('shop.pick.skip'), onSkip: reopen },
     });
     // Buying an upgrade / the relic pays first, then opens the same upgrade
     // chooser as a battle reward (one pick), and returns to the shop window.
     const upgradeOption = (id) => () => {
-      if (game.shopBuy(id)) askUpgradePick(1, () => showDialog({ kind: 'shop' }));
+      if (game.shopBuy(id)) askUpgradePick(1, reopen);
     };
     const clickFor = {
       upgrade: upgradeOption('upgrade'),
@@ -1019,6 +1332,7 @@ function showDialog(d) {
       pct: `${Math.round(CONFIG.rest.healFraction * 100)}%`, revivePct: `${Math.round(CONFIG.acolyte.reviveFraction * 100)}%`,
       count: CONFIG.events.rumorsCount, r: CONFIG.events.rumorsRadius,
     };
+    const icons = CONFIG.shop.icons ?? {};
     const build = (g) => ({
       title: t('shop.title'),
       // The header names the two numbers a purchase is weighed against. With
@@ -1028,26 +1342,28 @@ function showDialog(d) {
         ? t('shop.text', { supplies: g.state.supplies, fatigue: g.state.fatigue })
         : t('shop.text.supplies', { supplies: g.state.supplies, max: g.state.maxSupplies })
       }</p><span class="muted">${t(g.fatigueEnabled() ? 'shop.note' : 'shop.note.supplies')}</span>`,
-      actions: [
-        ...stock.options.map((id) => {
-          const blocker = g.shopBlocker(hex, id);
-          const sold = blocker === 'sold';
-          return {
-            label: sold ? t('shop.option.sold', { label: t(`shop.${id}.name`) }) : t('shop.option', { label: t(`shop.${id}.name`), cost: g.shopCost(id) }),
-            // A rest's description ends with "resets fatigue", so it goes through
-            // tFatigue; the other options say nothing about fatigue and do not.
-            sub: sold ? t('shop.sold.sub') : blocker === 'useless' ? t(`shop.${id}.useless`)
-              : id === 'rest' ? tFatigue('shop.rest.sub', CONFIG, subParams) : t(`shop.${id}.sub`, subParams),
-            disabled: !!blocker,
-            cls: sold ? 'sold' : '',
-            onClick: clickFor[id] ?? (() => {}),
-          };
-        }),
-        { label: t('shop.leave'), onClick: () => ui.closeDialog() },
-      ],
-      onRefresh: (g2) => ui.openDialog(build(g2)),
+      cards: stock.options.map((id) => {
+        const blocker = g.shopBlocker(hex, id);
+        const sold = blocker === 'sold';
+        return {
+          icon: icons[id] ?? '',
+          name: t(`shop.${id}.name`),
+          price: sold ? t('shop.sold.sub') : t('shop.price', { cost: g.shopCost(id) }),
+          // A rest's description ends with "resets fatigue", so it goes through
+          // tFatigue; the other options say nothing about fatigue and do not.
+          desc: sold ? '' : blocker === 'useless' ? t(`shop.${id}.useless`) : blocker === 'supplies' ? t('shop.noSupplies.sub')
+            : id === 'rest' ? tFatigue('shop.rest.sub', CONFIG, subParams) : t(`shop.${id}.sub`, subParams),
+          sold,
+          disabled: !!blocker,
+          onClick: clickFor[id] ?? (() => {}),
+        };
+      }),
+      // Inside the arena, Leave flies the party out; a window with no arena
+      // behind it simply closes.
+      actions: [{ label: t('shop.leave'), onClick: () => { if (shop) leaveShop(); else ui.closeDialog(); } }],
+      onRefresh: (g2) => ui.chooseShop(build(g2)),
     });
-    ui.openDialog(build(game));
+    ui.chooseShop(build(game));
   } else if (d.kind === 'acolyte') {
     ui.chooseUnit({
       title: t('acolyte.title'),

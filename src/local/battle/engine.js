@@ -46,17 +46,24 @@
 //  three read one play-out of the locks (plus the aim under the cursor) on a
 //  copy of the board in that same order. A `rules` object
 //  (optional) lets an encounter type plug its own end condition and tile
-//  hooks in without the engine knowing about it (the Hack does).
+//  hooks in without the engine knowing about it (the Hack does), and
+//  `entities` (optional) puts an encounter's own OBJECTS on the board -
+//  Entity subclasses (local/battle/entity.js, since 2026-09-24) the engine
+//  handles through their hooks alone: they block tiles, take blows, may be
+//  shoved, die, and get used, each its own way (the Hack's nodes and mines).
+//  Every unit is a Unit, the Entity with agency.
 // =====================================================================
 import { DIRS, K, PK, addK, hexDist, hexLine, rotOff, aimRot, abRotFor, rotDir, boardTiles } from './bhex.js';
-import { abilityById, statusOverridesFor, checkTrigger } from '../../config/abilities.js';
-import { combatStatsFor, tagDefById } from '../../config/entities.js';
+import { abilityById, statusOverridesFor } from '../../config/abilities.js';
+import { tagDefById } from '../../config/entities.js';
 import { parseDamage, hasDamage, damageTotal } from '../../damage.js';
+import { Entity, Unit, HackNode, HackMine } from './entity.js';
 
 export function createBattle({ config, radius, heights, party, enemies, partyKeys, enemyKeys, forced,
                                partyDamageMod = 0, deferOpening = false, voidEdgeKeys = [],
                                wallKeys = [], etherKeys = [], startTags = [],
                                rng = Math.random, noFlee = false, instant = false,
+                               entities = [],
                                supplies = null, rules = null, tags = null,
                                onChange, onFloater, onLog, onAnim, onEnd, onUnitDeath, onUnitFlee }) {
   const CFG = config.combat;
@@ -101,7 +108,11 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
 
   // ----- battle state (hex-box `sb`) -----------------------------------
   const sb = {
-    units: [], uidc: 0, tags: {}, heights: { ...heights },
+    // The board's ENTITIES (local/battle/entity.js): `units` are the Units -
+    // the party and the enemies, what the player and the AI control - and
+    // `objects` everything else an encounter puts on the board (the Hack's
+    // nodes and mines), handled through the Entity hooks alone.
+    units: [], objects: [], uidc: 0, tags: {}, heights: { ...heights },
     round: 1, phase: 'player', activeUid: null,
     enemyQ: [], eqi: 0, selAb: null, aimMap: null, reach: null,
     // Inspecting an ENEMY: purely a readout, it changes nothing about the turn.
@@ -136,7 +147,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // never reports - and once per unit.
   const deathReported = new Set();
   function noteDeath(st, u, tileK, cause) {
-    if (!st || st.sim || !u || u.uid === undefined || deathReported.has(u.uid)) return;
+    if (!st || st.sim || !u || !u.isUnit || deathReported.has(u.uid)) return;
     deathReported.add(u.uid);
     const spot = {
       uid: u.uid, name: u.name, icon: u.icon ?? null,
@@ -147,47 +158,8 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     if (onUnitDeath) onUnitDeath(spot);
   }
 
-  function makeInstance(def, isEnemy, pos, i) {
-    // The definition wins where it has an opinion: a bestiary row carries its
-    // own init / speed / flying / abilities (config/entities.js), so a creature
-    // invented in the Settings window fights as written instead of falling
-    // through to party.defaultCombat, the nameless fallback. The party, and any older
-    // hand-authored def, still reads the table by name.
-    const cs = combatStatsFor(def.name);
-    return {
-      uid: 's' + i, name: def.name, icon: def.icon ?? null,
-      // Enemies only: the enemy queue sorts by it. Party rows carry no init
-      // (removed 2026-09-06), so a character lands on 0 and nothing reads it.
-      init: def.init ?? cs.init ?? 0,
-      speed: def.speed ?? cs.speed,
-      flying: !!(def.flying ?? cs.flying),
-      maxHp: def.maxHp ?? def.hp, hp: def.hp,
-      abilityIds: [...(def.abilityIds?.length ? def.abilityIds : cs.abilities)],
-      abilityDefs: def.abilityDefs ?? null,
-      // TRIGGERS the unit walked in with, as [{ statusEffect, when, statusEffectOverride }]: a party
-      // unit's from triggersFor in src/upgrades.js (already parsed), an enemy's
-      // straight off its bestiary row (still as written - parsed here, so the
-      // two arrive in one shape). Fixed for this fight: none of the sources can
-      // change during one, and the set is worked out afresh when the next fight
-      // starts. Each fires at its moment (fireMoment) and from then on the status
-      // sits in `status` below like any other - nothing reads this list for a
-      // rule, only for the moments.
-      triggers: (def.triggers ?? []).map((e) => checkTrigger(e)).filter(Boolean),
-      pos, isEnemy, idx: i, partyIndex: def.partyIndex ?? null,
-      // The LOCKED aim (lockedAim flow): { abId, anchor, rk, tiles } or null.
-      lock: null,
-      startPos: pos, moveLocked: false, done: false, tagTicked: false,
-      // Movement points already spent on ABILITY COSTS this round. Walking is
-      // not counted here: a walk is re-measured from startPos every time and can
-      // be taken back, so it has no running total to keep. This is the part that
-      // cannot be taken back, and it comes off the budget (see moveBudget).
-      movePaid: 0,
-      status: {}, summoned: false,
-      // INTELLECT CLASS (config.intellect): which facts this creature can weigh on
-      // its turn. Anything hand-authored without one is treated as the dimmest.
-      intellect: def.intellect ?? 'C',
-    };
-  }
+  // The units: Unit instances (local/battle/entity.js) built from the defs.
+  const makeInstance = (def, isEnemy, pos, idx) => new Unit(def, { isEnemy, pos, idx });
   let i = 0;
   party.forEach((def, pi) => { if (partyKeys[pi]) sb.units.push(makeInstance({ ...def, partyIndex: def.partyIndex ?? pi }, false, partyKeys[pi], i++)); });
   enemies.forEach((def, ei) => { if (enemyKeys[ei]) sb.units.push(makeInstance(def, true, enemyKeys[ei], i++)); });
@@ -220,6 +192,13 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // Pre-built tag INSTANCES from the caller (an encounter's own kinds of tag,
   // outside COMBAT_TAGS - the Hack's nodes and mines), keyed by tile.
   if (tags) for (const [k, inst] of Object.entries(tags)) if (tilePass(k) && !sb.tags[k]) sb.tags[k] = inst;
+  // The encounter's OBJECTS: pre-built Entity instances (never Units - those
+  // come in as party / enemies), each on its own free tile.
+  for (const e of entities ?? []) {
+    if (!(e instanceof Entity) || e.isUnit || !e.pos || !tilePass(e.pos)) continue;
+    if (sb.units.some((u) => u.pos === e.pos) || sb.objects.some((o) => o.pos === e.pos)) continue;
+    sb.objects.push(e);
+  }
   // An encounter's rules get the state before anything happens on it.
   if (rules && rules.attach) rules.attach(sb);
 
@@ -227,6 +206,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   const sbH = (k) => sb.heights[k] ?? 0;
   const alive = (f) => sb.units.filter((u) => u.hp > 0 && (f === undefined || u.isEnemy === f));   // fled units carry hp 0, so they drop out here too
   const unitAt = (k) => sb.units.find((u) => u.hp > 0 && u.pos === k);
+  const objectAt = (k) => sb.objects.find((o) => o.alive && o.pos === k);
   const curP = () => sb.units.find((u) => u.uid === sb.activeUid && !u.isEnemy && u.hp > 0);
   const speedFloor = (u) => Math.min(u.speed, CFG.minSpeed);
   const effSpeed = (u) => Math.max(speedFloor(u), u.speed + statusSum(u, 'speed'), 0);
@@ -350,7 +330,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // sHit so that one row (`ignoresImpact`, see the status table) can wave a kind
   // of it away for whoever holds it.
   function sImpact(st, ent, amt, label) {
-    if (ent && ent.uid !== undefined && ent.hp > 0) {
+    if (ent && ent.isUnit && ent.hp > 0) {
       for (const id of carriedIds(ent)) {
         const list = statusField(ent, id, 'ignoresImpact');
         if (Array.isArray(list) && list.includes(label)) {
@@ -380,7 +360,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // one full activation with it.
   function applyStatus(st, u, id, override) {
     const def = statusDef(id);
-    if (!def || !u || u.uid === undefined || u.hp <= 0) return;
+    if (!def || !u || !u.isUnit || u.hp <= 0) return;
     // Only the fields the override names change; everything else keeps the
     // number the table wrote (config/abilities.js, statusOverridesFor).
     const over = statusOverridesFor(def, override);
@@ -523,24 +503,26 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   const dmgMod = (c) => (c && c.isEnemy === false ? -partyDamageMod : 0);
 
   // ----- live / simulated effect state (hex-box 10-battle-effects) -------
-  function liveSt() { return { sim: false, units: sb.units, tags: sb.tags, heights: sb.heights, deathQueue: sb.deathQueue, rec: null }; }
+  function liveSt() { return { sim: false, units: sb.units, objects: sb.objects, tags: sb.tags, heights: sb.heights, deathQueue: sb.deathQueue, rec: null }; }
   function simSt(blind) {
     return { sim: true, blind: blind || null,
-      units: sb.units.map((u) => ({ uid: u.uid, isEnemy: u.isEnemy, flying: u.flying, hp: u.hp, maxHp: u.maxHp, pos: u.pos,
-        // the whole status bag, copied one level deep - forgetting this is what used
-        // to make the AI simulate a board it could not actually see
-        status: Object.fromEntries(Object.entries(u.status || {}).map(([id, v]) => [id, { ...v }])),
-        // the triggers too (shared, never written), so a 'hit' moment fires in the
-        // simulation exactly as it would on the real board and the AI sees the
-        // status its hit would trigger
-        triggers: u.triggers })),
+      // Every entity copied by its own clone() (a unit's status bag one level
+      // deep - forgetting that is what used to make the AI simulate a board it
+      // could not actually see; an object's own state as its class sees fit).
+      units: sb.units.map((u) => u.clone()),
+      objects: sb.objects.map((o) => o.clone()),
       tags: Object.fromEntries(Object.entries(sb.tags).map(([k, t]) => [k, { ...t }])),
       heights: { ...sb.heights }, deathQueue: [],
       rec: { dmg: {}, moved: {}, killed: {}, applied: {}, stripped: {}, voided: {}, tmoved: {}, tkilled: {} } };
   }
   const stH = (st, k) => st.heights[k] ?? 0;
   const sUnitAt = (st, k) => st.units.find((u) => u.hp > 0 && u.pos === k);
+  const sObjectAt = (st, k) => st.objects.find((o) => o.alive && o.pos === k);
   const sBarrier = (st, k) => { const t = st.tags[k]; return t && t.hp > 0 ? t : null; };
+  // What an Entity hook is handed (see entity.js): the board the blow lands
+  // on, whether it is a simulation, who struck, and ways to say so.
+  const hookCtx = (st, label = '') => ({ st, sim: !!st.sim, caster: st.csr ?? null, cast: st.cast ?? null, label,
+    floater: st.sim ? () => {} : floater, log: st.sim ? () => {} : blog });
 
   // `quiet` skips the floater and the log line (a multi-hit ability reports its
   // hits as one). Returns { dealt, blocked } so the caller can add them up.
@@ -548,7 +530,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     if (amt <= 0 || !v) return { dealt: 0, blocked: false };
     pre = pre || '';
     const atk = st.atk ? st.atk + ' -> ' : '';
-    if (v.uid !== undefined) {
+    if (v.isUnit) {
       if (v.hp <= 0) return { dealt: 0, blocked: false };
       // A status that BLOCKS eats the whole hit. That is not a wasted swing: it
       // spends the status, and the sim records the strip (st.rec.stripped) so the AI
@@ -568,8 +550,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       }
       // Statuses that change how much damage this unit TAKES (vulnerable, fortified).
       amt = Math.max(1, Math.round(amt * statusMul(v, 'damageTaken')));
-      const dealt = Math.min(amt, v.hp);
-      v.hp = Math.max(0, v.hp - amt);
+      const dealt = v.takeDamage(amt, hookCtx(st, label));
       if (st.sim) { st.rec.dmg[v.uid] = (st.rec.dmg[v.uid] || 0) + amt; if (v.hp <= 0) st.rec.killed[v.uid] = 1; }
       else {
         if (!quiet) { floater(v.pos, pre + '-' + amt + (label ? ' ' + label : ''), '#ff5d73'); blog(atk + v.name + ': -' + amt + (label ? ' ' + label : '')); }
@@ -578,6 +559,15 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       // The 'hit' moment: hp was actually lost (a blocked hit returned above).
       // A unit that just died gets nothing - applyStatus refuses the dead.
       fireMoment(st, v, 'hit');
+      return { dealt, blocked: false };
+    } else if (v instanceof Entity) {
+      // An OBJECT: its class decides what a blow does to it (entity.js). In a
+      // simulation too - it acts on the copy, so the forecast reads it right.
+      if (!v.alive) return { dealt: 0, blocked: false };
+      const dealt = v.takeDamage(amt, hookCtx(st, label));
+      if (st.sim) { st.rec.dmg[v.uid] = (st.rec.dmg[v.uid] || 0) + dealt; if (!v.alive) st.rec.killed[v.uid] = 1; }
+      else if (!quiet) { floater(v.pos, pre + '-' + dealt + (label ? ' ' + label : ''), '#ffd75f'); blog(atk + v.name + ': -' + dealt + (label ? ' ' + label : '')); }
+      if (!v.alive) { if (!st.sim) blog(v.name + ' is destroyed'); v.onDeath(hookCtx(st, label)); }
       return { dealt, blocked: false };
     } else {
       if (v.hp <= 0) return { dealt: 0, blocked: false };
@@ -609,18 +599,18 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       dealt += r.dealt; hits++;
     }
     if (!st.sim) {
-      const at = tgt.uid !== undefined ? tgt.pos : tgt.k;
+      const at = tgt.pos ?? tgt.k;
       const atk = st.atk ? st.atk + ' -> ' : '';
       if (blocked && hits === 0) { floater(at, (pre || '') + 'BLOCKED', '#5fc7e0'); blog(atk + tgt.name + ': blocked'); }
       else {
-        floater(at, `${pre || ''}-${dealt} (${base}x${hits}${label ? ' ' + label : ''})`, tgt.uid !== undefined ? '#ff5d73' : '#ffd75f');
+        floater(at, `${pre || ''}-${dealt} (${base}x${hits}${label ? ' ' + label : ''})`, tgt.isUnit ? '#ff5d73' : '#ffd75f');
         blog(`${atk}${tgt.name}: -${dealt} (${base} x ${hits}${label ? ' ' + label : ''})`);
       }
     }
     return { dealt, blocked };
   }
   function sHeal(st, v, amt) {
-    if (amt <= 0 || !v || v.uid === undefined || v.hp <= 0) return;
+    if (amt <= 0 || !v || !v.isUnit || v.hp <= 0) return;
     const g = Math.min(amt, v.maxHp - v.hp);
     v.hp += g;
     if (st.sim) st.rec.dmg[v.uid] = (st.rec.dmg[v.uid] || 0) - g;
@@ -629,7 +619,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // Crashes and falls stun; so does any ability with statusEffect: 'stun'. All of them come
   // through here, and what "stunned" DOES is the table's business, not this line's.
   function sStun(st, v) {
-    if (!v || v.uid === undefined || v.hp <= 0) return;
+    if (!v || !v.isUnit || v.hp <= 0) return;
     applyStatus(st, v, 'stun');
     if (st.sim) return;
     blog(v.name + ' is stunned');
@@ -642,7 +632,15 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   }
   function sVoid(st, ent) {
     if (!ent || ent.hp <= 0) return;
-    if (ent.uid !== undefined) {
+    if (ent instanceof Entity && !ent.isUnit) {
+      // An object over the edge: gone, its class told.
+      ent.hp = 0;
+      if (st.sim) st.rec.killed[ent.uid] = 1;
+      else { floater(ent.pos, '🕳 ' + ent.name, '#c66dff'); blog(ent.name + ' falls into the void'); }
+      ent.onDeath(hookCtx(st, 'void'));
+      return;
+    }
+    if (ent.isUnit) {
       if (st.sim) {
         // The hole is always lethal; it is only an OPPORTUNITY to a mind that can
         // weigh it. A blind one records the shove and none of its worth.
@@ -662,11 +660,11 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     }
   }
   function sMoveTo(st, ent, k) {
-    if (ent.uid !== undefined) { ent.pos = k; if (st.sim) st.rec.moved[ent.uid] = k; }
+    if (ent instanceof Entity) { ent.pos = k; if (st.sim) st.rec.moved[ent.uid] = k; }
     else { if (st.tags[ent.k] === ent) delete st.tags[ent.k]; ent.k = k; st.tags[k] = ent; if (st.sim) st.rec.tmoved[ent.tid] = k; }
   }
   function sArrive(st, u, depth = 0) {
-    if (!u || u.uid === undefined || u.hp <= 0) return;
+    if (!u || !u.isUnit || u.hp <= 0) return;
     const t = st.tags[u.pos];
     if (t && t.collectible && t.hp <= 0) {
       delete st.tags[u.pos];
@@ -676,7 +674,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   }
   function sPush(st, ent, dir, depth = 0) {
     if (depth > 8) return;
-    const isU = ent.uid !== undefined;
+    const isU = !!ent.isUnit;
     if (isU && ent.hp > 0) {
       const c = st.csr;
       const hostile = !c || c.isEnemy === undefined || c.isEnemy !== ent.isEnemy;
@@ -688,29 +686,30 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
         return;
       }
     }
-    const k = isU ? ent.pos : ent.k;
+    const k = ent instanceof Entity ? ent.pos : ent.k;
     const nk = addK(k, DIRS[dir]);
     if (isVoid(nk)) { sVoid(st, ent); return; }
     const wall = !tilePass(nk) || (stH(st, nk) - stH(st, k) >= 2);
     if (wall) { sImpact(st, ent, 2, 'crash'); return; }
-    const occ = sUnitAt(st, nk) || sBarrier(st, nk);
+    const occ = sUnitAt(st, nk) || sObjectAt(st, nk) || sBarrier(st, nk);
     const drop = stH(st, k) - stH(st, nk);
     if (occ) {
       if (drop >= 2) {
         sImpact(st, occ, 2, 'crush'); sStun(st, occ);
-        const saved = occ.uid !== undefined && st.shieldUsed && st.shieldUsed.has(occ.uid);
+        const saved = occ.isUnit && st.shieldUsed && st.shieldUsed.has(occ.uid);
         if (occ.hp > 0 && !saved) {
           const nk2 = addK(nk, DIRS[dir]);
-          const room = isVoid(nk2) || (tilePass(nk2) && (stH(st, nk2) - stH(st, nk) < 2) && !sUnitAt(st, nk2) && !sBarrier(st, nk2));
-          if (room) sPush(st, occ, dir, depth + 1);
-          else if (occ.uid !== undefined) {
+          const room = isVoid(nk2) || (tilePass(nk2) && (stH(st, nk2) - stH(st, nk) < 2) && !sUnitAt(st, nk2) && !sObjectAt(st, nk2) && !sBarrier(st, nk2));
+          // (An object that cannot be pushed is crushed where it stands, like a barrier.)
+          if (room && !(occ instanceof Entity && !occ.pushable)) sPush(st, occ, dir, depth + 1);
+          else if (occ.isUnit) {
             if (st.sim) { st.rec.dmg[occ.uid] = (st.rec.dmg[occ.uid] || 0) + occ.hp; st.rec.killed[occ.uid] = 1; }
             else { floater(nk, 'CRUSHED', '#ff5d73'); blog(occ.name + ' is crushed flat'); }
             noteDeath(st, occ, nk, 'crush');
             occ.hp = 0;
           } else sHit(st, occ, 999, '');
         }
-        const blocked = sUnitAt(st, nk) || sBarrier(st, nk);
+        const blocked = sUnitAt(st, nk) || sObjectAt(st, nk) || sBarrier(st, nk);
         if (blocked) {
           sImpact(st, ent, 2, 'crash');
         } else if (ent.hp > 0) {
@@ -730,7 +729,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   function sPushCorpse(st, ent, dir) {
     const k = ent.pos, nk = addK(k, DIRS[dir]);
     if (!tilePass(nk) || (stH(st, nk) - stH(st, k) >= 2)) return;
-    const occ = sUnitAt(st, nk) || sBarrier(st, nk);
+    const occ = sUnitAt(st, nk) || sObjectAt(st, nk) || sBarrier(st, nk);
     if (occ) sImpact(st, occ, 2, 'crash');
   }
   function flushDeaths(st, depth = 0) {
@@ -745,8 +744,9 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // The cast pipeline: damage/heal/status -> pushes -> heights -> tags -> spawns -> dash.
   function resolveCast(st, caster, ab, targetK, depth = 0) {
     if (!ab || depth > 6) return;
-    const prevAtk = st.atk, prevCsr = st.csr, prevSU = st.shieldUsed;
+    const prevAtk = st.atk, prevCsr = st.csr, prevSU = st.shieldUsed, prevCast = st.cast;
     st.csr = caster; st.shieldUsed = new Set();
+    st.cast = { caster, ab };   // this cast's token, for an Entity that counts attacks (hookCtx)
     if (caster.name) st.atk = caster.name;
     if (!st.sim && caster.name) blog(caster.name + ' casts ' + ab.name);
     const rk = abRotFor(ab, caster.pos, targetK);
@@ -762,12 +762,12 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     if (abDmg.base > 0) spendStatus(st, caster, 'attack');
     for (const off of ab.dmgZone) {
       const dt = addK(targetK, rotOff(off, rk)); if (!tilePass(dt)) continue;
-      const u = sUnitAt(st, dt), bt = sBarrier(st, dt);
+      const u = sUnitAt(st, dt), ob = sObjectAt(st, dt), bt = sBarrier(st, dt);
       // A HAZARD tag under a hex of the pattern (the Hack's mines): the rules
       // hear about it whether or not anything stands there. Real casts only.
       const hz = st.tags[dt];
       if (hz && hz.hp <= 0 && !st.sim && rules && rules.onHazardHit) rules.onHazardHit(st, hz, caster, dt, ab);
-      const tgt = u || bt;
+      const tgt = u || ob || bt;
       if (!tgt) { if (!st.sim) floater(dt, '✸', ab.color); continue; }
       if (abDmg.base > 0) {
         // Everything below changes the BASE - every one of the ability's hits.
@@ -816,12 +816,14 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       const dist = (o[3] || 1) >= 2 ? 2 : 1;
       const u = sUnitAt(st, dt);
       if (u) { shoves.push({ ent: u, dir: rd, dist }); continue; }
+      const ob = sObjectAt(st, dt);
+      if (ob) { if (ob.pushable) shoves.push({ ent: ob, dir: rd, dist }); continue; }
       const corpse = st.units.find((x) => x.hp <= 0 && !x.fled && x.pos === dt && preAlive.has(x.uid));
       if (corpse) { sPushCorpse(st, corpse, rd); continue; }
       const t = st.tags[dt]; if (t && t.hp > 0 && t.pushable) shoves.push({ ent: t, dir: rd, dist });
     }
     const maxDist = shoves.reduce((m, s) => Math.max(m, s.dist), 0);
-    const posOf = (e) => (e.uid !== undefined ? e.pos : e.k);
+    const posOf = (e) => (e instanceof Entity ? e.pos : e.k);
     const stepOne = (s) => {
       s.pending = false;
       if (s.ent.hp <= 0) { s.stopped = true; return; }
@@ -856,7 +858,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       const d = tagDefById(ab.tagId);
       if (d) for (const off of ab.tagZone) {
         const dt = addK(targetK, rotOff(off, rk)); if (!tilePass(dt)) continue;
-        if (d.hp > 0 && (sUnitAt(st, dt) || sBarrier(st, dt))) continue;
+        if (d.hp > 0 && (sUnitAt(st, dt) || sObjectAt(st, dt) || sBarrier(st, dt))) continue;
         st.tags[dt] = tagInst(d, ab.tagId, dt);
         if (d.collectible && d.hp <= 0) { const u = sUnitAt(st, dt); if (u) sArrive(st, u, depth); }
       }
@@ -868,7 +870,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     // This runs LAST on purpose. The shoves in step 2 have already resolved, so a
     // charge aimed at an enemy lands on the enemy's tile when the ram cleared it,
     // and pulls up short of it when it did not.
-    if (ab.moveToTarget && caster.uid !== undefined && caster.hp > 0 && caster.pos !== targetK) {
+    if (ab.moveToTarget && caster.isUnit && caster.hp > 0 && caster.pos !== targetK) {
       const land = dashLanding(st, caster, targetK);
       if (land !== caster.pos) {
         sMoveTo(st, caster, land);
@@ -880,7 +882,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
         flushDeaths(st, depth);
       }
     }
-    st.atk = prevAtk; st.csr = prevCsr; st.shieldUsed = prevSU;
+    st.atk = prevAtk; st.csr = prevCsr; st.shieldUsed = prevSU; st.cast = prevCast;
   }
 
   // ----- per-activation terrain tag tick ---------------------------------
@@ -901,6 +903,9 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     const hard = new Set(), soft = new Set();
     for (const o of sb.units) { if (o.hp <= 0 || o === u) continue; ((!u.flying && o.isEnemy !== u.isEnemy) ? hard : soft).add(o.pos); }
     for (const k in sb.tags) { if (sb.tags[k].hp > 0) (u.flying ? soft : hard).add(k); }
+    // An object that blocks stands like a barrier: a wall to a walker, a
+    // no-stopping tile to a flier.
+    for (const o of sb.objects) { if (o.blocks(u)) (u.flying ? soft : hard).add(o.pos); }
     const spd = cap !== undefined ? cap : moveBudget(u);
     const d = { [fromK]: 0 }, prev = {};
     const pq = [[0, fromK]];
@@ -922,7 +927,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   const canStop = (res, k) => res.d[k] !== undefined && !res.occ.has(k);
   function approachField(u) {
     const hard = new Set();
-    if (!u.flying) for (const k in sb.tags) if (sb.tags[k].hp > 0) hard.add(k);
+    if (!u.flying) { for (const k in sb.tags) if (sb.tags[k].hp > 0) hard.add(k); for (const o of sb.objects) if (o.blocks(u)) hard.add(o.pos); }
     const d = {}, pq = [];
     for (const p of alive(false)) { d[p.pos] = 0; pq.push([0, p.pos]); }
     while (pq.length) {
@@ -1002,6 +1007,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       if (!tilePass(k)) break;
       const t = st.tags[k];
       if (t && t.hp > 0) break;                       // a solid tag blocks like a wall
+      if (sObjectAt(st, k)) break;                    // so does an object
       const o = sUnitAt(st, k);
       if (o && o.uid !== caster.uid) break;           // someone is still standing there
       last = k;
@@ -1801,7 +1807,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     // Play the volley out on a copy for the actual result.
     const st = simSt(null);
     st.overlap = {};
-    const snapshot = () => Object.fromEntries(st.units.map((x) => [x.uid, { pos: x.pos, hp: x.hp }]));
+    const snapshot = () => Object.fromEntries([...st.units, ...st.objects].map((x) => [x.uid, { pos: x.pos, hp: x.hp }]));
     let before = null;
     for (const cst of casts) {
       if (!before && cIdx >= 0 && order.indexOf(cst.u) >= cIdx) before = snapshot();
@@ -1824,7 +1830,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     const sim = simulateVolley(hoverKey);
     if (!sim) return null;
     const after = {};
-    for (const x of sim.st.units) after[x.uid] = { pos: x.pos, hp: x.hp, dead: x.hp <= 0 };
+    for (const x of [...sim.st.units, ...sim.st.objects]) after[x.uid] = { pos: x.pos, hp: x.hp, dead: x.hp <= 0 };
     return { before: sim.before, after };
   }
   function previewTotals(hoverKey = null) {
@@ -1840,6 +1846,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       const raw = e.parts.reduce((s, p) => s + p.dmg * p.times, 0);
       const total = e.parts.reduce((s, p) => s + p.total, 0);
       const unit = unitAt(k);
+      const obj = objectAt(k);
       const tag = sb.tags[k];
       let target = null, dealt = 0, over = 0;
       if (unit) {
@@ -1847,6 +1854,11 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
         dealt = Math.max(0, unit.hp - (su ? su.hp : 0));
         over = Math.max(0, total - unit.hp);
         target = { kind: unit.isEnemy ? 'enemy' : 'party', name: unit.name, uid: unit.uid, hp: unit.hp, maxHp: unit.maxHp, blocked: !!statusWith(unit, 'blocks') };
+      } else if (obj) {
+        const so = st.objects.find((x) => x.uid === obj.uid);
+        dealt = Math.max(0, obj.hp - (so ? so.hp : 0));
+        over = Math.max(0, total - obj.hp);
+        target = { kind: 'object', name: obj.name, uid: obj.uid, hp: obj.hp, maxHp: obj.maxHp, ent: obj };
       } else if (tag && tag.hp > 0) {
         const stt = st.tags[k];
         dealt = tag.hp - (stt && stt.tid === tag.tid ? stt.hp : 0);
@@ -1878,6 +1890,16 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       const dead = su.hp <= 0;
       if (su.pos === u.pos && !dead) continue;
       out.push({ kind: 'unit', uid: u.uid, name: u.name, icon: u.icon ?? null, isEnemy: !!u.isEnemy, from: u.pos, to: su.pos, dead, voided: !!(st.rec && st.rec.voided[u.uid]) });
+    }
+    // Objects that MOVE too (a shoved barrel): the arena draws them as it
+    // draws a moved barrier - an icon ghost, a burst where it breaks. An
+    // object that only dies where it stands is not listed: what it loses is
+    // its own drawing's to show (the Hack's discs go dark), see previewState.
+    for (const o of sb.objects) {
+      if (!o.alive) continue;
+      const so = st.objects.find((x) => x.uid === o.uid);
+      if (!so || so.pos === o.pos) continue;
+      out.push({ kind: 'object', uid: o.uid, name: o.name, icon: o.icon ?? null, from: o.pos, to: so.pos, dead: !so.alive, destroyed: !so.alive, voided: false });
     }
     const after = new Map();
     for (const k of Object.keys(st.tags)) after.set(st.tags[k].tid, k);
@@ -1960,4 +1982,86 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     fireOrder: () => sb.fireOrder.slice(),
     orderedParty,
   };
+}
+
+// =====================================================================
+//  THE HACK'S RULES (the Hack terminal, config.hack; since 2026-09-24 part
+//  of this file). A `rules` object for createBattle - it reads the public
+//  state and nothing of the engine's insides, exactly as any encounter's
+//  rules would: the TURN BUDGET, the BADGE GRADING and the count of nodes.
+//    attach(sb)                                       the state, before play
+//    onTurnFired(sb, summary)                         the party's locks all fired
+//    checkEnd(sb) -> 'win' | 'lose' | null            replaces last-side-standing
+//    decoratePreview(entry, sb)                       a note on a previewTotals entry
+//    debugResolve(sb, won)                            the menu's instant win
+//  The NODES and MINES themselves are Entity classes (entity.js): what a
+//  blow does to a node, what a mine costs the caster, is theirs. A node tells
+//  these rules when it goes down (its onCleared callback, wired by main.js
+//  to nodeCleared), and the badges follow.
+//    * Every node brought to 0 hp counts as CLEARED. The badges (H.badges)
+//      light up as the cleared count reaches each threshold.
+//    * The encounter ends by itself after the H.turns-th volley: a WIN with
+//      as many reward options as badges earned, a LOSS (no reward) with none.
+//      Clearing every node on the board ends it early, as a win.
+// =====================================================================
+export function createHackRules(H, { onFloater } = {}) {
+  let sb = null;
+  const floater = (k, text, color) => onFloater && onFloater(k, text, color);
+  const x = () => sb.ext.hack;
+  const badgesFor = (cleared) => H.badges.filter((t) => cleared >= t).length;
+  const nodesOf = (state) => state.objects.filter((o) => o instanceof HackNode);
+
+  const rules = {
+    // The rules' own state lives on the engine's state (sb.ext.hack), where
+    // the view can read it.
+    attach(state) {
+      sb = state;
+      sb.ext.hack = {
+        turns: H.turns,
+        cleared: 0,              // nodes brought down
+        badges: 0,               // badges earned so far (thresholds in H.badges)
+        total: nodesOf(state).length,   // nodes the board started with
+        lastTurn: null,          // { round, cleared } of the volley just fired
+        firedRound: 0,           // the round whose volley fired last
+        turnCleared: 0,
+      };
+    },
+    // A node went down (HackNode.onDeath -> its onCleared; the bridge wires
+    // it to this). Real deaths only: a simulation's copy dies quietly.
+    nodeCleared(node, ctx) {
+      if (!sb || (ctx && ctx.sim) || node.counted) return;
+      node.counted = true;
+      const h = x();
+      h.cleared++; h.turnCleared++;
+      const before = h.badges;
+      h.badges = badgesFor(h.cleared);
+      floater(node.pos, `node ${h.cleared}${h.badges > before ? ` - badge ${h.badges}!` : ''}`, h.badges > before ? '#ffd166' : '#8fe0b8');
+    },
+    onTurnFired(state) {
+      const h = x();
+      h.firedRound = state.round;
+      h.lastTurn = { round: state.round, cleared: h.turnCleared };
+      h.turnCleared = 0;
+    },
+    checkEnd(state) {
+      const h = state.ext.hack;
+      if (!h) return null;
+      const nodesLeft = nodesOf(state).some((n) => n.alive);
+      if (h.firedRound >= H.turns || (!nodesLeft && h.firedRound > 0)) return h.badges > 0 ? 'win' : 'lose';
+      return null;
+    },
+    // A previewTotals entry over a mine: what it costs the caster. (Nothing
+    // draws it since the damage billboards went on 2026-09-22; the tests read it.)
+    decoratePreview(entry) {
+      const t = entry.target;
+      if (t && t.kind === 'object' && t.ent instanceof HackMine) entry.note = { text: `-${t.ent.damage} hp`, color: '#ff5d73' };
+    },
+    debugResolve(state, won) {
+      const h = state.ext.hack;
+      h.cleared = won ? Math.max(...H.badges) : 0;
+      h.badges = badgesFor(h.cleared);
+      h.firedRound = H.turns;
+    },
+  };
+  return rules;
 }

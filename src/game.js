@@ -121,14 +121,15 @@ export class Game {
       if (h.encounter === 'shop' && !h.shop) h.shop = this.rollShopStock();
     }
 
-    // Shop arenas (config.craftedMaps.shop): some shop tiles get an authored map
-    // code, stored for a shop flow that does not open a local map yet. Rolled on
-    // a rng of its OWN, after every other generation roll, so tuning the rate
-    // never reshuffles the map, the fights or the shop stock of an existing
-    // seed. Scenario maps are authored already and skip this entirely. (Battle
-    // tiles do not roll here any more: since 2026-09-16 every fight takes its
-    // map from config.battleMaps in the loop above.)
-    if (!scenario) this.assignShopMaps();
+    // Shop arenas (config.craftedMaps.shop): every shop tile gets one of the
+    // authored shop maps - entering the shop dives into it (main.js's shop
+    // bridge). Rolled on a rng of its OWN, after every other generation
+    // roll, so adding a map never reshuffles the fights or the shop stock of
+    // an existing seed. A scenario's authored shop tiles roll one too unless
+    // the scenario gave them a recipe of their own. (Battle tiles do not
+    // roll here: since 2026-09-16 every fight takes its map from
+    // config.battleMaps in the loop above.)
+    this.assignShopMaps();
 
     this.map.start.visited = true;
     this.reveal(this.map.start.q, this.map.start.r, run.revealStartRadius, true);
@@ -139,18 +140,18 @@ export class Game {
   }
 
   // ----- shop arenas ---------------------------------------------------
-  // Rolls which shop tiles carry an authored map code (config.craftedMaps.shop:
-  // rate + map list). Stored only - the shop flow does not open a local map
-  // yet. A code that fails to parse is skipped with a console warning: a typo
-  // in a config map must never take the run down with it. (Until 2026-09-16
-  // this also rolled which BATTLE tiles used a crafted map instead of the
-  // random arena; every battle is a crafted map now, see the constructor.)
+  // Gives every shop tile one of the authored shop map codes
+  // (config.craftedMaps.shop.maps) as its recipe - the arena the shop opens
+  // on. A code that fails to parse is skipped with a console warning: a typo
+  // in a config map must never take the run down with it (that shop then
+  // opens on flat ground). (Until 2026-09-24 only a fraction of the shops
+  // rolled a map, by a `rate`; a shop did not open a local map at all.)
   assignShopMaps() {
     const set = this.config.craftedMaps?.shop;
     if (!set?.maps?.length) return;
     const rng = createRng((this.seed ^ 0x5eedca) >>> 0);
     for (const h of this.map.hexes.values()) {
-      if (h.encounter !== 'shop' || !rng.chance(set.rate ?? 0)) continue;
+      if (h.encounter !== 'shop' || h.recipe) continue;
       const recipe = recipeFromCode(rng.pick(set.maps), this.config);
       if (recipe.errors.length) {
         console.warn(`crafted map "${recipe.id}" skipped:`, recipe.errors.join('; '));
@@ -610,9 +611,8 @@ export class Game {
       case 'stasisColony':
         return this.startCombat(hex, forced);
       case 'hack':
-        // EXPERIMENT (src/local/hack/, see DESIGN.md "The Hack encounter"): played
-        // out by the hack bridge; this branch is one of the few lines outside
-        // that folder and goes with it.
+        // The Hack terminal (config.hack): played out in the arena by main.js's
+        // hack bridge, see startHack below.
         return this.startHack(hex);
       case 'treasure': {
         this.consume(hex, type, forced);
@@ -632,11 +632,16 @@ export class Game {
         return true;
       }
       case 'shop':
-        // The shop stays on the tile and can be revisited. Buying happens via shopBuy().
-        // From the first visit on, the tile's hover text lists what the shop still sells.
+        // The shop stays on the tile and can be revisited. Buying happens via
+        // shopBuy(). From the first visit on, the tile's hover text lists what
+        // the shop still sells. The `shop` event is the encounter opening:
+        // main.js's shop bridge has the party in the shop's arena by now
+        // (the dive) and stands the keeper up; the window itself opens when
+        // the keeper is clicked. (Until 2026-09-24 this was a dialog straight
+        // off the world map.)
         if (!hex.shop) hex.shop = this.rollShopStock();
         hex.shop.seen = true;
-        this.emit('dialog', { kind: 'shop', lore: this.pickFlavour('shop') });
+        this.emit('shop', { hex, lore: this.pickFlavour('shop') });
         this.emit('change');
         return true;
       case 'acolyte': {
@@ -1012,12 +1017,11 @@ export class Game {
     return this.resolveBattle(hex, forced, opts);
   }
 
-  // ----- the HACK encounter (EXPERIMENT - src/local/hack/, see DESIGN.md) ----
+  // ----- the Hack terminal (config.hack, see DESIGN.md) ---------------------
   // The world-map side of the hack is deliberately tiny: build a combat-shaped
-  // context with no enemies, hand it to the bridge, and on the way back reuse
-  // finishCombat's reward path for a win. A failed hack is simply consumed -
-  // no reward, no run-ending defeat. Ripping the experiment out = deleting
-  // these two methods and the 'hack' case in enter().
+  // context with no enemies, hand it to the bridge (main.js hackDelegate), and
+  // on the way back reuse finishCombat's reward path for a win. A failed hack
+  // is simply consumed - no reward, no run-ending defeat.
   startHack(hex) {
     const ctx = {
       hex, forced: false, opts: {}, enemies: [], debuffs: [],

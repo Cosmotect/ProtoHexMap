@@ -85,7 +85,7 @@ const TABS = [
   { id: 'world', sections: ['map', 'worldBackground', 'localBackground', 'noise', 'tileTypes', 'biomes'] },
   // `battle` is listed here (not on Units) so that "Reset tab" reaches it; the
   // render loop skips it and renders it explicitly next to the Battles table.
-  { id: 'encounters', sections: ['encounters', 'stasis', 'rest', 'acolyte', 'shop', 'treasure', 'events', 'fatigue', 'battle'] },
+  { id: 'encounters', sections: ['encounters', 'stasis', 'rest', 'acolyte', 'shop', 'treasure', 'hack', 'events', 'fatigue', 'battle'] },
   { id: 'units', sections: ['party', 'combat', 'statuses', 'tags', 'intellect'] },
   // NOTE: `battle` lives on the ENCOUNTERS tab - see battleScalars() in render().
   { id: 'general', sections: ['run', 'camera', 'local', 'anim', 'fatigueBar', 'colors'] },

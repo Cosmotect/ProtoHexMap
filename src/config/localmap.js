@@ -37,7 +37,7 @@ export const COMBAT_CONFIG = {
     // for a few hours that day every overlapping ability got the bonus.)
     // false: the older flow - a click casts at once and the phase ends by itself
     // when everyone has cast (kept for comparison and for tools/engine-test.mjs).
-    // Grew out of the Hack experiment (src/local/hack/, see DESIGN.md).
+    // Grew out of the Hack terminal (config.hack, see DESIGN.md).
     lockedAim: true,
     stack: { bonusPerOverlap: 1 },
     // The volley is SEQUENCED (since 2026-09-22): the locks fire one after

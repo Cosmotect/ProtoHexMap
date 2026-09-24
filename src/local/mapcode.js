@@ -12,7 +12,7 @@
 //                              carries it. Default: the id, dashes to spaces,
 //                              words capitalised.
 //    radius: 4                 optional - rings of local hexes (default: config.local.radius)
-//    q,r: <type> [elevation] [tags...] [!Enemy Name]
+//    q,r: <type> [elevation] [tags...] [!Enemy Name | @npc]
 //
 //  Tile lines list ONLY the tiles that differ from plain ground at the
 //  neutral elevation; every unlisted tile inside the radius stays that, so a
@@ -27,12 +27,16 @@
 //  src/config/entities.js COMBAT_TAGS (e.g. `fire`). `!` pins one enemy to
 //  the tile - the rest of the line is a bestiary id or display name from
 //  config/entities.js battle.enemyTypes ("husk" or "Husk", "Forge Tyrant"...).
+//  `@` pins an NPC instead: a non-fighting entity the ENCOUNTER builds
+//  (`@shopkeeper` on a shop map is where the keeper stands, see
+//  src/local/battle/entity.js Shopkeeper). One occupant per tile.
 //
 //  parseMapCode() turns the text into plain data (+ a list of readable
 //  errors); buildRecipe() validates it against the config and produces the
 //  recipe object src/local/localmap.js applyRecipe / LocalMapView.build eat:
 //    { id, title, radius, tiles: { 'q,r': { type, elevation, tags } },
-//      spawns: { enemies: [keys] }, enemyTypeIds: [ids], startTags: [{ k, id }] }
+//      spawns: { enemies: [keys], npcs: [{ id, key }] }, enemyTypeIds: [ids],
+//      startTags: [{ k, id }] }
 //  Since 2026-09-16 EVERY fight plays on one of these (there is no random
 //  arena generator any more): the map's pinned enemies are the fight's
 //  enemies, and config/encounters.js `battleMaps` says which map ids each
@@ -80,21 +84,28 @@ export function parseMapCode(text) {
     seen.add(key);
 
     // The body: type, then an optional elevation digit, then tag words, then
-    // an optional "!Enemy Name" that runs to the end of the line.
+    // an optional "!Enemy Name" or "@npc" that runs to the end of the line.
     let body = tile[3].trim();
     let enemy = null;
+    let npc = null;
     const bang = body.indexOf('!');
+    const at = body.indexOf('@');
+    if (bang >= 0 && at >= 0) { err(n, `tile ${key}: one occupant per tile (an enemy or an NPC, not both)`); return; }
     if (bang >= 0) {
       enemy = body.slice(bang + 1).trim();
       body = body.slice(0, bang).trim();
       if (!enemy) { err(n, `tile ${key}: "!" without an enemy name`); return; }
+    } else if (at >= 0) {
+      npc = body.slice(at + 1).trim();
+      body = body.slice(0, at).trim();
+      if (!/^[a-zA-Z][\w-]*$/.test(npc)) { err(n, `tile ${key}: "@" needs an NPC id (letters, digits, dashes)`); return; }
     }
     const tokens = body.split(/\s+/).filter(Boolean);
     const type = TYPE_ALIASES[(tokens.shift() ?? '').toLowerCase()];
     if (!type) { err(n, `tile ${key}: unknown tile type (use ground, wall or ether)`); return; }
     let elevation = null;
     if (tokens.length && /^\d+$/.test(tokens[0])) elevation = Number(tokens.shift());
-    out.tiles.push({ q, r, key, type, elevation, tags: tokens, enemy, line: n });
+    out.tiles.push({ q, r, key, type, elevation, tags: tokens, enemy, npc, line: n });
   });
 
   if (!out.id) out.errors.push('the code has no "id:" line');
@@ -113,6 +124,7 @@ export function buildRecipe(parsed, config) {
 
   const tiles = {};
   const enemies = [];
+  const npcs = [];
   const startTags = [];
 
   for (const t of parsed.tiles) {
@@ -136,6 +148,10 @@ export function buildRecipe(parsed, config) {
       else if (t.type !== 'ground') errors.push(`line ${t.line}: enemy "${t.enemy}" cannot stand on a ${t.type} tile`);
       else enemies.push({ typeId, key: t.key });
     }
+    if (t.npc) {
+      if (t.type !== 'ground') errors.push(`line ${t.line}: NPC "${t.npc}" cannot stand on a ${t.type} tile`);
+      else npcs.push({ id: t.npc, key: t.key });
+    }
     const bad = t.tags.some((tag) => !COMBAT_TAGS[tag]);
     if (!bad) tiles[t.key] = { type: t.type, elevation, tags: t.tags.length ? [...t.tags] : null };
   }
@@ -146,7 +162,7 @@ export function buildRecipe(parsed, config) {
     title: parsed.title ?? titleFromId(id),
     radius,
     tiles,
-    spawns: enemies.length ? { enemies: enemies.map((e) => e.key) } : null,
+    spawns: enemies.length || npcs.length ? { enemies: enemies.map((e) => e.key), npcs } : null,
     enemyTypeIds: enemies.map((e) => e.typeId),
     startTags,
     errors,

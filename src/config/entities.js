@@ -172,6 +172,9 @@ export const ENTITIES = {
     //               written exactly as on an upgrade node (see TRIGGERS in
     //               config/abilities.js): [{ statusEffect: 'regen', when: 'battleStart', statusEffectOverride: { turns: 0 } }].
     //               File-only: the Settings bestiary table does not show them.
+    //  (An object on the board that is NOT a creature - the Hack's nodes and
+    //  mines, a door, a barrel - is not a row here at all: it is an Entity
+    //  subclass, see src/local/battle/entity.js.)
     //  Leave the combat fields (init / speed / flying / abilities) off and the
     //  creature falls back to party.defaultCombat (by name) and then to its
     //  `default` row, so old hand-authored content and the party keep working
