@@ -7,28 +7,50 @@
 
 export const ENCOUNTERS = {
   // ----- Placement ----------------------------------------------------
-  // "density" = chance that a normal passable tile holds an encounter.
-  // "weights" decide which type it is.
+  // WHERE the encounters go is decided LAST in world generation (map.js
+  // placeEncounters, after every retry, corridor and start-ring fix), on the
+  // final list of walkable, supply-free tiles (no water, ether, hills or
+  // mountains; not the start, the Seed or a Colony site; not within
+  // minDistanceFromStart of the start). Those tiles are split into the RING
+  // BANDS of config.battle.enemies.bands (inner / middle / outer, by ring),
+  // and every band is seeded on its own:
+  //   * the band holds about `density` x its tiles worth of encounters;
+  //   * each type's share of those is its `weight` over the sum of weights
+  //     (a plain number, or one number per band in band order), rounded
+  //     seeded-randomly so a rare type (the gate) still turns up now and
+  //     then rather than never;
+  //   * `guaranteed` is the band's MINIMUM of that type, one number per band
+  //     in band order (a plain number means every band): the share is lifted
+  //     to it before placing, and a VALIDATOR runs after everything is down
+  //     and places more of a type in any band still short of it (on a free
+  //     tile, or over the band's most plentiful type when none is free);
+  //   * within a band each type is spread EVENLY over the tiles it may
+  //     take (src/spread.js evenSpread, the Hack board's placer): rarest
+  //     type first, so no seed ends up with every cache in one corner or
+  //     the first three rings holding two fights.
+  // `unique` types appear at most once per map, whatever their weights.
+  // The result is deterministic per seed; map.encounterReport says what
+  // each band got (the test tools read it).
   encounters: {
     density: 0.5,
     minDistanceFromStart: 0,  // tiles this close to the start (centre) stay empty (0 = only the start tile itself)
     // (rest sites are no longer generated: the player builds them, see "rest" below)
-    weights: {
-      battle: 5,
-      event: 2,
-      shop: 0.75,
-      treasure: 0.8,
-      acolyte: 0.15,   // very rare as a random roll...
+    types: {
+      battle: { weight: 5, guaranteed: [4, 8, 16] },
+      event: { weight: 2, guaranteed: [1, 2, 2] },
+      shop: { weight: 0.75, guaranteed: [1, 3, 5] },
+      treasure: { weight: 0.8, guaranteed: [1, 3, 6] },
+      // Very rare as a random roll, but a run needs one within reach: at least one in the middle band.
+      acolyte: { weight: 0.25, guaranteed: [0, 1, 0] },
       // The layer gate: EXTREMELY rare - most maps have none, and "unique"
       // below caps it at one. Entering it unlocks the next layer of the
       // worldflake (config.layers.unlockOrder; the chain is meta-progression,
       // remembered by the browser across runs).
-      gate: 0.02,
+      gate: { weight: 0.02, guaranteed: 0 },
       // The Hack terminal (see `hack` below and DESIGN.md): a few per map; 0
       // keeps it off generated maps.
-      hack: 1.5,
+      hack: { weight: 0.6, guaranteed: [0, 1, 2] },
     },
-    guaranteed: { acolyte: 1 },   // ...but at least this many per map
     unique: ['gate'],             // types that appear at most ONCE per map
     // Visual placeholders. "shape" is one of: octahedron, icosahedron, box, cone,
     // dodecahedron, pyramid. Labels and descriptions live in the locale tables

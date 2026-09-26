@@ -131,6 +131,9 @@ const cinematic = createCombatCinematic({
   // just interactive battles (those layer body.battle-mode on top of this).
   // The world-map-only HUD (fatigue bar, party panel) hides on it; see style.css.
   onModeChange: (isLocal) => document.body.classList.toggle('local-mode', isLocal),
+  // The reveal queue (game.js): while the world map is off screen every
+  // reveal waits; the moment it is fully back they play, in order.
+  onWorldShown: (shown) => { if (game) game.holdReveals(!shown); },
 });
 window.__cinematic = cinematic; // for debugging / automated tests
 const COMBAT_TYPES = new Set(['battle', 'stasisSeed', 'stasisColony']);
@@ -460,16 +463,22 @@ let hackEntry = null;
 
 // Builds the hack on the arena from its recipe: the party seated by the
 // recipe, the pieces, the engine with the hack rules, the panel. Used by the
-// delegate for a fresh hack and by restartHack for the same one again.
-function beginHack(ctx, recipe) {
+// delegate for a fresh hack and by restartHack for the same one again -
+// with `partyKeys` (the seats recorded on entry): a restart must rebuild the
+// tokens on those exact tiles, since the units have walked since and
+// beginBattle() would otherwise keep the old placement record while the
+// tokens stand elsewhere (the engine then finds no token to bind).
+function beginHack(ctx, recipe, partyKeys = null) {
   const H = CONFIG.hack;
   const view = cinematic.localView;
   const partyDefs = game.state.party
     .map((u, i) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.maxHp, partyIndex: i, alive: u.alive, abilityDefs: resolvedAbilitiesFor(u), triggers: triggersFor(u) }))
     .filter((u) => u.alive && u.hp > 0);
-  const placement = view.beginBattle({ party: partyDefs, enemies: [] });
+  const placement = partyKeys
+    ? view.placeUnitsAt(partyDefs, [], partyKeys, [])
+    : view.beginBattle({ party: partyDefs, enemies: [] });
   hackCtx = ctx;
-  hackEntry = { ctx, recipe, partyHp: partyDefs.map((u) => ({ index: u.partyIndex, hp: u.hp })) };
+  hackEntry = { ctx, recipe, partyKeys: placement.partyKeys, partyHp: partyDefs.map((u) => ({ index: u.partyIndex, hp: u.hp })) };
   const rules = createHackRules(H, { onFloater: (k, text, color) => view.addFloater(k, text, color) });
   // The board's pieces: the nodes (as many discs as the recipe rolled) and
   // the mines, on the recipe's tiles - the engine's `entities`.
@@ -533,7 +542,7 @@ function restartHack() {
   }
   hack = null; hackCtx = null; window.__hack = null;
   ui.setBattleMode(null);
-  beginHack(entry.ctx, entry.recipe);
+  beginHack(entry.ctx, entry.recipe, entry.partyKeys);
   hack.start();
   ui.update(game);
 }
@@ -1238,6 +1247,9 @@ function showDialog(d) {
       title: d.title,
       html: `<p>${escapeHtml(d.text)}</p><div class="effect">${escapeHtml(d.effect)}</div>`,
       filter: (u) => u.alive && availableUpgrades(u).length > 0,
+      // Under each unit: how many lessons its trees have open - so the player
+      // sees before choosing who gets a real pick of two and who has one left.
+      subFor: (u) => (!u.alive ? t('dialog.unit.disabled') : t('blackmarket.unit.sub', { n: availableUpgrades(u).length })),
       game,
       // Which unit pays is only step one: step two picks WHICH of two random
       // suggestions for that unit is worth the price (game.blackMarketDeal

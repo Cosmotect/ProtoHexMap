@@ -113,6 +113,17 @@ export class Game {
     // it (encounterInFlight): a party that walks its last ration onto a forced
     // fight is not dead yet - the salvage from winning may refill the pack.
     this.combatInFlight = false;
+    // THE REVEAL QUEUE. Every reveal - a purchase, an event, a scripted set of
+    // tiles, the debug lift - funnels through finishReveal(). While the world
+    // map is off screen (an arena, the start screen; main.js says so through
+    // holdReveals) the tiles are CHOSEN at once, so the rules stay
+    // deterministic and the counts in the logs are right, but they are only
+    // queued: nothing is marked revealed and no 'reveal' event goes out until
+    // the world map is back, when the queue is released in order. A queued
+    // tile counts as no longer hidden for the next reveal (isHidden), so two
+    // purchases in one shop visit never pick the same tiles.
+    this.revealsHeld = false;
+    this.revealQueue = [];
 
     // Shops: each one rolls its stock now (seeded), so a revealed and visited shop can
     // show what it sells before the party walks back to it. Done last, so the rolls do
@@ -790,7 +801,7 @@ export class Game {
       this.addLog(item === 'relic' ? 'log.shop.relic' : 'log.shop.upgraded', { cost });
     } else if (item === 'rumors') {
       s.supplies -= cost;
-      const hidden = [...this.map.hexes.values()].filter((h) => !h.revealed && h.encounter === 'battle');
+      const hidden = [...this.map.hexes.values()].filter((h) => this.isHidden(h) && h.encounter === 'battle');
       const near = hidden.filter((h) => this.distanceFrom(h) <= cfg.rumorsRadius);
       // Same rule as the "Rumors" event: nearby hidden battles first, the nearest anywhere otherwise.
       const picked = near.length
@@ -1062,7 +1073,7 @@ export class Game {
     const hexes = [...this.map.hexes.values()];
     // Reveal effects only ever touch tiles the player has not uncovered yet; when nothing
     // hidden is left in range, they look further out, and only then report "nothing".
-    const hidden = (pred) => hexes.filter((h) => !h.revealed && pred(h));
+    const hidden = (pred) => hexes.filter((h) => this.isHidden(h) && pred(h));
     let effect = '';
     let title = t(`event.${ev.id}.title`);
     let text = t(`event.${ev.id}.text`);
@@ -1300,13 +1311,41 @@ export class Game {
   // emits 'reveal' unless silent. The one place both reveal() and
   // revealHexes() funnel through, so ether behaves the same from either.
   finishReveal(list, { silent = false } = {}) {
+    if (this.revealsHeld) {
+      // Off the world map: choose now, reveal later (see the constructor).
+      const newly = [];
+      for (const h of list) {
+        if (h && this.isHidden(h)) { h.revealQueued = true; newly.push(h); }
+      }
+      if (newly.length) this.revealQueue.push({ hexes: newly, silent });
+      return newly;
+    }
     const newly = [];
     for (const h of list) {
-      if (h && !h.revealed) { h.revealed = true; newly.push(h); }
+      if (!h) continue;
+      h.revealQueued = false;
+      if (!h.revealed) { h.revealed = true; newly.push(h); }
     }
     this.expandEtherPockets(newly);
     if (!silent && newly.length) this.emit('reveal', { hexes: newly });
     return newly;
+  }
+
+  // A tile the fog still hides AND no queued reveal has claimed yet.
+  isHidden(h) { return !!h && !h.revealed && !h.revealQueued; }
+
+  // main.js: the world map has left the screen (true) or is back (false).
+  // Coming back releases everything queued meanwhile, in order.
+  holdReveals(held) {
+    this.revealsHeld = !!held;
+    if (!held) this.releaseReveals();
+  }
+  releaseReveals() {
+    if (this.revealsHeld || !this.revealQueue.length) return;
+    const queue = this.revealQueue;
+    this.revealQueue = [];
+    for (const item of queue) this.finishReveal(item.hexes, { silent: item.silent });
+    this.emit('change');
   }
 
   // Ether tiles sit hidden under the fog like anything else, but they come in
@@ -1339,7 +1378,7 @@ export class Game {
   // Reveals an irregular patch of `size` hidden tiles, grown from a random hidden tile
   // within `maxDistance` of the party. Returns how many tiles were revealed.
   revealBlob(size, maxDistance) {
-    const hidden = [...this.map.hexes.values()].filter((h) => !h.revealed && this.distanceFrom(h) <= maxDistance);
+    const hidden = [...this.map.hexes.values()].filter((h) => this.isHidden(h) && this.distanceFrom(h) <= maxDistance);
     if (!hidden.length) return 0;
     const seed = this.rng.pick(hidden);
     const chosen = new Set([seed.key]);
@@ -1349,7 +1388,7 @@ export class Game {
       const cur = frontier[Math.floor(this.rng.random() * frontier.length)];
       const options = neighbors(cur.q, cur.r)
         .map(([q, r]) => this.hexAt(q, r))
-        .filter((h) => h && !h.revealed && !chosen.has(h.key));
+        .filter((h) => this.isHidden(h) && !chosen.has(h.key));
       if (!options.length) { frontier = frontier.filter((f) => f !== cur); continue; }
       const next = this.rng.pick(options);
       chosen.add(next.key);
@@ -1421,20 +1460,17 @@ export class Game {
       + Math.max(0, ...Object.values(this.config.biomes).map((b) => b.terrainHeight ?? 0));
     for (const [hq, hr] of hexesInRange(q, r, radius + maxH)) {
       const h = this.hexAt(hq, hr);
-      if (!h || h.revealed) continue;
+      if (!this.isHidden(h)) continue;
       const d = hexDistance(q, r, hq, hr);
       if (d <= radius + (h.terrainHeight ?? 0)) list.push(h);
     }
     return this.finishReveal(list, { silent });
   }
 
-  // Debug helper for designers: lift the fog everywhere.
+  // Debug helper for designers: lift the fog everywhere (through the same
+  // queue as every other reveal).
   revealAll() {
-    const newly = [];
-    for (const h of this.map.hexes.values()) {
-      if (!h.revealed) { h.revealed = true; newly.push(h); }
-    }
-    if (newly.length) this.emit('reveal', { hexes: newly });
+    this.finishReveal([...this.map.hexes.values()]);
     this.addLog('log.debugReveal');
     this.emit('change');
   }

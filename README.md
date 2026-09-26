@@ -78,7 +78,8 @@ hex-world-map/
     locales/     every user-facing string, one flat table per language (en.js is the
                  reference; only languages registered in i18n.js are selectable)
     settings.js  the in-app settings window (config values editable at runtime, saved in the browser)
-    map.js       map generation from a seed, guaranteed path to the Seed and Colony sites
+    map.js       map generation from a seed, guaranteed path to the Seed and Colony sites, encounter placement (last)
+    spread.js    the even (blue-noise) placer shared by the world map's encounters and the Hack board
     noise.js     seeded multi-octave Perlin noise (elevation, ether holes, biomes)
     hex.js       hex grid maths (axial coordinates, neighbours, distance)
     rng.js       seeded random numbers (same seed = same map)
@@ -95,7 +96,9 @@ hex-world-map/
     style.css    HUD styling
   tools/
     hack-test.cjs       headless playtest of the Hack terminal (needs Playwright; see the file header)
-    shop-test.cjs       headless playtest of the shop and the menu's Win / Restart encounter buttons
+    shop-test.cjs       headless playtest of the shop, the reveal queue and the menu's Win / Restart encounter buttons
+    worldmap-test.mjs   npm run test:worldmap - the world-map rules (forcing, supplies, the end-of-run verdict), headless
+    encounter-distribution.mjs  npm run test:encounters - generates hundreds of seeds and checks the encounter distribution
     hack-layouts-sheet.mjs  draws ten generated hack boards as an SVG sheet, to eyeball the spread
     make-artifact.mjs   converts the single-file build into a self-contained shareable page
   DESIGN.md    rules, decisions, open questions, roadmap. Read this first.

@@ -601,14 +601,15 @@ export function createUI(config, handlers) {
   // extraActions: additional buttons after the units (e.g. "Decline").
   // skip: { text, onSkip } adds a Skip button that asks for confirmation first (the same
   // warning as leaving a reward behind). Omit it when a choice is mandatory.
-  function chooseUnit({ title, html, filter, onPick, game, extraActions = [], skip }) {
+  // subFor(unit) (optional) replaces the HP line under a unit's button.
+  function chooseUnit({ title, html, filter, onPick, game, extraActions = [], skip, subFor = null }) {
     const build = (g) => ({
       title,
       html,
       actions: [
         ...g.state.party.map((u, i) => ({
           label: `${u.icon} ${tn(u.name)}`,
-          sub: u.alive ? t('dialog.unit.sub', { hp: u.hp, max: u.maxHp }) : t('dialog.unit.disabled'),
+          sub: subFor ? subFor(u) : u.alive ? t('dialog.unit.sub', { hp: u.hp, max: u.maxHp }) : t('dialog.unit.disabled'),
           disabled: !filter(u),
           onClick: () => onPick(i),
         })),
@@ -655,14 +656,14 @@ export function createUI(config, handlers) {
     });
   }
 
-  // The shop window: one big card per option the shop stocks - icon, name,
-  // price, what it does - in the upgrade chooser's card language (the same
-  // .upg-card squares), instead of the text rows the generic dialog uses.
-  // A sold-out option keeps its card, struck through and dimmed; one that
-  // cannot be bought right now (too poor, nothing it could do) is dimmed with
-  // the reason as its description. `cards` is [{ icon, name, price, desc,
-  // sold, disabled, onClick }]; `actions` the buttons under the grid.
-  function chooseShop({ title, html, cards, actions = [], onRefresh = null }) {
+  // A window of big CARDS - the upgrade chooser's squares (icon, name, a
+  // mono sub-line, a description) for anything that is a choice between a
+  // few options: the shop's stock (chooseShop) and the black market's two
+  // lessons. A card may be `sold` (struck through, faded) or `disabled`
+  // (dimmed, no hover lift, no click - its description says why). `cards` is
+  // [{ icon, name, price, desc, sold, disabled, onClick }]; `actions` the
+  // buttons under the grid.
+  function chooseCards({ title, html, cards, actions = [], onRefresh = null }) {
     const grid = cards.map((c, i) => `<div class="upg-card shop-card${c.sold ? ' sold' : ''}${c.disabled ? ' disabled' : ''}" data-i="${i}" style="animation-delay:${i * 90}ms">
         <div class="upg-icon">${c.icon ?? ''}</div>
         <div class="upg-name">${escapeHtml(c.name)}</div>
@@ -679,23 +680,30 @@ export function createUI(config, handlers) {
     });
     cardPick = { onCard: (i) => { const c = cards[i]; if (c && !c.disabled && c.onClick) c.onClick(); } };
   }
+  // The shop window: one card per option the shop stocks - icon, name,
+  // price, what it does; sold-out options keep their card, struck through.
+  const chooseShop = chooseCards;
 
   // The black market's second step: exactly the unit picked in chooseUnit,
   // two (or one, if that is all it has left) random upgrade suggestions for
   // THAT unit only - unlike chooseUpgrade, which offers one upgrade per
   // living unit across the whole party. Nothing is spent until a suggestion
   // is actually picked; declining here still walks away clean.
+  // Shown as cards like every other upgrade choice. A unit whose trees have
+  // only ONE node left open gets one card and a line saying so - the dealer
+  // has nothing else to sell that unit, which is a fact of the unit's trees
+  // (see availableUpgrades), not a fault of the market.
   function chooseBlackMarketUpgrade({ game, index, offers, loss, onPick, onDecline }) {
     const u = game.state.party[index];
-    openDialog({
+    const note = offers.length < 2 ? `<p class="muted">${escapeHtml(t('blackmarket.pick.one', { name: tn(u.name) }))}</p>` : '';
+    chooseCards({
       title: t('blackmarket.pick.title'),
-      html: `<p>${t('blackmarket.pick.text', { name: tn(u.name), loss })}</p>`,
+      html: `<p>${t('blackmarket.pick.text', { name: tn(u.name), loss })}</p>${note}`,
+      cards: offers.map((o) => {
+        const info = upgradeInfo(o.abilityId, o.nodeId);
+        return { icon: info.icon, name: info.name, price: abilityName(o.abilityId), desc: info.desc, onClick: () => onPick(o) };
+      }),
       actions: [
-        ...offers.map((o) => ({
-          label: upgradeInfo(o.abilityId, o.nodeId).name,
-          sub: `${abilityName(o.abilityId)} - ${upgradeInfo(o.abilityId, o.nodeId).desc}`,
-          onClick: () => onPick(o),
-        })),
         { label: t('dialog.decline'), sub: t('dialog.decline.sub'), onClick: () => confirm({ title: t('confirm.walkAway.title'), text: t('confirm.walkAway.text'), onYes: onDecline }) },
       ],
     });
@@ -1218,7 +1226,7 @@ export function createUI(config, handlers) {
     rosterPick?.onUnitChanged?.(unit);
   });
 
-  return { update, renderLog, setHover, showEnd, hideEnd, openDialog, closeDialog, dialogOpen, flashDialog, confirm, chooseUnit, chooseUpgrade, chooseShop, chooseBlackMarketUpgrade, showBanner, buildLegend, buildFatigueBar, updateBlur, setStartScreen, setLayerSelector, openRoster, closeRoster, rosterOpen, setBattleMode, setDeployBar, updateBattle };
+  return { update, renderLog, setHover, showEnd, hideEnd, openDialog, closeDialog, dialogOpen, flashDialog, confirm, chooseUnit, chooseUpgrade, chooseCards, chooseShop, chooseBlackMarketUpgrade, showBanner, buildLegend, buildFatigueBar, updateBlur, setStartScreen, setLayerSelector, openRoster, closeRoster, rosterOpen, setBattleMode, setDeployBar, updateBattle };
 }
 
 // Log parameters are stored language-neutral and resolved at render time:

@@ -423,6 +423,8 @@ export const en = {
   'confirm.walkAway.text': 'No unit will be altered and the dealer will not offer again.',
   'blackmarket.pick.title': 'Which lesson?',
   'blackmarket.pick.text': '{name} will lose {loss} max HP either way. Pick the upgrade worth that price, or back out.',
+  'blackmarket.pick.one': 'Only one lesson is open for {name} right now - the dealer has nothing else to offer them.',
+  'blackmarket.unit.sub': '{n} {n:lesson|lessons} open',
   'confirm.skip.title': 'Skip this?',
   'confirm.climb.title': 'A deadly climb',
   'confirm.climb.text': 'This step costs {hp} HP from every living unit, and it would disable {names}. Go anyway?',

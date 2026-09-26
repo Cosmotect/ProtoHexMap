@@ -706,7 +706,7 @@ fs.mkdirSync(OUT, { recursive: true });
   // The menu's "Win battle" button ends the fight as an instant victory.
   await page.click('#btn-menu');
   await page.waitForTimeout(200);
-  await page.click('#btn-win-battle');
+  await page.click('#btn-win-encounter');
   await page.waitForFunction(() => !document.getElementById('dialog').classList.contains('hidden'), null, { timeout: 25000 });
   const wonBtn = await page.evaluate(() => ({
     won: !!(window.game.state.lastBattle && window.game.state.lastBattle.won),

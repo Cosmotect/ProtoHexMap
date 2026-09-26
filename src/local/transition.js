@@ -20,7 +20,11 @@ const easeInCubic = (t) => t * t * t;
 const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
 const smooth = (t) => t * t * (3 - 2 * t);
 
-export function createCombatCinematic({ renderer, config, container, onModeChange }) {
+// onModeChange(isLocal) fires at the SWAP (the HUD's moment); onWorldShown(v)
+// fires when the world map actually leaves the screen (a flight starts, the
+// start screen opens: false) and when it is fully back (a fly-out has landed,
+// or an abort: true) - the moment queued reveals may play (game.holdReveals).
+export function createCombatCinematic({ renderer, config, container, onModeChange, onWorldShown }) {
   const localView = new LocalMapView(renderer.renderer, renderer.renderer.domElement, config);
   const fx = buildFxOverlay(container, config);
   let mode = 'idle';          // 'idle' | 'in' | 'local' | 'out'
@@ -86,6 +90,7 @@ export function createCombatCinematic({ renderer, config, container, onModeChang
     if (isActive()) return false;
     const saved = saveWorldCamera();
     renderer.controls.enabled = false;
+    onWorldShown?.(false);
 
     // The arena's resting shot should face the same way the player was looking
     // on the world map the instant the dive started - landing on a fixed side
@@ -126,6 +131,7 @@ export function createCombatCinematic({ renderer, config, container, onModeChang
     if (isActive()) return false;
     const saved = saveWorldCamera();
     renderer.controls.enabled = false;
+    onWorldShown?.(false);
     localView.build({ ...opts, enemies: [], layout: 'camp' });
     const rec = renderer.tiles.get(opts.worldHex.key);
     flight = {
@@ -177,6 +183,7 @@ export function createCombatCinematic({ renderer, config, container, onModeChang
     flight = null;
     setMode('idle');
     notifyLocal(false);
+    onWorldShown?.(true);
   }
 
   // ----- the per-frame timeline ---------------------------------------------
@@ -271,6 +278,7 @@ export function createCombatCinematic({ renderer, config, container, onModeChang
       localView.dispose();
       flight = null;
       setMode('idle');
+      onWorldShown?.(true);
     }
     return true;
   }

@@ -426,6 +426,8 @@ export const ru = {
   'confirm.walkAway.text': 'Никто не изменится, и торговец больше не предложит сделку.',
   'blackmarket.pick.title': 'Какой урок?',
   'blackmarket.pick.text': '{name} в любом случае потеряет {loss} макс. HP. Выберите улучшение, которое стоит этой цены, или откажитесь.',
+  'blackmarket.pick.one': 'У {name} сейчас открыт только один урок - больше торговцу предложить нечего.',
+  'blackmarket.unit.sub': '{n} {n:урок|урока|уроков} открыто',
   'confirm.skip.title': 'Пропустить?',
   'confirm.no': 'Назад',
   'confirm.yes': 'Да, делаем',

@@ -171,11 +171,35 @@ outside `src/config/*`.
 **Field and generation.** Axial coordinates (`src/hex.js`), default `radius: 11`
 (397 tiles). `map.js generateMap(config, rng, layer)` places the Stasis Seed on an
 outer ring and 4 future Colony sites (minimum spacing between them), samples three
-independent Perlin fields (elevation, ether holes, biome band) via `noise.js`, then
-rolls encounter types onto empty passable tiles by weight (`gate` capped at one,
-`acolyte` guaranteed at least one). A retry loop (and, failing that, a forced
-corridor) guarantees the Seed and every Colony site are reachable. The seed for the
-run's RNG comes from `?seed=` (a number, or any string, hashed).
+independent Perlin fields (elevation, ether holes, biome band) via `noise.js`. A
+retry loop (and, failing that, a forced corridor) guarantees the Seed and every
+Colony site are reachable, and only THEN - as the last step, on the final list of
+walkable tiles - are the encounters placed (see "Encounter placement" below). The
+seed for the run's RNG comes from `?seed=` (a number, or any string, hashed).
+
+**Encounter placement** (`map.js placeEncounters`, config `encounters`; since
+2026-09-26 - until then every eligible tile rolled independently, which gave seeds
+with two fights in the first three rings or every cache in one corner). The
+eligible tiles (walkable, supply-free, not the start / Seed / Colony sites, past
+`minDistanceFromStart`) are split into the ring bands of
+`config.battle.enemies.bands` (inner 1-3, middle 4-7, outer 8-11) and each band
+is seeded on its own: it holds about `density` x its tiles worth of encounters;
+each type takes its `weight`'s share of those (the table is
+`encounters.types: { id: { weight, guaranteed } }`, a weight being a number or one
+per band), rounded seeded-randomly so a rare type (the gate) still turns up;
+`guaranteed` is the band's MINIMUM of the type (one number per band in band
+order, a plain number meaning every band) and lifts the share before placing.
+Within a band each type is spread EVENLY over the free tiles with `src/spread.js
+evenSpread` - the Hack board's placer (random picks at the widest spacing that
+fits, keeping their distance from the same type already down in earlier bands) -
+rarest type first. `unique` types are capped at one per map. A VALIDATOR then
+recounts every band and places more of any type still short of its minimum, on a
+free tile or over the band's most plentiful type, and warns in the console when a
+band is simply too small for its minima. `map.encounterReport` records, per band,
+the tiles, the quotas, what was placed and what the validator added.
+`npm run test:encounters` (`tools/encounter-distribution.mjs`) generates hundreds of seeds
+and checks the minima, the uniqueness, the eligibility, the determinism and the
+spread (no type with more than half its tiles in one sextant).
 
 **Terrain and layers.** Five tile types (`ether`, `water`, `ground`, `hill`,
 `mountain`) and six generated biomes (`grasslands`, `forest`, `mesa`, `desert`,
@@ -189,7 +213,15 @@ rare `gate` encounter unlocks, stored in `localStorage`.
 **Fog of war.** Permanent - nothing ever un-reveals a tile. Moving reveals within
 `run.revealRadius` (0 by default, so normally just the tile stood on) plus that
 tile's own `revealBonus`; the run start and certain shop/event effects reveal a
-fixed radius or a scripted set of tiles.
+fixed radius or a scripted set of tiles. **The reveal queue** (since 2026-09-26):
+every reveal funnels through `Game.finishReveal`, and while the world map is off
+screen (an arena, the start screen - `main.js` tells the game through
+`holdReveals`, driven by the cinematic's `onWorldShown`) the tiles are chosen at
+once (so the rules and the log counts stay deterministic; a queued tile no longer
+counts as hidden, see `isHidden`) but only queued; when the world map is fully
+back (a fly-out has landed) the queue is released in order and the tiles animate
+in. So Information or Rumors bought in a shop's arena show themselves the moment
+the party is back on the map, never behind the arena.
 
 **Movement and supplies.** One step = one adjacent hex. Every step costs
 `run.stepSupplyCost` (1) plus the tile type's own `supplyCost` (hill 2, mountain 5),
@@ -526,7 +558,8 @@ hack boards; if some are wanted they are map codes and belong in
 roll in `H.nodeHp` ([1, 3]), part of the same stream as the rest of the board; the
 bridge builds the pieces from the recipe's keys and rolls.
 `tools/hack-layouts-sheet.mjs` draws ten seeded boards as an SVG contact sheet to
-eyeball the spread.
+eyeball the spread. The placer is `src/spread.js evenSpread`, shared with the world
+map's encounter placement.
 
 **The turn** reuses the ordinary fight's aim-lock flow. Nodes and mines occupy
 their tiles (they block walking; fliers glide over, as over a barrier). A node at 0
@@ -640,7 +673,11 @@ UPGRADE TREE, and the ability itself gets stronger.
   children can appear. The same chooser serves the shop's Training and Relic options
   (pay, then pick); the wandering-scholar event unlocks one random available upgrade
   for free; the black market drafts two random upgrades for one chosen unit and the
-  player picks which to learn, paying a fraction of that unit's max HP.
+  player picks which to learn (as cards), paying a fraction of that unit's max HP.
+  The unit-pick step says how many lessons each unit has open; a unit whose trees
+  have only ONE node left open (Feren after one glaive upgrade: `glaive` has two
+  nodes and `plasmaBolt` no tree at all) gets one card and a line saying so - a
+  content gap in the trees, not a fault of the market.
 * **UI.** The roster's detail window (start screen) shows portrait and backstory in
   a narrow left column and the abilities stacked in a wide one, each with its
   description and upgrade tree. The tree is one card per node - icon, name, what it
@@ -693,11 +730,13 @@ downstream (renderer, HUD, combat) sees an ordinary, just small, map.
 ## The Virtual Playtester
 
 **Not currently present.** `package.json` still lists `gym`, `gym:report`,
-`campaign`, `campaign:report`, `test:engine` and `test:worldmap` scripts, and
-`README.md` still describes a `tools/` folder, but `tools/` does not exist in the
-source tree today - none of the headless harness, bots, gym, report generator, world
-runner, personas or campaign runner are on disk, and every one of those npm scripts
-currently fails on a missing module.
+`campaign`, `campaign:report` and `test:engine` scripts, but none of the headless
+harness, bots, gym, report generator, world runner, personas or campaign runner
+work today (`tools/engine-test.mjs` is stale and fails). What does run headlessly:
+`test:worldmap` (`tools/worldmap-test.mjs`, the world-map rules of 2026-09-22) and
+`test:encounters` (`tools/encounter-distribution.mjs`, see "Encounter placement");
+the browser playtests are `tools/smoke-test.cjs`, `tools/hack-test.cjs` and
+`tools/shop-test.cjs`.
 
 The one engine hook this kind of tooling depended on is still live and intact:
 `createBattle({ instant: true })` (`local/battle/engine.js`) collapses every pacing

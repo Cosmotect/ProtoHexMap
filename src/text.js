@@ -35,7 +35,9 @@ export function placeholders(config) {
     maxSupplies: c.run.maxSupplies ?? c.run.startSupplies,
     stepSupplyCost: c.run.stepSupplyCost ?? 0,
     revivePct: pct(c.acolyte.reviveFraction),
-    acolyteMin: c.encounters.guaranteed?.acolyte ?? 0,
+    // The map's minimum of Acolytes: the per-band minima summed
+    // (config.encounters.types.acolyte.guaranteed, one number per ring band).
+    acolyteMin: (() => { const g = c.encounters.types?.acolyte?.guaranteed ?? c.encounters.guaranteed?.acolyte ?? 0; return Array.isArray(g) ? g.reduce((n, v) => n + (Number(v) || 0), 0) : Number(g) || 0; })(),
     // The danger scale (absolute chevron counts, config.battle.danger).
     colonyChevrons: c.battle.danger.colony,
     seedChevrons: c.battle.danger.seed,

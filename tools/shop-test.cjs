@@ -123,14 +123,17 @@ fs.mkdirSync(OUT, { recursive: true });
 
   // ----- 4. a plain purchase: Information ------------------------------------
   const before = await page.evaluate(() => window.game.state.supplies);
+  const revealedBefore = await page.evaluate(() => [...window.game.map.hexes.values()].filter((h) => h.revealed).length);
   await page.evaluate(() => [...document.querySelectorAll('#dialog .shop-card')].find((c) => c.querySelector('.upg-name').textContent === 'Information').click());
   await page.waitForTimeout(300);
   const afterMap = await page.evaluate(() => ({
     supplies: window.game.state.supplies, open: !document.getElementById('dialog').classList.contains('hidden'),
     sold: [...document.querySelectorAll('#dialog .shop-card.sold .upg-name')].map((c) => c.textContent),
     inArena: window.__cinematic.mode() === 'local', shop: !!window.__shop,
+    queued: window.game.revealQueue.reduce((n, q) => n + q.hexes.length, 0), revealed: [...window.game.map.hexes.values()].filter((h) => h.revealed).length,
   }));
   check(afterMap.supplies === before - 15, `Information bought (-15 supplies: ${before} -> ${afterMap.supplies})`);
+  check(afterMap.queued > 0 && afterMap.revealed === revealedBefore, `the purchase's reveal is QUEUED while the world map is off screen (${afterMap.queued} tiles waiting, ${afterMap.revealed} revealed as before)`);
   check(afterMap.open && afterMap.sold.includes('Information'), 'the window stays up and the card reads sold out');
   check(afterMap.inArena && afterMap.shop, 'still in the shop\'s arena');
 
@@ -170,6 +173,8 @@ fs.mkdirSync(OUT, { recursive: true });
     dialog: !document.getElementById('dialog').classList.contains('hidden'), pickables: (window.__localView.pickables ?? []).length,
   }));
   check(!left.shop && !left.exitBtn && !left.dialog && left.pickables === 0, 'Leave tears the shop down and flies out');
+  const revealAfter = await page.evaluate(() => ({ queued: window.game.revealQueue.length, held: window.game.revealsHeld, revealed: [...window.game.map.hexes.values()].filter((h) => h.revealed).length }));
+  check(revealAfter.queued === 0 && !revealAfter.held && revealAfter.revealed >= revealedBefore + afterMap.queued, `back on the world map the queued reveal played (ether pockets may widen it) (${revealedBefore} -> ${revealAfter.revealed})`);
   check(left.enc === 'shop', 'the shop stays on its tile (not sold out)');
   await page.screenshot({ path: path.join(OUT, 'shop-3-left.png') });
 
@@ -186,16 +191,43 @@ fs.mkdirSync(OUT, { recursive: true });
     const h = window.__hack; const u = h.state.units[0]; u.hp = 1; window.game.state.party[u.partyIndex].hp = 1;
     return { nodes: h.state.objects.filter((o) => o.kind === 'hackNode').map((o) => o.pos + ':' + o.hp).join('|'), hpFull: window.game.state.party[u.partyIndex].maxHp, idx: u.partyIndex };
   });
+  // Walk the active unit somewhere first (a restart after real play, where the
+  // tokens no longer stand on their entry tiles - the case that used to break).
+  const walked = await page.evaluate(async () => {
+    const h = window.__hack; const sb = h.state; const u = sb.units.find((x) => x.uid === sb.activeUid);
+    const reach = h.reachFor();
+    const to = Object.keys(reach?.d ?? {}).filter((k) => !reach.occ.has(k) && !sb.tags[k] && k !== u.pos).sort((a, b) => reach.d[b] - reach.d[a])[0];
+    if (!to) return null;
+    h.clickTile(to);
+    for (let g = 0; g < 80 && (sb.busy || u.pos !== to); g++) await new Promise((r) => setTimeout(r, 100));
+    return { uid: u.uid, from: u.startPos, to, pos: u.pos };
+  });
+  check(walked && walked.pos === walked.to, `a unit walked before the restart (${JSON.stringify(walked)})`);
   await page.evaluate(() => window.__hack.endTurn());
   await page.waitForFunction(() => window.__hack.state.round === 2 && !window.__hack.state.busy, null, { timeout: 15000 });
   await page.evaluate(() => document.getElementById('btn-restart-encounter').click());
   await page.waitForTimeout(500);
   const h1 = await page.evaluate(() => {
-    const h = window.__hack;
-    return { round: h.state.round, nodes: h.state.objects.filter((o) => o.kind === 'hackNode').map((o) => o.pos + ':' + o.hp).join('|'), hp: window.game.state.party.map((u) => u.hp), bar: !!document.getElementById('hack-bar'), enc: window.game.state.position.encounter };
+    const h = window.__hack; const v = window.__localView;
+    const seats = h.state.units.map((u) => u.pos);
+    const tokens = h.state.units.map((u) => v.battleTokens.get(u.uid)).map((tk) => (tk ? tk.userData.tileKey : null));
+    return { round: h.state.round, nodes: h.state.objects.filter((o) => o.kind === 'hackNode').map((o) => o.pos + ':' + o.hp).join('|'), hp: window.game.state.party.map((u) => u.hp), bar: !!document.getElementById('hack-bar'), enc: window.game.state.position.encounter, seats, tokens, active: h.state.activeUid, phase: h.state.phase };
   });
   check(h1.round === 1 && h1.nodes === h0.nodes, 'Restart encounter rebuilt the same hack board at turn 1');
   check(h1.hp.every((hp) => hp > 1) && h1.bar && h1.enc === 'hack', `the wound was undone and the hack is still on (${JSON.stringify(h1.hp)})`);
+  check(h1.tokens.every((k, i) => k && k === h1.seats[i]), `every unit has its token bound on its seat after the restart (${JSON.stringify(h1.tokens)} vs ${JSON.stringify(h1.seats)})`);
+  check(h1.active && h1.phase === 'player', 'the restarted hack is playable (a unit is active in the player phase)');
+  // ...and it plays: walk again, lock an aim, fire a turn.
+  const play = await page.evaluate(async () => {
+    const h = window.__hack; const sb = h.state; const u = sb.units.find((x) => x.uid === sb.activeUid);
+    const reach = h.reachFor();
+    const to = Object.keys(reach?.d ?? {}).filter((k) => !reach.occ.has(k) && !sb.tags[k] && k !== u.pos).sort((a, b) => reach.d[b] - reach.d[a])[0];
+    if (to) { h.clickTile(to); for (let g = 0; g < 80 && (sb.busy || u.pos !== to); g++) await new Promise((r) => setTimeout(r, 100)); }
+    h.endTurn();
+    for (let g = 0; g < 100 && (sb.busy || sb.round < 2); g++) await new Promise((r) => setTimeout(r, 100));
+    return { round: sb.round, over: sb.over, walkedTo: to, pos: u.pos };
+  });
+  check(play.round === 2 && !play.over && play.pos === play.walkedTo, `the restarted hack plays on (${JSON.stringify(play)})`);
   await page.evaluate(() => document.getElementById('btn-win-encounter').click());
   await page.waitForFunction(() => !window.__hack && !document.getElementById('dialog').classList.contains('hidden'), null, { timeout: 15000 });
   const won = await page.evaluate(() => ({ title: document.getElementById('dialog-title').textContent, enc: window.game.state.position.encounter }));

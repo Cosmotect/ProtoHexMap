@@ -22,6 +22,7 @@ import { hexKey, hexesInRange, hexDistance, axialToPlane } from '../hex.js';
 import { COMBAT_CONFIG } from '../config/localmap.js';
 import { createRng } from '../rng.js';
 import { DIRS, PK, addK, hexDist, boardTiles } from './battle/bhex.js';
+import { evenSpread } from '../spread.js';
 
 // The local grid uses the opposite orientation to the world grid.
 export function localOrientation(worldOrientation) {
@@ -182,14 +183,15 @@ export function pickClusteredTiles(map, count, random, exclude = new Set(), maxS
 //  THE SPREAD. Until 2026-09-24 the pieces went down by one of twenty
 //  probabilistic LAYOUTS (clusters, rings, noise fields...), which read on
 //  the board as splotches: heaps of nodes here, bare ground there. Now there
-//  is one placer and it is a blue-noise spread: the pieces are thrown down
-//  at random, but at the WIDEST spacing the board can fit that many pieces
-//  at (found by stepping the spacing down until they all fit), so they end
-//  up spaced out across the whole board at a steady density - never in
-//  heaps, never leaving a quarter of it empty - while no two boards are
-//  alike. `nodeSpacing` is the floor under that spacing: two nodes are never
-//  nearer than it (2 = never adjacent). The first ring around the party is
-//  always kept free of nodes and mines.
+//  is one placer and it is a blue-noise spread (src/spread.js evenSpread,
+//  the same one the world map places its encounters with): the pieces are
+//  thrown down at random, but at the WIDEST spacing the board can fit that
+//  many pieces at (found by stepping the spacing down until they all fit),
+//  so they end up spaced out across the whole board at a steady density -
+//  never in heaps, never leaving a quarter of it empty - while no two
+//  boards are alike. `nodeSpacing` is the floor under that spacing: two
+//  nodes are never nearer than it (2 = never adjacent). The first ring
+//  around the party is always kept free of nodes and mines.
 //
 //  There are no handcrafted hack boards today; if some are wanted, they are
 //  map codes and belong in config/encounters.js `craftedMaps`, next to the
@@ -246,31 +248,16 @@ export function buildHackRecipe(H, seed, hex, partySize) {
   const reserved = new Set(used);
   for (const k of used) for (const d of DIRS) reserved.add(addK(k, d));
 
-  // ----- the even spread --------------------------------------------------
-  // Dart throwing at the widest spacing that fits: the free tiles are
-  // shuffled and walked in that order, a tile taken when nothing already
-  // placed (of the same kind) is nearer than the spacing; if fewer than
-  // `count` fit, the spacing steps down one and the throw is repeated. The
-  // spacing the board settles on is what keeps the pieces apart from each
-  // other at a steady density everywhere (the throw itself is uniform, so
-  // no part of the board is favoured), and `floor` is the spacing it never
-  // goes below (H.nodeSpacing for nodes).
-  const spread = (count, floor) => {
-    const pool = shuffle(all.filter((k) => !used.has(k) && !reserved.has(k)));
-    let out = [];
-    for (let spacing = R; spacing >= Math.max(1, floor); spacing--) {
-      out = [];
-      for (const k of pool) {
-        if (out.length >= count) break;
-        if (out.every((o) => hexDist(k, o) >= spacing)) out.push(k);
-      }
-      if (out.length >= count) break;
-    }
-    for (const k of out) used.add(k);
-    return out;
-  };
-  const nodeKeys = spread(Math.max(0, Math.round(H.nodes ?? 16)), H.nodeSpacing ?? 2);
-  const mineKeys = spread(Math.max(0, Math.round(H.mines ?? 8)), H.mineSpacing ?? 1);
+  // ----- the even spread (src/spread.js evenSpread, shared with the world
+  // map's encounter placement) -------------------------------------------
+  // The free tiles, the count, the floor under the spacing; the nodes go
+  // first, then the mines keep their own spacing from each other (they may
+  // sit next to a node).
+  const freeTiles = () => all.filter((k) => !used.has(k) && !reserved.has(k));
+  const nodeKeys = evenSpread({ pool: freeTiles(), count: H.nodes ?? 16, floor: H.nodeSpacing ?? 2, rng, dist: hexDist, maxSpacing: R });
+  for (const k of nodeKeys) used.add(k);
+  const mineKeys = evenSpread({ pool: freeTiles(), count: H.mines ?? 8, floor: H.mineSpacing ?? 1, rng, dist: hexDist, maxSpacing: R });
+  for (const k of mineKeys) used.add(k);
 
   // Each node's hp is its own seeded roll in H.nodeHp ([min, max]), drawn
   // here so it stays part of the same seeded stream as the rest of the board

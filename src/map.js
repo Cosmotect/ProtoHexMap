@@ -9,6 +9,7 @@
 // "generated: false" (wither) are never placed here - they are applied during play.
 import { hexKey, neighbors, hexesInRange, axialToPlane, hexDistance } from './hex.js';
 import { createNoise } from './noise.js';
+import { evenSpread } from './spread.js';
 
 /**
  * Builds a hexagon shaped hex map (a centre tile plus `radius` rings) from the config
@@ -259,36 +260,139 @@ function carveCorridor(result, config, goal) {
   }
 }
 
+// =====================================================================
+//  ENCOUNTER PLACEMENT - the LAST step of generateMap, once every retry,
+//  corridor and start-ring fix is done, so it works on the final, truthful
+//  list of tiles the player can walk. Deterministic per seed. The design is
+//  documented on config.encounters (config/encounters.js); in short:
+//    1. the eligible tiles (walkable, supply-free, not the start / Seed /
+//       Colony sites, past minDistanceFromStart) are split into the RING
+//       BANDS of config.battle.enemies.bands;
+//    2. each band gets about density x its tiles worth of encounters, each
+//       type its weight's share of those (seeded-randomly rounded, so a rare
+//       type still turns up), lifted to the type's guaranteed minimum for
+//       that band;
+//    3. within the band each type is spread EVENLY over the free tiles
+//       (src/spread.js evenSpread - the Hack board's placer), rarest type
+//       first, so the picks of one type are never bunched in one corner;
+//    4. `unique` types are capped at one per map;
+//    5. the VALIDATOR counts every band again and places more of any type
+//       still short of its minimum - on a free tile, or over the band's most
+//       plentiful type when nothing is free - and reports what it had to do.
+//  result.encounterReport = { bands: { <band>: { tiles, want, placed, topped } } }.
+// =====================================================================
+export function bandIds(config) {
+  return Object.keys(config.battle?.enemies?.bands ?? { all: { maxRing: Infinity } });
+}
+export function bandIndexOf(config, ring) {
+  const bands = config.battle?.enemies?.bands;
+  if (!bands) return 0;
+  const ids = Object.keys(bands);
+  for (let i = 0; i < ids.length; i++) if (ring <= bands[ids[i]].maxRing) return i;
+  return ids.length - 1;
+}
+// A per-band number: a plain number applies to every band, a list is read in
+// band order (a short list repeats its last entry).
+function perBand(value, bandIndex, fallback = 0) {
+  if (Array.isArray(value)) return value.length ? Number(value[Math.min(bandIndex, value.length - 1)]) || 0 : fallback;
+  return value == null ? fallback : Number(value) || 0;
+}
+// The placement table in the shape the placer wants, whatever the config's
+// age: `types: { id: { weight, guaranteed } }` (2026-09-26) or the older
+// `weights: { id: n }` + `guaranteed: { id: n }`.
+function encounterTypes(enc) {
+  if (enc.types) return Object.entries(enc.types).map(([id, t]) => ({ id, weight: t?.weight ?? 0, guaranteed: t?.guaranteed ?? 0 }));
+  return Object.entries(enc.weights ?? {}).map(([id, w]) => ({ id, weight: w, guaranteed: enc.guaranteed?.[id] ?? 0 }));
+}
+
 function placeEncounters(result, config, rng) {
   const enc = config.encounters;
-  for (const h of result.hexes.values()) {
-    if (!h.passable || h.supplyCost > 0 || h.isStart || h.isSeed || h.isColony) continue;
-    const distFromStart = hexDistance(h.q, h.r, result.start.q, result.start.r);
-    if (distFromStart <= enc.minDistanceFromStart) continue;
-    if (rng.chance(enc.density)) {
-      h.encounter = rng.weighted(enc.weights);
-    }
-  }
+  const types = encounterTypes(enc);
+  const unique = new Set(enc.unique ?? []);
+  const ids = bandIds(config);
+  const dist = (a, b) => hexDistance(a.q, a.r, b.q, b.r);
+  const eligible = (h) => h.passable && h.supplyCost === 0 && !h.isStart && !h.isSeed && !h.isColony
+    && hexDistance(h.q, h.r, result.start.q, result.start.r) > (enc.minDistanceFromStart ?? 0);
 
-  // Unique types (the layer gate) appear AT MOST once per map: the weighted
-  // roll above may rarely land one twice, so extras are cleared, keeping one
-  // seeded pick.
-  for (const type of enc.unique ?? []) {
+  // 1. the bands
+  const bands = ids.map((id) => ({ id, tiles: [] }));
+  for (const h of result.hexes.values()) {
+    if (h.encounter && h.encounter !== 'stasisSeed') h.encounter = null;   // a retry never leaves stale marks
+    if (eligible(h)) bands[bandIndexOf(config, h.ring)].tiles.push(h);
+  }
+  const report = { bands: {} };
+  const uniqueUsed = new Set();
+  const stochasticRound = (x) => Math.floor(x) + (rng.random() < x - Math.floor(x) ? 1 : 0);
+  const totalWeight = (bi) => types.reduce((sum, t) => sum + Math.max(0, perBand(t.weight, bi)), 0);
+
+  bands.forEach((band, bi) => {
+    const total = Math.round((enc.density ?? 0) * band.tiles.length);
+    const wsum = totalWeight(bi);
+    // 2. the quotas
+    const want = {};
+    for (const t of types) {
+      const share = wsum > 0 ? total * Math.max(0, perBand(t.weight, bi)) / wsum : 0;
+      let n = Math.max(stochasticRound(share), Math.max(0, Math.round(perBand(t.guaranteed, bi))));
+      if (unique.has(t.id)) n = Math.min(n, uniqueUsed.has(t.id) ? 0 : 1);
+      want[t.id] = n;
+    }
+    // 3. the spread: rarest type first, each over what is still free
+    const placed = {};
+    const order = types.slice().sort((a, b) => (want[a.id] - want[b.id]) || (types.indexOf(a) - types.indexOf(b)));
+    for (const t of order) {
+      const free = band.tiles.filter((h) => !h.encounter);
+      // The same type already down in the bands before this one counts as
+      // "existing": the spread keeps its distance from those too, so a type
+      // is even across the whole map, not only within each band.
+      const existing = [...result.hexes.values()].filter((h) => h.encounter === t.id);
+      const picks = evenSpread({ pool: free, count: want[t.id], floor: 1, rng, dist, existing });
+      for (const h of picks) h.encounter = t.id;
+      placed[t.id] = picks.length;
+      if (unique.has(t.id) && picks.length) uniqueUsed.add(t.id);
+    }
+    report.bands[band.id] = { tiles: band.tiles.length, want, placed, topped: {} };
+  });
+
+  // 4. unique types: at most one per map (a belt to the braces above)
+  for (const type of unique) {
     const spots = [...result.hexes.values()].filter((h) => h.encounter === type);
     if (spots.length <= 1) continue;
     const keep = spots[Math.floor(rng.random() * spots.length)];
     for (const h of spots) if (h !== keep) h.encounter = null;
   }
 
-  // Guaranteed minimums (e.g. at least one Acolyte per map): top up on random empty tiles.
-  for (const [type, min] of Object.entries(enc.guaranteed ?? {})) {
-    const have = [...result.hexes.values()].filter((h) => h.encounter === type).length;
-    const candidates = [...result.hexes.values()].filter((h) =>
-      h.passable && h.supplyCost === 0 && !h.isStart && !h.isSeed && !h.isColony && !h.encounter &&
-      hexDistance(h.q, h.r, result.start.q, result.start.r) > enc.minDistanceFromStart);
-    for (let i = have; i < min && candidates.length; i++) {
-      const idx = Math.floor(rng.random() * candidates.length);
-      candidates.splice(idx, 1)[0].encounter = type;
+  // 5. the validator: every band, every type, at least its minimum
+  bands.forEach((band, bi) => {
+    const rep = report.bands[band.id];
+    for (const t of types) {
+      const min = unique.has(t.id) ? Math.min(1, Math.round(perBand(t.guaranteed, bi))) : Math.round(perBand(t.guaranteed, bi));
+      if (min <= 0) continue;
+      let have = band.tiles.filter((h) => h.encounter === t.id);
+      let added = 0;
+      while (have.length < min) {
+        let free = band.tiles.filter((h) => !h.encounter);
+        if (!free.length) {
+          // Nothing free: take a tile from the type the band has the most of
+          // beyond its own minimum (never the one being topped up).
+          const counts = {};
+          for (const h of band.tiles) if (h.encounter && h.encounter !== t.id) counts[h.encounter] = (counts[h.encounter] ?? 0) + 1;
+          const surplus = (id) => (counts[id] ?? 0) - Math.round(perBand(types.find((x) => x.id === id)?.guaranteed ?? 0, bi));
+          const victim = Object.keys(counts).sort((a, b) => surplus(b) - surplus(a))[0];
+          if (!victim || surplus(victim) <= 0) break;   // the band is too small for its minima
+          free = band.tiles.filter((h) => h.encounter === victim);
+        }
+        const [pick] = evenSpread({ pool: free, count: 1, floor: 1, rng, dist, existing: have });
+        if (!pick) break;
+        pick.encounter = t.id;
+        have.push(pick);
+        added++;
+      }
+      if (added) rep.topped[t.id] = added;
+      if (have.length < min) console.warn(`encounters: band "${band.id}" cannot hold ${min} x ${t.id} (${have.length} placed, ${band.tiles.length} tiles)`);
     }
-  }
+    // The final count of every type in the band (a top-up may have taken
+    // tiles from another type).
+    for (const t of types) rep.placed[t.id] = band.tiles.filter((h) => h.encounter === t.id).length;
+  });
+  result.encounterReport = report;
 }
