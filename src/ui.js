@@ -42,6 +42,13 @@ function abilityName(id) {
   return s === key ? (ABILITIES[id]?.name ?? id) : s;
 }
 
+// The glyph shown next to an ability's name wherever the two are printed
+// together (the upgrade reward cards) - straight off the config, since an
+// ability's icon is never translated per locale.
+function abilityIcon(id) {
+  return ABILITIES[id]?.icon ?? '';
+}
+
 export function createUI(config, handlers) {
   const $ = (id) => document.getElementById(id);
 
@@ -637,8 +644,9 @@ export function createUI(config, handlers) {
       return `<div class="upg-card" data-i="${i}" style="animation-delay:${i * 110}ms">
         <div class="upg-icon">${info.icon}</div>
         <div class="upg-name">${escapeHtml(info.name)}</div>
-        <div class="upg-unit">${u.icon} ${escapeHtml(tn(u.name))} - ${escapeHtml(abilityName(o.abilityId))}</div>
+        <div class="upg-unit">${u.icon} ${escapeHtml(tn(u.name))} - ${abilityIcon(o.abilityId)} ${escapeHtml(abilityName(o.abilityId))}</div>
         <div class="upg-desc">${escapeHtml(info.desc)}</div>
+        ${info.lore ? `<div class="upg-lore">“${escapeHtml(info.lore)}”</div>` : ''}
       </div>`;
     }).join('');
     upgradePick = { offers, onPick: (o) => { upgradePick = null; onPick(o); } };

@@ -103,7 +103,7 @@ export const ENTITIES = {
     //             drives its own upgrade tree (config/upgrades.js), and the roster
     //             window and the party panel are laid out for the pair.
     roster: [
-      { name: 'Gorm', icon: '🪲', hp: 8, speed: 3, flying: false, abilities: ['clawSwipe', 'chargeHeadbutt'], story: 'Gorm is as tough as he is not patient. His clawed swipes can be lethal close up, and he knows how to get close up.' },
+      { name: 'Gorm', icon: '🪲', hp: 8, speed: 3, flying: false, abilities: ['clawSwipe', 'ram'], story: 'Gorm is as tough as he is not patient. His clawed swipes can be lethal close up, and he knows how to get close up.' },
       { name: 'Feren', icon: '🦋', hp: 5, speed: 5, flying: true, abilities: ['glaive', 'plasmaBolt'], story: 'Disappointed by the conduct of her brethren, she intends to use all of the help her new family can provide, to learn the truth about their world.' },
       { name: 'Viridi', icon: '🦗', hp: 6, speed: 4, flying: false, abilities: ['glaive', 'mendingTouch'], story: 'Disappointed by the conduct of her brethren, she intends to use all of the help her new family can provide, to learn the truth about their world.' },
 

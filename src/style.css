@@ -2054,9 +2054,19 @@ button.small {
 }
 
 .upg-desc {
-  font-size: 12.5px;
-  line-height: 1.45;
+  font-size: 14px;
+  line-height: 1.4;
   color: var(--text);
+}
+
+/* The flavor line under .upg-desc (chooseUpgrade only - the reward screen's
+   cards): smaller, muted and italic, quoted in the markup itself. Omitted
+   entirely (no empty div) when a node carries no lore. */
+.upg-lore {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+  font-style: italic;
 }
 
 /* The shop window's cards (chooseShop): the same squares, a little narrower

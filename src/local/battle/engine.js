@@ -633,8 +633,10 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     if (st.sim) { st.rec.dmg[v.uid] = (st.rec.dmg[v.uid] || 0) - v.hp; st.rec.revived[v.uid] = 1; }
     else { floater(v.pos, 'REVIVED +' + v.hp, '#a8e05f'); blog((st.atk ? st.atk + ' -> ' : '') + v.name + ' is back up (+' + v.hp + ')'); }
   }
-  // Crashes and falls stun; so does any ability with statusEffect: 'stun'. All of them come
-  // through here, and what "stunned" DOES is the table's business, not this line's.
+  // Falls and crushes always stun; a plain crash stuns too, but only when the
+  // ability behind it carries flags.stunOnCrash (see sCrash below) - and so
+  // does any ability with statusEffect: 'stun'. All of them come through
+  // here, and what "stunned" DOES is the table's business, not this line's.
   function sStun(st, v) {
     if (!v || !v.isUnit || v.hp <= 0) return;
     applyStatus(st, v, 'stun');
@@ -698,6 +700,16 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       if (t.onPickup) { if (!st.sim) blog(u.name + ' picks up ' + t.name); const ab = abById(t.onPickup); if (ab) resolveCast(st, { pos: u.pos, name: t.name }, ab, u.pos, depth + 1); }
     }
   }
+  // A crash the currently-resolving ability marked `flags.stunOnCrash` for
+  // also stuns whoever just took it - on top of the flat impact damage, never
+  // instead of it. Reads `st.cast` (the ability resolveCast is mid-way
+  // through), so it only ever affects the unit THIS push belongs to, never a
+  // bystander it happens to collide with (see the two-sided low-height
+  // collision branch in sPush, which calls this only for the pushed unit).
+  function sCrash(st, ent) {
+    sImpact(st, ent, 2, 'crash');
+    if (st.cast?.ab?.flags?.stunOnCrash) sStun(st, ent);
+  }
   function sPush(st, ent, dir, depth = 0) {
     if (depth > 8) return;
     const isU = !!ent.isUnit;
@@ -716,7 +728,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     const nk = addK(k, DIRS[dir]);
     if (isVoid(nk)) { sVoid(st, ent); return; }
     const wall = !tilePass(nk) || (stH(st, nk) - stH(st, k) >= 2);
-    if (wall) { sImpact(st, ent, 2, 'crash'); return; }
+    if (wall) { sCrash(st, ent); return; }
     // A downed body in the way is an occupant like any other: a collision (it
     // takes nothing from it - sHit/sStun pass a body by), or a crush from above.
     const occ = sUnitAt(st, nk) || sObjectAt(st, nk) || sBarrier(st, nk) || sBodyAt(st, nk);
@@ -741,14 +753,14 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
         // A body under the drop is not shoved on down the line - its hp is 0.)
         const blocked = sUnitAt(st, nk) || sObjectAt(st, nk) || sBarrier(st, nk) || sBodyAt(st, nk);
         if (blocked) {
-          sImpact(st, ent, 2, 'crash');
+          sCrash(st, ent);
         } else if (ent.hp > 0 || (isU && ent.downed)) {
           sMoveTo(st, ent, nk);
           sImpact(st, ent, 2, 'fall'); sStun(st, ent);
           if (isU) sArrive(st, ent, depth);
         }
       } else {
-        sImpact(st, ent, 2, 'crash'); sImpact(st, occ, 2, 'crash');
+        sCrash(st, ent); sImpact(st, occ, 2, 'crash');
       }
     } else {
       sMoveTo(st, ent, nk);

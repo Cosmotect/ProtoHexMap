@@ -71,13 +71,13 @@ export function abilityTreeHtml(abilityId, unlocked, size = 'full') {
     const p = pos[n];
     const ref = upgradeRef(abilityId, n);
     const cls = unlocked.has(ref) ? 'owned' : isOpen(n) ? 'open' : 'locked';
-    const { name, desc, short, icon } = upgradeInfo(abilityId, n);
+    const { name, desc, lore, icon } = upgradeInfo(abilityId, n);
     const style = `left:${p.x}px;top:${p.y}px;width:${T.cardW}px;height:${T.cardH}px`;
     const attrs = `type="button" class="ut-card ${size === 'mini' ? 'mini ' : ''}${cls}" style="${style}"`
-      + ` data-ref="${escapeAttr(ref)}" title="${escapeAttr(`${name} - ${desc}`)}"${cls === 'open' ? '' : ' disabled'}`;
+      + ` data-ref="${escapeAttr(ref)}" title="${escapeAttr(`${name} - ${lore || desc}`)}"${cls === 'open' ? '' : ' disabled'}`;
     if (size === 'mini') {
       return `<button ${attrs}>
-        <span class="ut-text"><b>${escapeHtml(name)}</b><i>${escapeHtml(short || desc)}</i></span>
+        <span class="ut-text"><b>${escapeHtml(name)}</b><i>${escapeHtml(desc)}</i></span>
       </button>`;
     }
     return `<button ${attrs}>

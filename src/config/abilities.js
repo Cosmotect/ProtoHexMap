@@ -136,7 +136,7 @@ export const ABILITIES = {
 
   //Player Abilities
   clawSwipe: A({ name: 'Claw Swipe', icon: '🔪', color: '#5fc7e0', desc: 'Clawed slashes that tear through.', damage: 3, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], rotatable: true }),
-  chargeHeadbutt: A({ name: 'Charge Headbutt', icon: '🐏💨', color: '#e0b25f', damage: 2, castZone: lineOffsets(1, 3), dmgZone: [[0, 0]], pushZone: [[0, 0, 0]], rotatable: true, moveToTarget: true }),
+  ram: A({ name: 'Charge Headbutt', icon: '🐏💨', color: '#e0b25f', damage: 2, castZone: lineOffsets(1, 3), dmgZone: [[0, 0]], pushZone: [[0, 0, 0]], rotatable: true, moveToTarget: true }),
 
   glaive: A({ name: 'Glaive Strike', icon: '⚔️', color: '#e0b25f', desc: 'Downward jab with a sleek glaive.', damage: 4, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], rotatable: true }),
   shardProjectile: A({ name: 'Volley', icon: '🎯', color: '#a8e05f', desc: 'Bone shard projectile fired out .', damage: 2, castZone: ringOffsets(2, 4), dmgZone: [[0, 0]] }),
@@ -467,10 +467,11 @@ export function checkTrigger(e, quiet = false) {
 //  Node format (all optional except the texts):
 //    name         What the node is called in-game.
 //    icon         The glyph the roster window shows on its card.
-//    desc         What it does, in more detail. 
-//    short        (optional) is the short version of the desciption the party
-//                 window's tree cards show under the name ("+1 damage",
-//                 "wider swipe"); without one the card shows `desc`.
+//    desc         The mechanical one-liner ("+1 damage", "wider swipe") - the
+//                 reward card's headline, big font, no quotes.
+//    lore         (optional) a fuller, flavor sentence, shown smaller, in
+//                 quotes and italics, under `desc`. Without one the card just
+//                 shows `desc` alone.
 //  ----- 1. PRE-REQUISITES ---------------------------------------------
 //    requires     [nodeIds]  - ALL of them must be unlocked first (multi-parent
 //                              nodes are how two branches meet in a capstone);
@@ -486,13 +487,22 @@ export function checkTrigger(e, quiet = false) {
 //                 `add`: zones have their own *Add fields below, the cost has
 //                 costAdd, and the numbers of the status an ability applies
 //                 have statusEffectAdd.
-//    statusEffectAdd  { field: number } - summed onto the numbers of the status
-//                 the ability applies (its `statusEffect`), field by field, on
-//                 top of the table's value or the ability's own override:
-//                   statusEffectAdd: { turns: 1 }     the nerveAgent lasts a turn longer
-//                   statusEffectAdd: { tickHP: -2 }   ...and bites 2 harder
-//                 Fields: speed, damageDealt, damageTaken, tickHP, turns,
-//                 charges. Does nothing on an ability with no `statusEffect`.
+//    statusEffectAdd  { statusEffect, ...field: number } - `statusEffect` (a
+//                 STATUSES row id) is REQUIRED and says which status this node
+//                 touches. If the ability does not already apply that status,
+//                 it now does - the node GIVES the ability a status effect it
+//                 never had, starting fresh from the table's own numbers.
+//                 If the ability already applies that same status, this only
+//                 tunes it further: every other field is summed onto its
+//                 current numbers (its own override where it has one, else
+//                 the table's value), same as before.
+//                   statusEffectAdd: { statusEffect: 'nerveAgent', turns: 1 }
+//                     the ability now also poisons (or, if it already did,
+//                     the poison now lasts a turn longer)
+//                   statusEffectAdd: { statusEffect: 'stun' }
+//                     the ability now also stuns, at the table's own numbers
+//                 Numeric fields: speed, damageDealt, damageTaken, tickHP,
+//                 turns, charges.
 //    castZoneAdd  [offsets]  - extra tiles the ability may be aimed at
 //    dmgZoneAdd   [offsets]  - extra tiles the effect covers (from the aim point)
 //    tagZoneAdd   [offsets]  - extra tiles that receive the ability's tile tag
@@ -501,15 +511,21 @@ export function checkTrigger(e, quiet = false) {
 //    costAdd      { hp, supplies, move } - summed onto the ability's cost, so a
 //                              node can make it dearer or (negative) cheaper;
 //                              two nodes touching one resource stack
-//    flags        { bool }   - switches for upgrade-specific ability logic; the
-//                              engine reads them off the resolved def
+//    flags        { bool }   - switches for upgrade-specific ability logic the
+//                              engine reads off the resolved def - the escape
+//                              hatch for a rule no field above can express.
+//                              `flags.stunOnCrash` is the current example: the
+//                              engine stuns whoever a push of this ability
+//                              crashes into a wall or another unit, on top of
+//                              the flat impact damage every crash already
+//                              deals (see sCrash in local/battle/engine.js).
 //    triggers     [{ statusEffect, when, statusEffectOverride? }] - triggers the node gives
 //                 the UNIT (not the ability). See TRIGGERS above for the form
 //                 and the moments.
 //
 // ----------------------------------DEFINITION-----------------------------------
 const U = (o) => Object.assign({
-  name: '', icon: '⭐', desc: '', short: '',
+  name: '', icon: '⭐', desc: '', lore: '',
   requires: [], add: {}, statusEffectAdd: {}, castZoneAdd: [], dmgZoneAdd: [], tagZoneAdd: [],
   pushDistAdd: 0, flags: {},
   triggers: [],
@@ -551,24 +567,24 @@ export const ABILITY_UPGRADES = {
     }),
   },
 
-  chargeHeadbutt: {
+  ram: {
     //Ability Utility Upgrades
     //level 1
     collisionImmune: U({
-      name: 'Padded', icon: '🥊', desc: 'Becomes immune to collisions', short: 'immune to collisions',
+      name: 'Padded', icon: '🥊', desc: 'immune to collisions', lore: 'Becomes immune to collisions',
       triggers: [{ statusEffect: 'collisionImmune', when: 'battleStart' }],
     }),
     //level 2
     regenerate: U({
       requires: ['collisionImmune'],
-      name: 'Regenerating', icon: '♻️', desc: 'Regenerates each turn', short: 'heals 2 every turn',
+      name: 'Regenerating', icon: '♻️', desc: 'heals 2 every turn', lore: 'Regenerates each turn',
       // `turns: 0` switches the clock off (0 is the table's own "no clock"; null
       // would mean "leave it as the table wrote it", i.e. 3 turns).
       triggers: [{ statusEffect: 'regen', when: 'battleStart', statusEffectOverride: { turns: 0 } }],
     }),
     beginEnraged: U({
       requires: ['collisionImmune'],
-      name: 'Raging Entry', icon: '😡', desc: 'Starts each combat enraged', short: 'enraged on turn one',
+      name: 'Raging Entry', icon: '😡', desc: 'enraged on turn one', lore: 'Starts each combat enraged',
       triggers: [{ statusEffect: 'enraged', when: 'battleStart' }],
     }),
     //Ability Power upgrades
@@ -578,18 +594,22 @@ export const ABILITY_UPGRADES = {
       add: { damage: 1 },
     }),
     angryBeetle: U({
-      requires: ['heavyImpact'],
+      requires: ['heavyImpact'], triggers: [{ statusEffect: 'haste', when: 'hit', statusEffectOverride: { turns: 1 } }],
       name: 'Angry Beetle', icon: '💢', desc: 'Gorm is driven into a frenzy when hit, picking up speed to reach his offenders.',
-      // Hastened (speed +1) for one activation, every time he loses hp.
-      triggers: [{ statusEffect: 'haste', when: 'hit', statusEffectOverride: { turns: 1 } }],
-    })
+    }),
+    //level 2
+    concussiveCharge: U({
+      requires: ['heavyImpact'], flags: { stunOnCrash: true },
+      name: 'Concussive Charge', icon: '💫', desc: 'also stuns whoever it crashes into',
+      lore: 'Gorm times the tackle to drive skulls into stone.',
+    }),
   },
 
   glaive: {// A longer range melee attack
     //level 1
     lunge: U({
       dmgZoneAdd: [[1, 0]],
-      name: "Glaive Lunge", icon: '➡️➡️', desc: 'Can reach a tile further than directly in front.', short: '+1 range'
+      name: "Glaive Lunge", icon: '➡️➡️', desc: '+1 range', lore: 'Can reach a tile further than directly in front.'
     }),
     power: U({
       add: { damage: 1 },

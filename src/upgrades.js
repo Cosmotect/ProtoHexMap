@@ -45,20 +45,20 @@ export function abilityDesc(abilityId, config = null) {
 // What a node is CALLED and what it DOES, ready to show.
 //
 // The node's own definition is the source (config/abilities.js). A locale may
-// override it - `upgrade.<ability>.<node>.name` / `.desc` - which is how the
-// Russian table still translates them; English simply has no such keys any
-// more, so the definition speaks for itself. Before 2026-09-11 the locale was
-// the ONLY source, so a node's effect and the sentence describing it lived in
-// different files and drifted apart.
+// override it - `upgrade.<ability>.<node>.name` / `.desc` / `.lore` - which is
+// how the Russian table still translates them; English simply has no such
+// keys any more, so the definition speaks for itself.
+//
+// `desc` is the mechanical one-liner ("+1 damage") a reward card leads with;
+// `lore` (optional) is the fuller flavor sentence shown smaller underneath,
+// in quotes. Empty `lore` = the card just shows `desc` alone.
 export function upgradeInfo(abilityId, nodeId) {
   const node = ABILITY_UPGRADES[abilityId]?.[nodeId];
   const key = `upgrade.${abilityId}.${nodeId}`;
   return {
     name: hasKey(`${key}.name`) ? t(`${key}.name`) : (node?.name || nodeId),
     desc: hasKey(`${key}.desc`) ? t(`${key}.desc`) : (node?.desc || ''),
-    // The few-word line the party view's tree cards show (`short` on the node;
-    // a locale may override it too). Empty = the card falls back to `desc`.
-    short: hasKey(`${key}.short`) ? t(`${key}.short`) : (node?.short || ''),
+    lore: hasKey(`${key}.lore`) ? t(`${key}.lore`) : (node?.lore || ''),
     icon: node?.icon || '⭐',
   };
 }
@@ -97,15 +97,25 @@ export function resolveAbility(abilityId, unlocked = []) {
       if (k === 'damage') def.damage = addDamage(def.damage, v);
       else def[k] = (Number(def[k]) || 0) + v;
     }
-    // `statusEffectAdd: { field: n }` - summed onto the numbers of the status the
-    // ability applies: on top of its own statusEffectOverride where it has one
-    // for that field, otherwise on top of the table's value for the row.
-    if (node.statusEffectAdd && Object.keys(node.statusEffectAdd).length && def.statusEffect) {
-      const row = STATUSES[def.statusEffect] ?? {};
-      def.statusEffectOverride = def.statusEffectOverride ?? {};
-      for (const [k, v] of Object.entries(node.statusEffectAdd)) {
-        const cur = def.statusEffectOverride[k] !== undefined ? def.statusEffectOverride[k] : (Number(row[k]) || 0);
-        def.statusEffectOverride[k] = cur + v;
+    // `statusEffectAdd: { statusEffect, ...field: n }` - `statusEffect` (a
+    // STATUSES row id) says which status this node touches; it is required,
+    // and never itself summed. If the ability does not already apply that
+    // status, it now does - the ability GAINS the status fresh off the
+    // table's own numbers. If it already applies that same status, this only
+    // tunes it further: every other field is summed onto its current numbers
+    // (its own override where it has one, otherwise the table's value).
+    if (node.statusEffectAdd?.statusEffect) {
+      const { statusEffect: wantId, ...deltas } = node.statusEffectAdd;
+      if (!STATUSES[wantId]) {
+        console.warn(`[upgrades] "${abilityId}:${nodeId}" statusEffectAdd names an unknown status "${wantId}"`);
+      } else {
+        const row = STATUSES[wantId];
+        if (def.statusEffect !== wantId) { def.statusEffect = wantId; def.statusEffectOverride = {}; }
+        else def.statusEffectOverride = def.statusEffectOverride ?? {};
+        for (const [k, v] of Object.entries(deltas)) {
+          const cur = def.statusEffectOverride[k] !== undefined ? def.statusEffectOverride[k] : (Number(row[k]) || 0);
+          def.statusEffectOverride[k] = cur + v;
+        }
       }
     }
     // `costAdd: { hp, supplies, move }` - each entry is SUMMED onto the base
@@ -134,7 +144,9 @@ function auditUpgrades() {
     && ['castZone', 'dmgZone', 'tagZone'].every((k) => a[k].length === b[k].length)
     && JSON.stringify(a.pushZone) === JSON.stringify(b.pushZone)
     && JSON.stringify(a.cost) === JSON.stringify(b.cost)
-    && JSON.stringify(a.statusEffectOverride) === JSON.stringify(b.statusEffectOverride);
+    && a.statusEffect === b.statusEffect
+    && JSON.stringify(a.statusEffectOverride) === JSON.stringify(b.statusEffectOverride)
+    && JSON.stringify(a.flags) === JSON.stringify(b.flags);
   const dead = [];
   for (const [abilityId, tree] of Object.entries(ABILITY_UPGRADES)) {
     if (!ABILITIES[abilityId]) { dead.push(`${abilityId}:* (no such ability)`); continue; }
