@@ -219,19 +219,21 @@ fs.mkdirSync(OUT, { recursive: true });
   console.log('  walk:', JSON.stringify(walk));
   if (!walk.skipped) check(walk.marksBefore > 0 && walk.minMarks >= walk.marksBefore - walk.own, `a walk leaves the other units' lock marks standing (${walk.minMarks} of ${walk.marksBefore} throughout, ${walk.own} of them the walker's own)`);
 
-  // The panel: cards numbered in firing order and draggable; reordering through
-  // the engine flips the numbers.
+  // The panel: cards in firing order (placement only - no number badges since
+  // 2026-09-26) and reorderable (held, then dragged); reordering through the
+  // engine re-lists them.
   const panel = await page.evaluate(() => {
     const h = window.__hack;
-    const before = [...document.querySelectorAll('#party-units .unit')].map((c) => ({ i: c.getAttribute('data-party'), n: c.querySelector('.fire-order')?.textContent, drag: c.getAttribute('draggable') }));
+    const before = [...document.querySelectorAll('#party-units .unit')].map((c) => ({ i: c.getAttribute('data-party'), badge: !!c.querySelector('.fire-order'), drag: c.getAttribute('data-reorder') }));
     const order = h.fireOrder();
     h.setFireOrder(order.slice().reverse());
-    const after = [...document.querySelectorAll('#party-units .unit')].map((c) => ({ i: c.getAttribute('data-party'), n: c.querySelector('.fire-order')?.textContent }));
+    const after = [...document.querySelectorAll('#party-units .unit')].map((c) => ({ i: c.getAttribute('data-party') }));
     h.setFireOrder(order);   // back to how it was
     return { before, after, order };
   });
   console.log('  panel:', JSON.stringify(panel));
-  check(panel.before.every((c) => c.drag === 'true') && panel.before.map((c) => c.n).join('') === '123', 'party cards are numbered 1-2-3 and draggable');
+  const liveIdx = await page.evaluate(() => { const u = window.__hack.state.units; return window.__hack.fireOrder().map((uid) => String(u.find((x) => x.uid === uid).partyIndex)).join(''); });
+  check(panel.before.every((c) => c.drag === '1' && !c.badge) && panel.before.map((c) => c.i).join('') === liveIdx, 'party cards stand in firing order, unnumbered, and can be reordered');
   check(panel.after.map((c) => c.i).join('') === panel.before.map((c) => c.i).join('').split('').reverse().join(''), 'reordering the firing order re-lists the cards');
   // Fire - and catch the volley mid-way: the locks go one at a time.
   const midway = await page.evaluate(async () => {
@@ -428,6 +430,11 @@ fs.mkdirSync(OUT, { recursive: true });
       if (at) {
         const moves = b.previewMoves(at);
         b.clickTile(at);
+        // Locking keeps Gorm selected (since 2026-09-26): pick a unit that fires
+        // AFTER him, so the cards show the board as that unit will find it.
+        const ord = b.fireOrder();
+        const later = sb.units.find((u) => !u.isEnemy && u.hp > 0 && ord.indexOf(u.uid) > ord.indexOf(gorm.uid));
+        if (later) { b.selectUnit(later.uid); await wait(30); }
         // The arena rebuilds its lock fx on its next rendered frame - headless
         // software rendering can take a while per frame, so wait for it.
         const v = window.__localView;

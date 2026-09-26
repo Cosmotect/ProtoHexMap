@@ -125,6 +125,7 @@ export const ABILITIES = {
   lobbedShrapnelBurst: A({ name: 'Lobbed ShrapnelBurst', icon: '💥', color: '#ff9950', damage: 3, castZone: ringOffsets(1, 3), dmgZone: ringOffsets(0, 1) }),
   lobbedNerveAgentBurst: A({ name: 'Lobbed Nerve Agent Burst', icon: '🎆', color: '#ff9950', damage: 1, castZone: ringOffsets(1, 4), dmgZone: ringOffsets(0, 1), tagId: 'nerveAgentCloud', tagZone: ringOffsets(0, 1) }),
 
+  volley: A({ name: 'Volley', icon: '🎯', color: '#a8e05f', desc: 'Ranged projectile', damage: 2, castZone: ringOffsets(2, 4), dmgZone: [[0, 0]] }),
   swipe: A({ name: 'Swipe', icon: '💫', color: '#5fc7e0', damage: 5, castZone: ringOffsets(1, 1), dmgZone: [[0, 0], [-1, -1], [0, 1]], rotatable: true }),
   //strike
   //heavy strike
@@ -594,6 +595,11 @@ export const ABILITY_UPGRADES = {
       add: { damage: 1 },
       name: 'Strength', icon: '🦾', desc: 'With strengthened sinews, Gorm hits harder'
     }),
+    //level 2
+    virus: U({
+      requires: ['Power'], //statusEffectAdd: { 'nerveAgent' },
+      name: 'Strength', icon: '🦾', desc: 'With strengthened sinews, Gorm hits harder'
+    }),
   },
   shardProjectile: {
     barbed: U({ name: 'Barbed Arrows', icon: '🪝', desc: '+1 damage', add: { damage: 1 } }),
@@ -604,6 +610,7 @@ export const ABILITY_UPGRADES = {
   },
 
   mendingTouch: {
+    //level 1
     soothe: U({
       add: { heal: 1 },
       name: 'Soothe', icon: '💚', desc: '+1 healing',
@@ -612,17 +619,19 @@ export const ABILITY_UPGRADES = {
       castZoneAdd: ringOffsets(2, 2),
       name: 'Tend', icon: '📏', desc: 'can heal from 2 tiles away',
     }),
+    //level 2
     bloom: U({
-      dmgZoneAdd: ringOffsets(1, 1),
-      name: 'Bloom', icon: '🌸', desc: 'also heals everyone around the target', requires: ['soothe'],
+      requires: ['soothe'], dmgZoneAdd: ringOffsets(1, 1),
+      name: 'Bloom', icon: '🌸', desc: 'also heals everyone around the target',
     }),
     mercy: U({
-      add: { heal: 1 },
-      name: 'Mercy', icon: '🙏', desc: '+1 healing', requires: ['tend'],
+      requires: ['tend'], add: { heal: 1 },
+      name: 'Mercy', icon: '🙏', desc: '+1 healing',
     }),
+    //level 3
     renewal: U({
-      add: { heal: 2 },
-      name: 'Renewal', icon: '✨', desc: '+2 healing', requires: ['bloom', 'mercy'],
+      requires: ['bloom', 'mercy'], add: { heal: 2 },
+      name: 'Renewal', icon: '✨', desc: '+2 healing',
     }),
   },
 

@@ -124,11 +124,24 @@ export class Unit extends Entity {
     this.status = {};
     this.summoned = false;
     this.fled = false;
+    // DOWN BUT NOT OUT (since 2026-09-26): a unit brought to 0 hp stays on
+    // its tile, lying on its side, until a heal brings it back (see `downed`
+    // below). `gone` marks the one way a unit leaves the board for good -
+    // shoved into the void (the engine's sVoid): there is no body left to lie
+    // anywhere. (A unit that ran off the field is `fled`, also gone.)
+    this.gone = false;
     // INTELLECT CLASS (config.intellect): which facts this creature can weigh on
     // its turn. Anything hand-authored without one is treated as the dimmest.
     this.intellect = def.intellect ?? 'C';
   }
   get isUnit() { return true; }
+  // DOWNED: at 0 hp but still on the board - a body. It can do nothing and
+  // takes no damage and no status, but it can be shoved, and it stands in the
+  // way: walkers route around it, a shove into it is a collision. A heal
+  // revives it (the engine's sRevive). Derived,
+  // not stored, so every way hp can reach 0 (a blow, a crush, a poison tick)
+  // lands here without each of them having to say so.
+  get downed() { return this.hp <= 0 && !this.fled && !this.gone; }
   // A unit occupies its tile for everyone who walks; who may pass through whom
   // (a flier over anything, a friend through a friend) is the engine's rule.
   blocks(mover) { return this.alive; }   // eslint-disable-line no-unused-vars

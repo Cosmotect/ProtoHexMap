@@ -64,6 +64,15 @@ export const COMBAT_CONFIG = {
     // pays out, one that got away does not. The fight still counts as won, so the
     // party keeps the encounter's completion reward.
     flee: { afterRound: 7, hpFraction: 0.3 },
+    // ----- DOWN BUT NOT OUT (since 2026-09-26) ------------------------------
+    // A unit (party or enemy) brought to 0 hp does not leave the arena: it lies
+    // on its tile, out of action, taking no damage and no status (it can still
+    // be shoved) - until a heal gets it back up with the heal as its hp. Only a
+    // shove into the void (or an enemy running off) takes a unit off the board
+    // for good. A side with
+    // nobody standing loses. A party member still down when a fight is WON
+    // gets up with reviveFraction of its max hp, rounded up.
+    downed: { reviveFraction: 0.25 },
     // What a status is worth to a creature that cannot read them (see the intellect
     // classes below): enough to bless allies and curse the party, not enough to
     // choose between two targets.

@@ -97,9 +97,20 @@
         <div class="enemy-roster" id="enemy-roster"></div>
       </div>
 
+      <!-- The party panel. On the local map it stands on the RIGHT and the
+           Local Map Info panel on the left (style.css). In a fight it also
+           carries Reset party above the cards and End turn below them. -->
       <div class="panel left-mid party" id="party">
         <div class="party-title" data-i18n="party.title">Party</div>
+        <div class="party-battle-only">
+          <button id="btn-reset-party" class="small reset-party" data-i18n="battle.ui.resetParty" data-i18n-title="battle.ui.resetParty.title">Reset party</button>
+          <div class="li-sep"></div>
+        </div>
         <div id="party-units"></div>
+        <div class="party-battle-only">
+          <div class="li-sep"></div>
+          <button id="btn-end-turn" class="enter" data-i18n="battle.ui.endTurn" data-i18n-title="battle.ui.endTurn.title">End turn</button>
+        </div>
       </div>
       <!-- Pointer from a hovered party card to that unit's body in the arena.
            Same idea and same look as the tutorial's line below. -->
@@ -135,7 +146,7 @@
       </div>
 
       <!-- Battle bar: shown instead of the status bar while a fight runs on the
-           local map. Active unit, its abilities, End turn. src/ui.js fills it
+           local map. Active unit and its abilities. src/ui.js fills it
            from the combat engine's state. -->
       <div class="panel bottom-center battlebar hidden" id="battle-bar">
         <div class="battle-info">
@@ -143,7 +154,7 @@
           <span id="battle-active" class="battle-active"></span>
         </div>
         <div id="battle-abilities" class="battle-abilities"></div>
-        <button id="btn-end-turn" class="enter" data-i18n="battle.ui.endTurn" data-i18n-title="battle.ui.endTurn.title">End turn</button>
+        <!-- (End turn lives at the bottom of the party panel since 2026-09-26.) -->
       </div>
 
       <!-- Deployment bar: before a fight the party walked into, the player

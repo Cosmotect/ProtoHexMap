@@ -735,6 +735,8 @@ export function createUI(config, handlers) {
   // panels behave identically; the only difference is which lookup finds the
   // body in the arena.
   let hovered = null;
+  // A party card being pressed / dragged (see the pointer handlers below).
+  let cardDrag = null;
   for (const [root, kind, attr] of [[els.party, 'party', 'data-party'], [els.enemyRoster, 'enemy', 'data-enemy']]) {
     root.addEventListener('pointerover', (e) => {
       const card = e.target.closest(`.unit[${attr}]`);
@@ -792,6 +794,7 @@ export function createUI(config, handlers) {
 
   let battleRef = null;
   $('btn-end-turn').addEventListener('click', () => { if (battleRef) battleRef.endTurn(); });
+  $('btn-reset-party').addEventListener('click', () => { if (battleRef && battleRef.resetParty) battleRef.resetParty(); });
   els.battleAbilities.addEventListener('click', (e) => {
     const b = e.target.closest('button[data-ab]');
     if (b && battleRef) battleRef.selectAbility(b.dataset.ab);
@@ -857,10 +860,11 @@ export function createUI(config, handlers) {
     els.enemyRoster.innerHTML = order.map((u, i) => {
       // A unit that ran off the field also sits at 0 HP, but it was never killed:
       // the card says so instead of showing it as a casualty.
+      // DISABLED: downed (a body on the arena, until a heal gets it up) or gone.
       const dead = u.hp <= 0;
       const pct = Math.max(0, Math.min(100, (u.hp / u.maxHp) * 100));
       const segPct = (config.party.hpSegment / u.maxHp) * 100;
-      const cls = `${dead ? 'dead' : ''} ${!dead && pct < 50 ? 'hurt' : ''} ${u.uid === sb.activeUid ? 'active' : ''} ${u.uid === sb.inspectUid ? 'inspected' : ''}`;
+      const cls = `${dead ? 'dead disabled' : ''} ${!dead && pct < 50 ? 'hurt' : ''} ${u.uid === sb.activeUid ? 'active' : ''} ${u.uid === sb.inspectUid ? 'inspected' : ''}`;
       // Exactly the party card, minus the relic slot: an enemy carries none, and
       // an empty socket would promise loot that is not there.
       const slots = (u.abilityIds ?? []).map((id) => {
@@ -874,7 +878,7 @@ export function createUI(config, handlers) {
         ${unitCardBody({
         portrait: escapeHtml(initial),
         name: tn(u.name),
-        hpText: u.fled ? t('battle.ui.fled') : u.fleeing ? t('battle.ui.fleeing') : t('party.hp', { hp: Math.max(0, u.hp), max: u.maxHp }),
+        hpText: u.fled ? t('battle.ui.fled') : u.fleeing ? t('battle.ui.fleeing') : u.downed ? t('party.downed', { max: u.maxHp }) : t('party.hp', { hp: Math.max(0, u.hp), max: u.maxHp }),
         pct, segPct, slots: slots.join(''), statuses: statusesFor(u),
       })}
       </div>`;
@@ -886,9 +890,11 @@ export function createUI(config, handlers) {
   // exist there - so it is redrawn on every engine change as well as on every
   // world-map update.
   // In a fight with aim locks, the cards stand in FIRING ORDER (the engine's
-  // fireOrder: the top card's lock fires first) and carry a number saying so;
-  // dragging a card into a new place changes the order (see the handlers
-  // below). Out of a fight the party is listed as it is.
+  // fireOrder: the top card's lock fires first - the placement is the only
+  // marker, the number badges went on 2026-09-26); holding a card and dragging
+  // it into a new place changes the order (see the handlers below). The card of
+  // the SELECTED unit has a green wash; a downed or dead unit's card is greyed.
+  // Out of a fight the party is listed as it is.
   function renderPartyPanel() {
     if (!lastGame) return;
     const live = battleRef ? battleRef.state.units : [];
@@ -899,57 +905,91 @@ export function createUI(config, handlers) {
       const rank = new Map(ordered.map((x, n) => [x.partyIndex, n]));
       rows = rows.slice().sort((a, b) => (rank.get(a.i) ?? 99) - (rank.get(b.i) ?? 99));
     }
-    els.party.innerHTML = rows.map((r) => {
-      const n = ordered && r.live ? (ordered.findIndex((x) => x.uid === r.live.uid) + 1) : 0;
-      return unitCard(r.u, config, r.i, r.live, n > 0 ? n : null, !!ordered && !!r.live && r.live.hp > 0);
-    }).join('');
+    const selUid = battleRef && battleRef.state.phase === 'player' && !battleRef.state.over ? battleRef.state.activeUid : null;
+    els.party.innerHTML = rows.map((r) => unitCard(r.u, config, r.i, r.live, {
+      reorder: !!ordered && !!r.live && r.live.hp > 0,
+      selected: !!r.live && selUid != null && r.live.uid === selUid,
+    })).join('');
+    // A card picked up for dragging survives the redraws that happen under it.
+    if (cardDrag?.dragging) els.party.querySelector(`.unit[data-party="${cardDrag.index}"]`)?.classList.add('dragging');
     markHovered();
   }
-  // Drag a card up or down the list to change the firing order (HTML5 drag and
-  // drop, delegated on the panel). Only party cards in a fight are draggable
-  // (unitCard sets `draggable`); the drop hands the engine the new order.
-  let dragIndex = null;
-  els.party.addEventListener('dragstart', (e) => {
-    const card = e.target.closest('.unit[draggable="true"]');
-    if (!card || !battleRef) { e.preventDefault(); return; }
-    dragIndex = Number(card.getAttribute('data-party'));
-    card.classList.add('dragging');
-    try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(dragIndex)); } catch { /* some browsers */ }
-  });
-  els.party.addEventListener('dragover', (e) => {
-    if (dragIndex == null) return;
-    const card = e.target.closest('.unit[draggable="true"]');
+  // PRESS a card and it is a DRAG by default: the card is picked up as soon as
+  // the pointer moves, and dropping it on another card changes the firing
+  // order. Only when the button comes UP less than a tenth of a card's height
+  // from where it went down does the press count as a click - and a click
+  // selects that unit, exactly as a click on its body in the arena would (the
+  // engine's selectUnit). (2026-09-26: this replaced a half-second hold, which
+  // replaced an HTML5 drag that started on the first pixel of movement.)
+  // Pointer events on the window, not on the card: the panel is redrawn on
+  // every engine change, so the element pressed can be gone a moment later;
+  // the drag works by party index instead.
+  els.party.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || !battleRef || startScreenMode) return;
+    const card = e.target.closest('.unit[data-party]');
     if (!card) return;
-    e.preventDefault();
+    e.preventDefault();   // no text selection while the card is held
+    endCardDrag();
+    cardDrag = {
+      index: Number(card.getAttribute('data-party')),
+      pointerId: e.pointerId,
+      x: e.clientX, y: e.clientY,
+      // The click threshold: a tenth of the card's height (on screen, so it
+      // scales with the HUD).
+      slop: card.getBoundingClientRect().height / 10,
+      reorder: card.hasAttribute('data-reorder'),
+      dragging: false,
+    };
+  });
+  const cardMoved = (e) => Math.hypot(e.clientX - cardDrag.x, e.clientY - cardDrag.y);
+  // The card the pointer is over, and whether the drop lands after it.
+  function dropSpot(e) {
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const card = el && el.closest ? el.closest('#party-units .unit[data-reorder]') : null;
+    if (!card) return null;
     const r = card.getBoundingClientRect();
-    const below = e.clientY > r.top + r.height / 2;
+    return { card, below: e.clientY > r.top + r.height / 2 };
+  }
+  window.addEventListener('pointermove', (e) => {
+    if (!cardDrag || e.pointerId !== cardDrag.pointerId) return;
+    if (!cardDrag.dragging) {
+      if (!cardDrag.reorder || cardMoved(e) < cardDrag.slop) return;
+      const sb = battleRef?.state;
+      if (!sb || sb.over || sb.busy || sb.phase !== 'player') return;
+      cardDrag.dragging = true;
+      document.body.classList.add('card-dragging');
+      els.party.querySelector(`.unit[data-party="${cardDrag.index}"]`)?.classList.add('dragging');
+    }
     els.party.querySelectorAll('.unit').forEach((c) => c.classList.remove('drop-before', 'drop-after'));
-    card.classList.add(below ? 'drop-after' : 'drop-before');
+    const spot = dropSpot(e);
+    if (spot && Number(spot.card.getAttribute('data-party')) !== cardDrag.index) spot.card.classList.add(spot.below ? 'drop-after' : 'drop-before');
   });
-  els.party.addEventListener('dragleave', (e) => {
-    const card = e.target.closest && e.target.closest('.unit');
-    if (card && !card.contains(e.relatedTarget)) card.classList.remove('drop-before', 'drop-after');
-  });
-  els.party.addEventListener('drop', (e) => {
-    if (dragIndex == null || !battleRef) return;
-    e.preventDefault();
-    const card = e.target.closest('.unit[draggable="true"]');
-    const cards = [...els.party.querySelectorAll('.unit[draggable="true"]')];
-    if (!card || !cards.length) { endDrag(); return; }
-    const r = card.getBoundingClientRect();
-    const below = e.clientY > r.top + r.height / 2;
-    const order = cards.map((c) => Number(c.getAttribute('data-party'))).filter((i) => i !== dragIndex);
-    let at = order.indexOf(Number(card.getAttribute('data-party')));
-    if (at < 0) at = order.length; else if (below) at += 1;
-    order.splice(at, 0, dragIndex);
+  window.addEventListener('pointerup', (e) => {
+    if (!cardDrag || e.pointerId !== cardDrag.pointerId) return;
+    const drag = cardDrag;
+    const click = cardMoved(e) < drag.slop;
+    const spot = !click && drag.dragging ? dropSpot(e) : null;
+    endCardDrag();
+    if (!battleRef) return;
+    if (click) {
+      const live = battleRef.state.units.find((x) => x.partyIndex === drag.index);
+      if (live && battleRef.selectUnit) battleRef.selectUnit(live.uid);
+      return;
+    }
+    if (!spot) return;
+    const cards = [...els.party.querySelectorAll('.unit[data-reorder]')];
+    const order = cards.map((c) => Number(c.getAttribute('data-party'))).filter((i) => i !== drag.index);
+    let at = order.indexOf(Number(spot.card.getAttribute('data-party')));
+    if (at < 0) at = order.length; else if (spot.below) at += 1;
+    order.splice(at, 0, drag.index);
     const units = battleRef.state.units;
     const uids = order.map((i) => units.find((x) => x.partyIndex === i)?.uid).filter(Boolean);
-    endDrag();
     if (battleRef.setFireOrder) battleRef.setFireOrder(uids);
   });
-  els.party.addEventListener('dragend', endDrag);
-  function endDrag() {
-    dragIndex = null;
+  window.addEventListener('pointercancel', (e) => { if (cardDrag && e.pointerId === cardDrag.pointerId) endCardDrag(); });
+  function endCardDrag() {
+    cardDrag = null;
+    document.body.classList.remove('card-dragging');
     els.party.querySelectorAll('.unit').forEach((c) => c.classList.remove('dragging', 'drop-before', 'drop-after'));
   }
 
@@ -1016,6 +1056,8 @@ export function createUI(config, handlers) {
       els.battleAbilities.innerHTML = '';
       $('btn-end-turn').disabled = true;
     }
+    // Reset party is live exactly when End turn is: the player's phase, nothing moving.
+    $('btn-reset-party').disabled = $('btn-end-turn').disabled;
   }
 
   // ----- the start screen (party around the campfire) ----------------------
@@ -1308,12 +1350,15 @@ function unitCardBody({ portrait, name, hpText, pct, segPct, slots, statuses }) 
 // A party member. `live` is its instance inside the combat engine when a fight
 // is running - the only place its shields and stuns exist; out of a fight there
 // is none and every status socket is simply empty.
-// `order` (1, 2, 3...) is the unit's place in the firing order during a fight
-// with aim locks; `draggable` lets the card be dragged to a new place.
-function unitCard(u, config, index, live, order = null, draggable = false) {
+// `reorder` marks a card that can be held and dragged to a new place in the
+// firing order (a fight with aim locks); `selected` is the unit picked in the
+// fight. A DISABLED unit - downed in the fight (`live.downed`), or dead - is
+// greyed out.
+function unitCard(u, config, index, live, { reorder = false, selected = false } = {}) {
   const pct = Math.max(0, Math.min(100, (u.hp / u.maxHp) * 100));
   const segPct = (config.party.hpSegment / u.maxHp) * 100;
-  const cls = !u.alive ? 'dead' : pct < 50 ? 'hurt' : '';
+  const downed = !!(live && live.hp <= 0);
+  const cls = [!u.alive ? 'dead disabled' : downed ? 'disabled' : pct < 50 ? 'hurt' : '', selected ? 'selected' : ''].filter(Boolean).join(' ');
   const abs = unitAbilityIds(u.name).map((id) => {
     const ab = ABILITIES[id];
     if (!ab) return slotBox('ab', null, t('slot.ability.empty'));
@@ -1328,12 +1373,11 @@ function unitCard(u, config, index, live, order = null, draggable = false) {
   // The relic slot. Relics do not exist yet; the socket is here so the space is
   // designed for from the start rather than bolted on later.
   abs.push(slotBox('relic', u.relic?.icon ?? null, u.relic ? tn(u.relic.name) : t('slot.relic.empty')));
-  return `<div class="unit ${cls}" data-party="${index}"${draggable ? ' draggable="true" title="' + escapeAttr(t('party.order.drag')) + '"' : ''}>
-    ${order ? `<span class="fire-order" title="${escapeAttr(t('party.order.title', { n: order }))}">${order}</span>` : ''}
+  return `<div class="unit ${cls}" data-party="${index}"${reorder ? ' data-reorder="1" title="' + escapeAttr(t('party.order.drag')) + '"' : ''}>
     ${unitCardBody({
     portrait: u.icon,
     name: tn(u.name),
-    hpText: u.alive ? t('party.hp', { hp: u.hp, max: u.maxHp }) : t('party.disabled'),
+    hpText: !u.alive ? t('party.disabled') : downed ? t('party.downed', { max: u.maxHp }) : t('party.hp', { hp: u.hp, max: u.maxHp }),
     pct, segPct, slots: abs.join(''), statuses: statusesFor(live),
   })}
   </div>`;

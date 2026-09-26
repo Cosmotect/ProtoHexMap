@@ -206,6 +206,9 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   const sbH = (k) => sb.heights[k] ?? 0;
   const alive = (f) => sb.units.filter((u) => u.hp > 0 && (f === undefined || u.isEnemy === f));   // fled units carry hp 0, so they drop out here too
   const unitAt = (k) => sb.units.find((u) => u.hp > 0 && u.pos === k);
+  // A DOWNED unit's body on this tile (entity.js Unit.downed): not a unit that
+  // acts or can be hit, but an obstacle all the same.
+  const bodyAt = (k) => sb.units.find((u) => u.downed && u.pos === k);
   const objectAt = (k) => sb.objects.find((o) => o.alive && o.pos === k);
   const curP = () => sb.units.find((u) => u.uid === sb.activeUid && !u.isEnemy && u.hp > 0);
   const speedFloor = (u) => Math.min(u.speed, CFG.minSpeed);
@@ -513,10 +516,11 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       objects: sb.objects.map((o) => o.clone()),
       tags: Object.fromEntries(Object.entries(sb.tags).map(([k, t]) => [k, { ...t }])),
       heights: { ...sb.heights }, deathQueue: [],
-      rec: { dmg: {}, moved: {}, killed: {}, applied: {}, stripped: {}, voided: {}, tmoved: {}, tkilled: {} } };
+      rec: { dmg: {}, moved: {}, killed: {}, revived: {}, applied: {}, stripped: {}, voided: {}, tmoved: {}, tkilled: {} } };
   }
   const stH = (st, k) => st.heights[k] ?? 0;
   const sUnitAt = (st, k) => st.units.find((u) => u.hp > 0 && u.pos === k);
+  const sBodyAt = (st, k) => st.units.find((u) => u.downed && u.pos === k);
   const sObjectAt = (st, k) => st.objects.find((o) => o.alive && o.pos === k);
   const sBarrier = (st, k) => { const t = st.tags[k]; return t && t.hp > 0 ? t : null; };
   // What an Entity hook is handed (see entity.js): the board the blow lands
@@ -554,7 +558,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       if (st.sim) { st.rec.dmg[v.uid] = (st.rec.dmg[v.uid] || 0) + amt; if (v.hp <= 0) st.rec.killed[v.uid] = 1; }
       else {
         if (!quiet) { floater(v.pos, pre + '-' + amt + (label ? ' ' + label : ''), '#ff5d73'); blog(atk + v.name + ': -' + amt + (label ? ' ' + label : '')); }
-        if (v.hp <= 0) { blog(v.name + ' is down'); noteDeath(st, v, v.pos, label || 'damage'); }
+        if (v.hp <= 0) { v.lock = null; blog(v.name + ' is down'); noteDeath(st, v, v.pos, label || 'damage'); }
       }
       // The 'hit' moment: hp was actually lost (a blocked hit returned above).
       // A unit that just died gets nothing - applyStatus refuses the dead.
@@ -616,6 +620,19 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     if (st.sim) st.rec.dmg[v.uid] = (st.rec.dmg[v.uid] || 0) - g;
     else if (g > 0) { floater(v.pos, '+' + g, '#a8e05f'); blog((st.atk ? st.atk + ' -> ' : '') + v.name + ': +' + g); }
   }
+  // DOWN BUT NOT OUT: a heal landing on a downed body brings it back, with the
+  // heal as its hp. It gets up fresh - the statuses it went down with are gone,
+  // and it acts from the next round on (its side's next phase), never in the
+  // middle of the one it was revived in.
+  function sRevive(st, v, amt) {
+    if (amt <= 0 || !v || !v.isUnit || !v.downed) return;
+    v.hp = Math.min(v.maxHp, amt);
+    v.status = {};
+    v.lock = null;
+    v.done = true;
+    if (st.sim) { st.rec.dmg[v.uid] = (st.rec.dmg[v.uid] || 0) - v.hp; st.rec.revived[v.uid] = 1; }
+    else { floater(v.pos, 'REVIVED +' + v.hp, '#a8e05f'); blog((st.atk ? st.atk + ' -> ' : '') + v.name + ' is back up (+' + v.hp + ')'); }
+  }
   // Crashes and falls stun; so does any ability with statusEffect: 'stun'. All of them come
   // through here, and what "stunned" DOES is the table's business, not this line's.
   function sStun(st, v) {
@@ -631,6 +648,13 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     }
   }
   function sVoid(st, ent) {
+    // A downed body shoved over the edge goes too: out of the world, gone.
+    if (ent && ent.isUnit && ent.downed) {
+      ent.gone = true; ent.lock = null;
+      if (st.sim) st.rec.voided[ent.uid] = 1;
+      else { floater(ent.pos, '🕳 VOID', '#c66dff'); blog(ent.name + ' is shoved into the void'); }
+      return;
+    }
     if (!ent || ent.hp <= 0) return;
     if (ent instanceof Entity && !ent.isUnit) {
       // An object over the edge: gone, its class told.
@@ -652,6 +676,8 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       // that tile, not the hole, is where anything it was carrying stays.
       noteDeath(st, ent, ent.pos, 'void');
       ent.hp = 0;
+      ent.gone = true;   // no body: it fell out of the world (not downed)
+      ent.lock = null;
     } else {
       ent.hp = 0;
       if (st.tags[ent.k] === ent) delete st.tags[ent.k];
@@ -691,7 +717,9 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     if (isVoid(nk)) { sVoid(st, ent); return; }
     const wall = !tilePass(nk) || (stH(st, nk) - stH(st, k) >= 2);
     if (wall) { sImpact(st, ent, 2, 'crash'); return; }
-    const occ = sUnitAt(st, nk) || sObjectAt(st, nk) || sBarrier(st, nk);
+    // A downed body in the way is an occupant like any other: a collision (it
+    // takes nothing from it - sHit/sStun pass a body by), or a crush from above.
+    const occ = sUnitAt(st, nk) || sObjectAt(st, nk) || sBarrier(st, nk) || sBodyAt(st, nk);
     const drop = stH(st, k) - stH(st, nk);
     if (occ) {
       if (drop >= 2) {
@@ -699,7 +727,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
         const saved = occ.isUnit && st.shieldUsed && st.shieldUsed.has(occ.uid);
         if (occ.hp > 0 && !saved) {
           const nk2 = addK(nk, DIRS[dir]);
-          const room = isVoid(nk2) || (tilePass(nk2) && (stH(st, nk2) - stH(st, nk) < 2) && !sUnitAt(st, nk2) && !sObjectAt(st, nk2) && !sBarrier(st, nk2));
+          const room = isVoid(nk2) || (tilePass(nk2) && (stH(st, nk2) - stH(st, nk) < 2) && !sUnitAt(st, nk2) && !sObjectAt(st, nk2) && !sBarrier(st, nk2) && !sBodyAt(st, nk2));
           // (An object that cannot be pushed is crushed where it stands, like a barrier.)
           if (room && !(occ instanceof Entity && !occ.pushable)) sPush(st, occ, dir, depth + 1);
           else if (occ.isUnit) {
@@ -709,10 +737,12 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
             occ.hp = 0;
           } else sHit(st, occ, 999, '');
         }
-        const blocked = sUnitAt(st, nk) || sObjectAt(st, nk) || sBarrier(st, nk);
+        // (A unit crushed flat above is now a downed body on nk: still in the way.
+        // A body under the drop is not shoved on down the line - its hp is 0.)
+        const blocked = sUnitAt(st, nk) || sObjectAt(st, nk) || sBarrier(st, nk) || sBodyAt(st, nk);
         if (blocked) {
           sImpact(st, ent, 2, 'crash');
-        } else if (ent.hp > 0) {
+        } else if (ent.hp > 0 || (isU && ent.downed)) {
           sMoveTo(st, ent, nk);
           sImpact(st, ent, 2, 'fall'); sStun(st, ent);
           if (isU) sArrive(st, ent, depth);
@@ -725,12 +755,6 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       if (drop >= 2) { sImpact(st, ent, 2, 'fall'); sStun(st, ent); }
       if (isU && ent.hp > 0) sArrive(st, ent, depth);
     }
-  }
-  function sPushCorpse(st, ent, dir) {
-    const k = ent.pos, nk = addK(k, DIRS[dir]);
-    if (!tilePass(nk) || (stH(st, nk) - stH(st, k) >= 2)) return;
-    const occ = sUnitAt(st, nk) || sObjectAt(st, nk) || sBarrier(st, nk);
-    if (occ) sImpact(st, occ, 2, 'crash');
   }
   function flushDeaths(st, depth = 0) {
     let guard = 0;
@@ -750,8 +774,6 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     if (caster.name) st.atk = caster.name;
     if (!st.sim && caster.name) blog(caster.name + ' casts ' + ab.name);
     const rk = abRotFor(ab, caster.pos, targetK);
-    const preAlive = new Set();
-    for (const u of st.units) if (u.hp > 0) preAlive.add(u.uid);
     // 1 - damage / heal / statuses
     // How hard this caster hits right now: every status it carries with a
     // damageDealt multiplier, folded together. Read BEFORE the cast spends any of
@@ -768,7 +790,13 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       const hz = st.tags[dt];
       if (hz && hz.hp <= 0 && !st.sim && rules && rules.onHazardHit) rules.onHazardHit(st, hz, caster, dt, ab);
       const tgt = u || ob || bt;
-      if (!tgt) { if (!st.sim) floater(dt, '✸', ab.color); continue; }
+      // A downed body takes no blow and no status - only a heal, which revives it.
+      if (!tgt) {
+        const body = sBodyAt(st, dt);
+        if (body && ab.heal > 0) { sRevive(st, body, ab.heal); continue; }
+        if (!st.sim) floater(dt, '✸', ab.color);
+        continue;
+      }
       if (abDmg.base > 0) {
         // Everything below changes the BASE - every one of the ability's hits.
         let dmg = Math.max(0, abDmg.base + dmgMod(caster)), lbl = '';
@@ -814,19 +842,21 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       const dt = addK(targetK, rotOff([o[0], o[1]], rk)); if (!tilePass(dt)) continue;
       const rd = rotDir(o[2], rk);
       const dist = (o[3] || 1) >= 2 ? 2 : 1;
-      const u = sUnitAt(st, dt);
+      // A downed body is shoved like anyone (it just takes no damage or status).
+      const u = sUnitAt(st, dt) || sBodyAt(st, dt);
       if (u) { shoves.push({ ent: u, dir: rd, dist }); continue; }
       const ob = sObjectAt(st, dt);
       if (ob) { if (ob.pushable) shoves.push({ ent: ob, dir: rd, dist }); continue; }
-      const corpse = st.units.find((x) => x.hp <= 0 && !x.fled && x.pos === dt && preAlive.has(x.uid));
-      if (corpse) { sPushCorpse(st, corpse, rd); continue; }
+      // (A unit this very cast put down is a body now, and was shoved above.)
       const t = st.tags[dt]; if (t && t.hp > 0 && t.pushable) shoves.push({ ent: t, dir: rd, dist });
     }
     const maxDist = shoves.reduce((m, s) => Math.max(m, s.dist), 0);
     const posOf = (e) => (e instanceof Entity ? e.pos : e.k);
+    // Still on the board to be shoved: alive, or a downed body.
+    const shovable = (e) => e.hp > 0 || (e.isUnit && e.downed);
     const stepOne = (s) => {
       s.pending = false;
-      if (s.ent.hp <= 0) { s.stopped = true; return; }
+      if (!shovable(s.ent)) { s.stopped = true; return; }
       const from = posOf(s.ent);
       sPush(st, s.ent, s.dir, depth);
       if (posOf(s.ent) === from) s.stopped = true;
@@ -840,7 +870,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
         for (const s of wave) {
           if (!s.pending) continue;
           const nk = addK(posOf(s.ent), DIRS[s.dir]);
-          if (wave.some((o) => o !== s && o.pending && o.ent.hp > 0 && posOf(o.ent) === nk)) continue;
+          if (wave.some((o) => o !== s && o.pending && shovable(o.ent) && posOf(o.ent) === nk)) continue;
           stepOne(s); moved = true;
         }
         if (!moved || guard++ > wave.length + 2) for (const s of wave) if (s.pending) stepOne(s);
@@ -858,7 +888,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       const d = tagDefById(ab.tagId);
       if (d) for (const off of ab.tagZone) {
         const dt = addK(targetK, rotOff(off, rk)); if (!tilePass(dt)) continue;
-        if (d.hp > 0 && (sUnitAt(st, dt) || sObjectAt(st, dt) || sBarrier(st, dt))) continue;
+        if (d.hp > 0 && (sUnitAt(st, dt) || sObjectAt(st, dt) || sBarrier(st, dt) || sBodyAt(st, dt))) continue;
         st.tags[dt] = tagInst(d, ab.tagId, dt);
         if (d.collectible && d.hp <= 0) { const u = sUnitAt(st, dt); if (u) sArrive(st, u, depth); }
       }
@@ -901,7 +931,13 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // `cap` overrides the budget (Infinity = every reachable tile, used by walked()).
   function reach(u, fromK = u.pos, cap) {
     const hard = new Set(), soft = new Set();
-    for (const o of sb.units) { if (o.hp <= 0 || o === u) continue; ((!u.flying && o.isEnemy !== u.isEnemy) ? hard : soft).add(o.pos); }
+    for (const o of sb.units) {
+      if (o === u) continue;
+      // A downed body: a wall to a walker, a no-stopping tile to a flier.
+      if (o.downed) { (u.flying ? soft : hard).add(o.pos); continue; }
+      if (o.hp <= 0) continue;
+      ((!u.flying && o.isEnemy !== u.isEnemy) ? hard : soft).add(o.pos);
+    }
     for (const k in sb.tags) { if (sb.tags[k].hp > 0) (u.flying ? soft : hard).add(k); }
     // An object that blocks stands like a barrier: a wall to a walker, a
     // no-stopping tile to a flier.
@@ -927,7 +963,11 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   const canStop = (res, k) => res.d[k] !== undefined && !res.occ.has(k);
   function approachField(u) {
     const hard = new Set();
-    if (!u.flying) { for (const k in sb.tags) if (sb.tags[k].hp > 0) hard.add(k); for (const o of sb.objects) if (o.blocks(u)) hard.add(o.pos); }
+    if (!u.flying) {
+      for (const k in sb.tags) if (sb.tags[k].hp > 0) hard.add(k);
+      for (const o of sb.objects) if (o.blocks(u)) hard.add(o.pos);
+      for (const o of sb.units) if (o.downed) hard.add(o.pos);
+    }
     const d = {}, pq = [];
     for (const p of alive(false)) { d[p.pos] = 0; pq.push([0, p.pos]); }
     while (pq.length) {
@@ -990,7 +1030,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     for (let i = 1; i < line.length - 1; i++) {
       const mid = line[i];
       if (!dashTileOk(mid)) return false;
-      const o = unitAt(mid);
+      const o = unitAt(mid) || bodyAt(mid);
       if (o && o.uid !== c.uid) return false;
     }
     return true;
@@ -1008,6 +1048,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       const t = st.tags[k];
       if (t && t.hp > 0) break;                       // a solid tag blocks like a wall
       if (sObjectAt(st, k)) break;                    // so does an object
+      if (sBodyAt(st, k)) break;                      // and a downed body
       const o = sUnitAt(st, k);
       if (o && o.uid !== caster.uid) break;           // someone is still standing there
       last = k;
@@ -1474,8 +1515,11 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
             // ----- tile tags: a fire is a place to shove someone into, and a place
             // not to stand. One rule covers both ends of it.
             const harm = mind.tags ? tagHarm(u.pos) * 8 : 0;
-            if (!u.isEnemy) score += d * 10 + (st.rec.killed[u.uid] ? killBonus : 0) + sv + focus + harm;
-            else score -= d * 9 + (st.rec.killed[u.uid] ? killBonus : 0) + sv + harm;
+            // ----- DOWN BUT NOT OUT: getting a downed body back up is worth what
+            // putting it down was (the heal it took already counts through d).
+            const revive = st.rec.revived[u.uid] ? (killBonus || 20) : 0;
+            if (!u.isEnemy) score += d * 10 + (st.rec.killed[u.uid] ? killBonus : 0) + sv + focus + harm - revive;
+            else score -= d * 9 + (st.rec.killed[u.uid] ? killBonus : 0) + sv + harm - revive;
           }
           if (score > 0 && (!best || score > best.score || (score === best.score && res.d[startK] < best.cost)))
             best = { ab, startK, t, score, cost: res.d[startK] };
@@ -1588,7 +1632,16 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     if (!c.done && !c.moveLocked) {
       const res = sb.reach ?? reach(c, c.startPos);
       if (k !== c.pos && canStop(res, k)) {
-        const path = pathTo(res, c.startPos, k);
+        // RANGE is measured from the round's starting tile (res), but the walk
+        // itself goes from where the unit stands NOW: a second move no longer
+        // snaps the unit back to its start and replays the whole route from
+        // there (until 2026-09-26 it did). Any route will do for the animation
+        // - the price is still read off startPos by walked() - so the shortest
+        // one from here is taken, falling back to the start's route only if
+        // nothing connects (it always should: both reach the same tile).
+        if (!pathTo(res, c.startPos, k)) return;
+        const here = reach(c, c.pos, Infinity);
+        const path = pathTo(here, c.pos, k) || pathTo(res, c.startPos, k);
         if (!path) return;
         sb.reach = null;
         // A walk takes the unit's locked aim back: the pattern was measured
@@ -1660,16 +1713,47 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     }
     return { rk, tiles: out };
   }
-  // Lock a unit's aim. Re-aiming replaces the lock; the unit stays selectable,
-  // and selection moves on to the next unit that has not aimed yet.
+  // Lock a unit's aim. Re-aiming replaces the lock. The unit STAYS selected:
+  // the player picks the next one themselves (until 2026-09-26 selection jumped
+  // on to the next unit that had not aimed yet).
   function lockAim(c, ab, anchor) {
     const { rk, tiles } = zoneTiles(ab, c.pos, anchor);
     c.lock = { abId: sb.selAb, abName: ab.name, icon: ab.icon, anchor, rk, tiles, damage: damageTotal(ab.damage) };
     sb.selAb = null; sb.aimMap = null;
     floater(anchor, '🔒 ' + ab.name, '#ffd166');
     blog(c.name + ' locks ' + ab.name);
-    const next = sb.units.find((u) => !u.isEnemy && u.hp > 0 && !u.done && !u.lock);
-    if (next) select(next); else { refreshReach(); emit(); }
+    refreshReach(); emit();
+  }
+  // RESET PARTY (the party panel's button): every aim lock taken back and every
+  // unit put back on the tile it started the round on - the whole player phase
+  // laid out so far, undone in one go. Only what the phase can take back:
+  // nothing has fired and nothing has been paid yet (costs are paid when the
+  // volley fires), so a reset is exact. (Something a walk set off on the way -
+  // a trap that bit, a pickup - stays done, as it does when a walk is re-aimed.)
+  function resetParty() {
+    if (sb.over || sb.busy || sb.phase !== 'player') return false;
+    sb.selAb = null; sb.aimMap = null;
+    for (const u of sb.units) {
+      if (u.isEnemy || u.hp <= 0) continue;
+      u.lock = null;
+      if (!u.done && !u.moveLocked && u.startPos && u.pos !== u.startPos) u.pos = u.startPos;
+    }
+    blog('The party resets its turn');
+    refreshReach();
+    emit();
+    return true;
+  }
+  // The party panel's card pressed: select that unit, as a click on its body
+  // in the arena would. Any ability being aimed is put down first (on the
+  // board, a click with an ability up would aim it instead).
+  function selectUnit(uid) {
+    if (sb.over || sb.busy || sb.phase !== 'player') return false;
+    const u = sb.units.find((x) => x.uid === uid && !x.isEnemy && x.hp > 0 && !x.done);
+    if (!u) return false;
+    if (u.uid === sb.activeUid && !sb.selAb) return true;
+    clearInspect();
+    select(u);
+    return true;
   }
   // The party in FIRING order: sb.fireOrder first (the panel's card order),
   // then anyone the order does not name, by spawn index.
@@ -1884,7 +1968,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     const { st } = sim;
     const out = [];
     for (const u of sb.units) {
-      if (u.hp <= 0) continue;
+      if (u.hp <= 0 && !u.downed) continue;   // a downed body can be shoved too
       const su = st.units.find((x) => x.uid === u.uid);
       if (!su) continue;
       const dead = su.hp <= 0;
@@ -1955,7 +2039,8 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   return {
     state: sb,
     start,
-    clickTile, selectAbility, endTurn, inspect, cancel, activate: (uid) => { const u = sb.units.find((x) => x.uid === uid && !x.isEnemy && x.hp > 0 && !x.done); if (u && sb.phase === 'player' && !sb.busy) select(u); },
+    clickTile, selectAbility, endTurn, inspect, cancel, resetParty,
+    selectUnit, activate: selectUnit,
     abilityById: abById,
     aimPreview,
     abilityFor: abFor,   // (unit, id) - the unit's UPGRADED def where it has one

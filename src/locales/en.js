@@ -101,6 +101,10 @@ export const en = {
   'slot.ability.empty': 'Ability slot - empty',
   'slot.relic.empty': 'Relic slot - empty',
   'party.disabled': 'DISABLED',
+  'party.downed': 'DOWN - 0 / {max} HP',
+  'battle.ui.downed': 'down',
+  'battle.ui.resetParty': 'Reset party',
+  'battle.ui.resetParty.title': 'Take back every aim and put every unit back where it started the turn',
 
   // ----- hover / popup -----------------------------------------------------
   'hover.unexplored': 'Unexplored ({q},{r})',
@@ -323,6 +327,7 @@ export const en = {
   'log.battle.enemy': '{name} ({hp} HP)',
   'log.battle.partyFirst': 'The party strikes first.',
   'log.unitDisabled': '{name} is disabled.',
+  'log.unitRevived': '{name} gets back up ({hp} HP).',
   'log.victory': 'Victory after {n} {n:round|rounds}.',
   'log.victorySupplies': 'Salvaged {got} of {n} supplies from the battlefield.',
   'log.defeat': 'Defeat after {n} {n:round|rounds}.',
@@ -537,7 +542,7 @@ export const en = {
   'battle.ui.aimed': '{n}/{total} aimed - End turn fires all, top card first.',
   // The party panel in a fight: the cards stand in firing order and can be dragged.
   'party.order.title': 'Fires {n}. of the party this turn - drag the card to change the order',
-  'party.order.drag': 'Drag up or down to change when this unit fires',
+  'party.order.drag': 'Click to select this unit - drag up or down to change when it fires',
   'battle.ui.locked': 'Position locked. Cast an ability or end the turn.',
   'battle.ui.moveLeft.title': 'Movement points left this round (after walking and ability costs)',
   'battle.ui.supplies.title': 'The run\'s supplies - some abilities cost them',

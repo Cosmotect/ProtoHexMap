@@ -301,12 +301,32 @@ timed camera flight and carries the world camera's bearing into the arena.
 
 **Aim locks.** With locked aiming on (`combat.lockedAim`, currently always true),
 clicking a target does not fire immediately - it stores a lock (`ability id, anchor,
-tiles, damage`) on the unit and hands the turn to the next unlocked unit. Any unit
-can walk freely during the player phase (measured from its position at the start of
-the round) and hold one lock at a time; re-aiming replaces the lock, walking clears
-it. **End Turn** fires every standing lock in party-panel order (the cards are
-numbered and can be dragged to reorder; the order carries to the next fight), one at
-a time with a short delay between casts (`combat.volleyStepMs`), not simultaneously.
+tiles, damage`) on the unit, and the unit STAYS selected (until 2026-09-26 the
+selection jumped to the next unlocked unit; the player now picks the next one).
+Any unit can walk freely during the player phase (its range measured from its
+position at the start of the round) and hold one lock at a time; re-aiming replaces
+the lock, walking clears it. A second walk animates from where the unit stands now,
+not from its start tile (the price is still measured from the start). **End Turn**
+fires every standing lock in party-panel order (the cards stand top to bottom in
+firing order - no number badges since 2026-09-26 - and the order carries to the
+next fight), one at a time with a short delay between casts (`combat.volleyStepMs`),
+not simultaneously. **Reset party** (the engine's `resetParty`) takes every lock back
+and puts every unit back on the tile it started the round on; nothing has been paid
+or fired yet, so it is an exact undo (a trap a walk set off stays set off).
+
+**The party panel in a fight** (`ui.js`). The party panel stands on the RIGHT
+everywhere (world map, campfire, arena) and the Local Map Info panel (the fight's
+title, effects and the enemy roster) on the LEFT.
+In a fight the panel reads, top to bottom: Reset party, a separator, the unit
+cards, a separator, End turn (End turn left the battle bar on 2026-09-26). A press
+on a card is a DRAG by default - the card follows the pointer to a new place in
+the firing order; only a release less than a tenth of the card's height from the
+press counts as a click, which selects the unit as a click on its body in the
+arena does (the engine's `selectUnit`, which also puts down an ability being
+aimed). The selected unit's card has a green wash; a DISABLED unit's card - downed
+or dead - is more transparent with a grey frame, on both panels. Health bars on
+the cards (party panel, enemy roster, TAB party view) keep their side's colour
+whatever the amount - party green, enemy red - as the overhead cards do.
 Combat therefore reads as the units acting one after another, as they originally
 did - except that the player lays the whole turn out first, sees its result, and
 can rearrange it before committing.
@@ -442,9 +462,28 @@ extra enemy-only opening phase before round 1; it no longer does. A forced fight
 still shows round 1 labelled "Ambush!" in the battle bar as a cosmetic note, cleared
 at the end of that round.
 
-**Death handling.** A death is recorded with its cause, tile and round for a future
-loot system, but nothing reads that record yet; visually, a dead unit's token is
-simply hidden - there is no corpse or marker left on the arena.
+**Down but not out (DBNO, since 2026-09-26; `combat.downed`).** A unit - party or
+enemy - brought to 0 hp does not leave the arena: it is DOWNED (`Unit.downed`,
+derived: 0 hp, not `fled`, not `gone`). It lies on its tile, its token tipped 90
+degrees onto its side (`LocalMapView.setTokenDowned`), shows no overhead card, and
+can do nothing. A downed body takes no damage and no status, but it CAN be shoved
+like anyone (a collision hurts only the other party to it; over the edge it is
+gone for good). It is an obstacle: walkers route around it (fliers may pass over,
+not stop), a charge stops in front of it, a solid tag cannot be placed on it.
+A heal landing on it REVIVES it (`sRevive`): the heal becomes its hp, its statuses
+are cleared, and it acts from its side's next phase. The enemy AI values getting an
+ally back up as much as putting a party member down. Only a shove into the void
+takes a unit off the board for good (`gone`, the token vanishes) - that, and an
+enemy running off. A side with nobody standing loses. A party member still downed
+when a fight is WON gets up with `reviveFraction` (a quarter) of its max hp, rounded
+up (`game.finishCombat`, from the `downed` list `main.js` reports); after a lost
+fight they fall as before. A unit a cast puts down is a body by the time the
+cast's shoves resolve, so it is shoved with the rest (this replaced the old
+corpse push, where it only knocked into whatever stood behind it).
+
+**Death handling.** A unit going down (or into the void) is recorded with its cause,
+tile and round for a future loot system (`sb.deaths`, once per unit - a revived and
+re-downed unit is not recorded twice), but nothing reads that record yet.
 
 **Wiring.** `main.js` sets `game.combatDelegate`: if the camera is already in the
 arena it starts the fight directly, otherwise it triggers the dive-in cinematic and
@@ -794,7 +833,10 @@ soft-lock a fight.
 * The headless playtests that exist are `tools/hack-test.cjs` (the Hack terminal)
   and `tools/shop-test.cjs` (the shop and the menu's Win / Restart encounter
   buttons); both need Playwright and a `vite preview` on port 4173 (see each
-  file's header). There is no smoke test of the whole game (see "The Virtual
+  file's header). `tools/dbno-test.mjs` (`npm run test:dbno`, plain node) checks
+  the engine's DBNO rules, Reset party, lock-keeps-selection and the walk path.
+  (`tools/engine-test.mjs` currently stops early on a stale fixture, and
+  `tools/smoke-test.cjs` is out of date - both predate this note.) There is no smoke test of the whole game (see "The Virtual
   Playtester") - verify a change by actually running the build and exercising the
   affected flow before delivery.
 * Parallel work sessions happen: re-read this file (and re-sync the sources) at the

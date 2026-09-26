@@ -138,6 +138,9 @@ function enemyGeometry(shape) {
 // the health bar as ONE billboard. Sizes are design units on the canvas; only
 // worldWidth / worldY are in world space. The layout deliberately mirrors a row
 // of the party panel (src/style.css `.unit`), and the colours are that panel's.
+// How long a downed unit takes to tip onto its side (and to get back up), ms.
+const DOWN_MS = 380;
+
 const PLAQUE = {
   icon: 40,                 // the square portrait box
   bar: 160,                 // the health bar - four times the icon's width
@@ -1431,15 +1434,23 @@ export class LocalMapView {
       this.paintTile(tile);   // the elevation value ramp follows the new level
     }
 
-    // Tokens: dead ones vanish, live ones stand on their engine tile.
+    // Tokens: live ones stand on their engine tile, DOWNED ones lie on it (on
+    // their side - see setTokenDowned), and only the truly gone (shoved into
+    // the void; a fled one has already popped away) vanish.
     for (const u of sb.units) {
       const tok = this.battleTokens.get(u.uid);
       if (!tok) continue;
-      const dead = u.hp <= 0;
+      const downed = !!u.downed;
+      const dead = u.hp <= 0 && !downed;
       tok.visible = !dead;
       if (tok.userData.ring) tok.userData.ring.visible = !dead;
-      if (tok.userData.plaque) this.updateUnitPlaque(tok.userData.plaque, u.hp, u.maxHp, u);
+      if (tok.userData.plaque) {
+        this.updateUnitPlaque(tok.userData.plaque, u.hp, u.maxHp, u);
+        // A downed body shows no overhead card (it comes back with the unit).
+        tok.userData.plaque.visible = !downed && this.config.local?.unitPlaques !== false;
+      }
       if (dead) continue;
+      this.setTokenDowned(tok, downed);
       if (!tok.userData.walking && tok.userData.tileKey !== u.pos) this.teleportToken(tok, u.pos);
       else {
         // Height may have changed under a standing unit.
@@ -1465,6 +1476,44 @@ export class LocalMapView {
     }
 
     this.syncHighlights(battle);
+  }
+
+  // ----- DOWN BUT NOT OUT: the body lies on its side ----------------------
+  // A downed unit's token tips 90 degrees onto its side (and back up when a
+  // heal revives it), over DOWN_MS. It stops bobbing and turning while it lies
+  // there. The body's own geometry says how far to shift it so it lies ON its
+  // tile, centred, rather than hinged about its feet and half in the ground.
+  setTokenDowned(tok, on) {
+    if (!!tok.userData.downTarget === !!on) return;
+    tok.userData.downTarget = !!on;
+    if (tok.userData.downT === undefined) tok.userData.downT = 0;
+  }
+  stepDownPose(tok, dt) {
+    const target = tok.userData.downTarget ? 1 : 0;
+    let t = tok.userData.downT ?? 0;
+    if (t !== target) {
+      const step = dt / DOWN_MS;
+      t = target > t ? Math.min(target, t + step) : Math.max(target, t - step);
+      tok.userData.downT = t;
+    }
+    const tile = this.map?.hexes.get(tok.userData.tileKey);
+    if (!tile) return;
+    const e = t * t * (3 - 2 * t);   // smoothstep
+    const a = e * Math.PI / 2;
+    const g = tok.geometry;
+    if (g && !g.boundingBox) g.computeBoundingBox();
+    const bb = g?.boundingBox;
+    const cy = bb ? (bb.min.y + bb.max.y) / 2 : 0.4;   // the body's middle, up its length
+    const r = bb ? Math.max(-bb.min.x, bb.max.x) : 0.2;  // its half thickness
+    // Tipped by `a` about its local z, the middle swings out by cy*sin(a) along
+    // the body's own x (then turned by its yaw); shifting back by that much keeps
+    // it over the tile, and lifting by r*sin(a) keeps it out of the ground.
+    const ox = cy * Math.sin(a);
+    const yaw = tok.rotation.y;
+    tok.rotation.z = a;
+    tok.position.set(tile.x + ox * Math.cos(yaw), tile.top + r * Math.sin(a), -tile.y - ox * Math.sin(yaw));
+    tok.userData.baseY = tile.top;
+    if (t === 0 && target === 0) { tok.userData.downT = undefined; tok.rotation.z = 0; }
   }
 
   teleportToken(tok, key) {
@@ -1674,7 +1723,9 @@ export class LocalMapView {
   placePlaque(tok) {
     const pl = tok.userData.plaque;
     if (!pl) return;
-    const at = pl.userData.hangAt;
+    // A token lying on its side (downed) keeps its card upright over its tile:
+    // the plain offset would tip over with the body.
+    const at = pl.userData.hangAt ?? (tok.userData.downT !== undefined ? tok.userData.tileKey : null);
     const tile = at ? this.map.hexes.get(at) : null;
     if (!tile) {
       if (pl.position.x !== 0 || pl.position.z !== 0 || pl.position.y !== PLAQUE.worldY) pl.position.set(0, PLAQUE.worldY, 0);
@@ -2309,6 +2360,8 @@ export class LocalMapView {
     if (this.vanishing && this.vanishing.length) this.stepVanishes(dt);
     for (const m of this.tokens) {
       if (m.userData.walking || !m.visible) continue;
+      // Downed (or getting up): lying still on its side, no bob, no turn.
+      if (m.userData.downT !== undefined) { this.stepDownPose(m, dt); continue; }
       m.position.y = m.userData.baseY + Math.sin(this.elapsed / 620 + m.userData.phase) * 0.05;
       m.rotation.y += dt * 0.0006;
     }

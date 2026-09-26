@@ -747,17 +747,21 @@ function finishInteractiveBattle(won) {
   const ctx = battleCtx;
   const b = battle;
   battle = null; battleCtx = null; battleEntry = null; window.__battle = null;
-  // Wounds (and deaths) carry back to the world-map party.
+  // Wounds (and deaths) carry back to the world-map party. A unit still DOWNED
+  // (0 hp, but on the board - not shoved into the void) is reported as such:
+  // finishCombat gets it back up after a win (config.combat.downed).
+  const downed = [];
   for (const u of b.state.units) {
     if (u.partyIndex == null) continue;
     const p = game.state.party[u.partyIndex];
     if (p) p.hp = u.hp;
+    if (u.downed) downed.push(u.partyIndex);
   }
   ui.setBattleMode(null);
   cinematic.localView.endBattle();
   // The firing order the player arranged in the panel carries to the next fight.
   if (b.orderedParty) game.applyPartyOrder(b.orderedParty().map((u) => u.partyIndex));
-  game.finishCombat(ctx, { won, rounds: b.state.round, interactive: true });
+  game.finishCombat(ctx, { won, rounds: b.state.round, interactive: true, downed });
 }
 
 // Restart / new map while a fight is open: drop the engine, the new Game

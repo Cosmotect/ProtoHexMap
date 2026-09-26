@@ -15,7 +15,8 @@
     "campaign:report": "node tools/playtester/report.mjs tools/playtester/worldruns.jsonl",
     "test:engine": "node tools/engine-test.mjs",
     "test:worldmap": "node tools/worldmap-test.mjs",
-    "test:encounters": "node tools/encounter-distribution.mjs"
+    "test:encounters": "node tools/encounter-distribution.mjs",
+    "test:dbno": "node tools/dbno-test.mjs"
   },
   "dependencies": {
     "three": "^0.185.1"

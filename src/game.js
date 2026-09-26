@@ -922,6 +922,19 @@ export class Game {
       result.lines = result.lines ?? [];
       result.deaths = result.deaths ?? [];
       result.partyFirst = true;   // always, forced or not - see startCombat
+      // DOWN BUT NOT OUT: a unit left downed on the arena (not shoved into the
+      // void) gets back up after a WIN with a share of its max hp, rounded up
+      // (config.combat.downed.reviveFraction). A lost fight has no one left to
+      // carry them, and they fall as before.
+      if (result.won) {
+        const frac = this.config.combat?.downed?.reviveFraction ?? 0.25;
+        for (const i of result.downed ?? []) {
+          const u = s.party[i];
+          if (!u || !u.alive || u.hp > 0) continue;
+          u.hp = Math.min(u.maxHp, Math.max(1, Math.ceil(u.maxHp * frac)));
+          this.addLog('log.unitRevived', { name: { name: u.name }, hp: u.hp });
+        }
+      }
       for (const u of s.party) {
         if (u.alive && u.hp <= 0) { u.hp = 0; u.alive = false; result.deaths.push(u); }
       }

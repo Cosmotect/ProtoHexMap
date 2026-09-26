@@ -234,6 +234,13 @@ export function upgradeCount(unit) {
 // Layered layout for drawing a tree: nodes grouped by depth (the longest
 // requires-chain below them), edges as [parentId, childId]. Small trees only -
 // this walks the whole graph per node.
+const warnedRequires = new Set();
+function warnUnknownRequire(abilityId, nodeId, req) {
+  const key = `${abilityId}:${nodeId}:${req}`;
+  if (warnedRequires.has(key)) return;
+  warnedRequires.add(key);
+  console.warn(`Upgrade tree "${abilityId}": node "${nodeId}" requires "${req}", which is not a node id of that tree.`);
+}
 export function treeLayout(abilityId) {
   const tree = ABILITY_UPGRADES[abilityId] ?? {};
   const depth = (nodeId, guard = 0) => {
@@ -246,7 +253,15 @@ export function treeLayout(abilityId) {
   for (const [nodeId, node] of Object.entries(tree)) {
     const d = depth(nodeId);
     (layers[d] ??= []).push(nodeId);
-    for (const r of node.requires ?? []) edges.push([r, nodeId]);
+    for (const r of node.requires ?? []) {
+      // A prerequisite that names no node of this tree (a typo, or a display
+      // NAME where the node's id belongs) has nothing to draw an edge from:
+      // skipped, with a warning, instead of breaking every window that draws
+      // the tree (it blanked the party view on 2026-09-26). The node itself
+      // stays locked - its prerequisite can never be met.
+      if (!tree[r]) { warnUnknownRequire(abilityId, nodeId, r); continue; }
+      edges.push([r, nodeId]);
+    }
   }
   return { layers, edges };
 }
