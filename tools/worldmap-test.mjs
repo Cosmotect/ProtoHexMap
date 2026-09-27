@@ -1,234 +1,333 @@
 // =====================================================================
-//  WORLD MAP RULES TEST - the 2026-09-22 rework, checked headlessly.
+//  WORLD MAP RULES TEST - headless rules checks for src/game.js and the
+//  encounter placer, in seconds rather than minutes.
 //
-//    node tools/worldmap-test.mjs
+//    node tools/worldmap-test.mjs        (npm run test:worldmap)
 //
-//  Covers the three rules the rework introduced:
-//    1. fatigue disabled -> walking onto a forceable encounter ALWAYS forces it
-//    2. supplies reaching 0 ends the run...
-//    3. ...unless the step landed on a forced encounter that can still pay, in
-//       which case the verdict waits for that encounter's result
-//  plus maxSupplies being its own config knob.
+//  The world-map twin of tools/engine-test.mjs: the smoke test drives the real
+//  browser and stays the authority on anything the player can SEE, but a rule is
+//  far easier to state as a hand-built tile than as a click path.
+//
+//  What is pinned here:
+//    * the 2026-09-22 rework - fatigue disabled means forceable encounters
+//      always fire; maxSupplies is its own knob; every step costs supplies
+//    * the 2026-09-27 rework - encounters may sit on costly terrain; a step the
+//      pack cannot cover is paid in the tile's own HP; an empty pack no longer
+//      ends the run; and below the starvation line every step rolls for an
+//      ambush whose band escalates with each one that has fired
+//
+//  Each case builds the tiles it needs by hand (clearAround / makeTile), so
+//  nothing depends on what the generator happened to roll for a seed.
 // =====================================================================
 const base = new URL('../src/', import.meta.url).href;
 const { CONFIG } = await import(base + 'config.js');
 const { Game } = await import(base + 'game.js');
+const { generateMap } = await import(base + 'map.js');
+const { createRng } = await import(base + 'rng.js');
 
 const problems = [];
 const check = (ok, msg) => { if (!ok) problems.push(msg); else console.log(`  ok  ${msg}`); };
+const section = (name) => console.log(`\n${name}`);
 
-// A fresh run on a known seed, with the map bent to whatever the test needs.
 function newGame(seed = 1) {
   return new Game(CONFIG, seed);
 }
 
-// Clear the tile the party stands on and its neighbours, so a test can place
-// exactly what it wants next to them without the generator's opinions.
+// Flatten the party's tile and its six neighbours to plain empty ground, so a
+// test can put exactly what it means to test next to them.
 function clearAround(game) {
   const p = game.state.position;
   for (const h of game.map.hexes.values()) {
     if (Math.max(Math.abs(h.q - p.q), Math.abs(h.r - p.r), Math.abs((h.q + h.r) - (p.q + p.r))) <= 1) {
       h.encounter = null;
       h.enemies = null;
+      h.recipe = null;
       h.type = 'ground';
       h.passable = true;
       h.terrainHeight = 0;
+      h.supplyCost = 0;
       h.revealed = true;
     }
   }
 }
 
-function neighborOf(game, hex) {
-  return game.reachable().find((h) => h !== hex);
+// Turn one neighbour into a tile of the given type, the way the generator would.
+function makeTile(game, hex, type) {
+  const t = CONFIG.tileTypes[type];
+  hex.type = type;
+  hex.passable = t.passable;
+  hex.supplyCost = t.supplyCost ?? 0;
+  hex.terrainHeight = t.terrainHeight ?? 0;
+  hex.revealed = true;
+  return hex;
 }
 
-console.log('config');
+// A fight that always ends the way the test wants, without an arena.
+function withDelegate(game, won) {
+  game.combatDelegate = (ctx) => {
+    game.finishCombat(ctx, { won, rounds: 1, interactive: true });
+    return true;
+  };
+}
+
+section('config');
 check(CONFIG.fatigue.enabled === false, 'fatigue is disabled');
-check(CONFIG.run.maxSupplies !== undefined, 'run.maxSupplies exists as its own entry');
 check(CONFIG.run.maxSupplies !== CONFIG.run.startSupplies,
-  `maxSupplies (${CONFIG.run.maxSupplies}) is independent of startSupplies (${CONFIG.run.startSupplies})`);
+  `maxSupplies (${CONFIG.run.maxSupplies}) is its own knob, not startSupplies (${CONFIG.run.startSupplies})`);
 check((CONFIG.run.stepSupplyCost ?? 0) > 0, 'every step costs supplies');
+check((CONFIG.run.starvationThreshold ?? 0) > 0, 'there is a starvation threshold');
+check((CONFIG.run.starvationAmbushChance ?? 0) > 0, 'a starving step can be ambushed');
 
-console.log('\nstate');
+section('encounters may sit on costly terrain (2026-09-27)');
 {
-  const g = newGame();
-  check(g.state.maxSupplies === CONFIG.run.maxSupplies, 'the run starts with maxSupplies from the config, not from startSupplies');
-  check(g.state.supplies === CONFIG.run.startSupplies, 'the run starts with startSupplies');
-  check(g.fatigueEnabled() === false, 'game.fatigueEnabled() reports the experiment');
-  const n = g.reachable()[0];
-  check(g.stepCost(n).supplyCost >= CONFIG.run.stepSupplyCost, 'a flat step charges the walking cost');
+  // The placer used to skip every tile with a supply cost, which left hills and
+  // mountains permanently empty. Checked over enough seeds that a map simply
+  // rolling few mountains cannot pass it by accident.
+  let costly = 0;
+  let mountains = 0;
+  for (let seed = 1; seed <= 25; seed++) {
+    const map = generateMap(CONFIG, createRng(seed), CONFIG.layers.startLayer);
+    for (const h of map.hexes.values()) {
+      if (!h.encounter || h.isSeed) continue;
+      if ((h.supplyCost ?? 0) > 0) costly += 1;
+      if (h.type === 'mountain') mountains += 1;
+    }
+  }
+  check(costly > 0, `encounters land on hills and mountains (${costly} over 25 maps)`);
+  check(mountains > 0, `mountains specifically get them too (${mountains})`);
+}
+{
+  // ...but the three reserved tiles are still off limits.
+  let bad = 0;
+  for (let seed = 1; seed <= 25; seed++) {
+    const map = generateMap(CONFIG, createRng(seed), CONFIG.layers.startLayer);
+    for (const h of map.hexes.values()) {
+      if (h.encounter && (!h.passable || h.isStart)) bad += 1;
+    }
+  }
+  check(bad === 0, 'nothing is placed on the start tile or on impassable ground');
 }
 
-console.log('\nrule 1: a forceable encounter always fires');
+section('a forceable encounter always fires');
 {
   const g = newGame();
   clearAround(g);
-  let forcedEvents = 0;
-  g.on((type) => { if (type === 'forced') forcedEvents += 1; });
+  let forced = 0;
+  g.on((type) => { if (type === 'forced') forced += 1; });
+  withDelegate(g, true);
   const target = g.reachable()[0];
   target.encounter = 'battle';
-  target.enemies = [{ name: 'Husk', hp: 1, power: 0, maxHp: 1 }];
-  g.state.fatigue = 0;            // nothing to roll on - the old rule would never force
-  g.state.fatigueSteps = 0;
+  target.enemies = [{ name: 'Husk', hp: 1, maxHp: 1, power: 0 }];
   g.moveTo(target);
-  check(forcedEvents === 1, 'stepping onto a battle emits "forced" with fatigue at 0');
-  check(target.encounter === null, 'the fight actually happened (the tile is consumed)');
+  check(forced === 1, 'stepping onto a battle forces it, with fatigue at 0');
+  check(target.encounter === null, 'and the tile is consumed by the fight');
 }
 {
   const g = newGame();
   clearAround(g);
-  let forcedEvents = 0;
-  g.on((type) => { if (type === 'forced') forcedEvents += 1; });
+  let forced = 0;
+  g.on((type) => { if (type === 'forced') forced += 1; });
   const target = g.reachable()[0];
   target.encounter = 'shop';
   target.shop = g.rollShopStock();
   g.moveTo(target);
-  check(forcedEvents === 0, 'a shop is NOT forceable - it is still entered by choice');
-  check(target.encounter === 'shop', 'the shop is still on its tile');
-}
-{
-  const g = newGame();
-  check(g.forcedChanceFor({ revealed: true, encounter: 'battle' })?.chance === 100,
-    'the HUD is told a revealed battle is a certainty, not a percentage');
-  check(g.forcedChanceFor({ revealed: false }) === null,
-    'an unexplored tile promises nothing (it may hold nothing forceable at all)');
+  check(forced === 0, 'a shop is not forceable - it is still entered by choice');
+  check(target.encounter === 'shop', 'and it stays on its tile');
 }
 
-console.log('\nrule 2: an empty pack ends the run');
+section('paying a step in blood (2026-09-27)');
 {
   const g = newGame();
   clearAround(g);
-  const target = g.reachable()[0];
-  g.state.supplies = CONFIG.run.stepSupplyCost;   // exactly enough for this one step
-  g.moveTo(target);
-  check(g.state.status === 'lost', 'the step that empties the pack ends the run');
-  check(g.state.endReason[0] === 'end.supplies', `the end reason is out-of-supplies (got ${g.state.endReason[0]})`);
+  const flat = g.reachable()[0];
+  g.state.supplies = 0;
+  const cost = g.stepCost(flat);
+  check(cost.unpaid === true, 'a step the pack cannot cover is marked unpaid');
+  check(cost.supplySpent === 0, 'nothing is taken from an empty pack');
+  check(cost.hpCost === 0, 'flat ground asks for no blood either - walking home broke is free');
+  check(g.canMoveTo(flat), 'and the step is still legal');
+}
+// NOTE (2026-09-27): every tile type currently carries hpCost: 0, so this rule
+// costs nothing in today's config - it is armed, not firing. These cases charge
+// the mountain a real HP price for their duration so the LOGIC is tested rather
+// than trivially passing; the moment someone puts blood back on high ground, the
+// rule is already wired and these tests already cover it.
+const MTN_HP = 5;
+function withMountainBlood(fn) {
+  const saved = CONFIG.tileTypes.mountain.hpCost;
+  CONFIG.tileTypes.mountain.hpCost = MTN_HP;
+  try { fn(); } finally { CONFIG.tileTypes.mountain.hpCost = saved; }
+}
+check(CONFIG.tileTypes.mountain.hpCost === 0,
+  'FYI: no tile type charges HP today, so the rule below is armed but never fires in play');
+withMountainBlood(() => {
+  const g = newGame();
+  clearAround(g);
+  const mtn = makeTile(g, g.reachable()[0], 'mountain');
+  g.state.supplies = 0;
+  const hpBefore = g.state.party[0].hp;
+  const cost = g.stepCost(mtn);
+  check(cost.unpaid === true, 'an unaffordable mountain is unpaid');
+  check(cost.hpCost === MTN_HP, `it costs the mountain's own ${MTN_HP} HP instead`);
+  g.moveTo(mtn);
+  check(g.state.party[0].hp === hpBefore - MTN_HP, 'and that blood is actually taken');
   check(g.state.supplies === 0, 'supplies floor at 0 rather than going negative');
-}
+});
+withMountainBlood(() => {
+  // The climb gate is a discount for a party that can pay. A solvent party
+  // crossing between two mountains pays nothing; a broke one pays anyway.
+  const g = newGame();
+  clearAround(g);
+  makeTile(g, g.state.position, 'mountain');
+  const ridge = makeTile(g, g.reachable()[0], 'mountain');
+  g.state.supplies = 50;
+  check(g.stepCost(ridge).hpCost === 0, 'ridge-walking costs a solvent party nothing');
+  g.state.supplies = 0;
+  check(g.stepCost(ridge).hpCost === MTN_HP, 'but a broke party pays the mountain even walking across the top');
+});
+
+section('an empty pack no longer ends the run (2026-09-27)');
 {
   const g = newGame();
   clearAround(g);
-  const target = g.reachable()[0];
-  g.state.supplies = CONFIG.run.stepSupplyCost + 1;
-  g.moveTo(target);
-  check(g.state.status === 'playing', 'one supply left is still a run');
-}
-{
-  // The step is LEGAL even when it cannot be paid for - that is the whole point.
-  const g = newGame();
-  clearAround(g);
-  const target = g.reachable()[0];
-  target.type = 'mountain';
-  target.terrainHeight = 2;
-  g.state.supplies = 1;
-  check(g.canMoveTo(target), 'an unaffordable step is allowed (it is the last one)');
-  check(g.stepEndsRun(target), 'and the HUD is told it ends the run');
+  // Nothing on the tiles and no ambushes, so only the supply rule could end it.
+  const saved = CONFIG.run.starvationAmbushChance;
+  CONFIG.run.starvationAmbushChance = 0;
+  try {
+    g.state.supplies = 1;
+    for (let i = 0; i < 6 && g.state.status === 'playing'; i++) {
+      clearAround(g);
+      g.moveTo(g.reachable()[0]);
+    }
+    check(g.state.status === 'playing', 'the party walks on with an empty pack');
+    check(g.state.supplies === 0, 'the pack is empty');
+    check(!String(g.state.endReason).includes('supplies'), 'and nothing ended on supplies');
+  } finally {
+    CONFIG.run.starvationAmbushChance = saved;
+  }
 }
 
-console.log('\nrule 3: the verdict waits for a forced encounter that can still pay');
+section('starving on the road: the ambush');
 {
-  // The party walks its last ration onto a forced fight - and wins. The salvage
-  // (battle.victorySupplies) refills the pack, so the run goes on.
   const g = newGame();
   clearAround(g);
-  const target = g.reachable()[0];
-  target.encounter = 'battle';
-  target.enemies = [{ name: 'Husk', hp: 1, power: 0, maxHp: 1 }];
-  // An interactive delegate: the fight leaves for the arena and reports back
-  // later, exactly as main.js does it.
-  let pending = null;
-  g.combatDelegate = (ctx) => { pending = ctx; return true; };
-  g.state.supplies = CONFIG.run.stepSupplyCost;
-  g.moveTo(target);
-  check(g.state.status === 'playing', 'the run is NOT over while the fight is still on the arena');
-  check(g.state.supplies === 0, 'the pack is empty in the meantime');
-  g.finishCombat(pending, { won: true, rounds: 3, interactive: true });
-  check(g.state.status === 'playing', 'winning the fight saves the run');
-  check(g.state.supplies === (CONFIG.battle.victorySupplies ?? 0), 'the salvage is what saved it');
-}
-{
-  // Same last step, same forced fight - lost. The party is wiped, so the run
-  // ends on the defeat rather than on the supplies.
-  const g = newGame();
-  clearAround(g);
-  const target = g.reachable()[0];
-  target.encounter = 'battle';
-  target.enemies = [{ name: 'Husk', hp: 1, power: 0, maxHp: 1 }];
-  let pending = null;
-  g.combatDelegate = (ctx) => { pending = ctx; return true; };
-  g.state.supplies = CONFIG.run.stepSupplyCost;
-  g.moveTo(target);
-  check(g.state.status === 'playing', 'still playing while the fight runs');
-  g.finishCombat(pending, { won: false, rounds: 3, interactive: true });
-  check(g.state.status === 'lost', 'losing the fight ends the run');
-}
-{
-  // A fight won that pays nothing: the verdict that was held back is given.
-  const g = newGame();
-  clearAround(g);
-  const saved = CONFIG.battle.victorySupplies;
-  CONFIG.battle.victorySupplies = 0;
+  const saved = CONFIG.run.starvationAmbushChance;
+  CONFIG.run.starvationAmbushChance = 1;     // certain, so the test is not a coin flip
   try {
-    const target = g.reachable()[0];
-    target.encounter = 'battle';
-    target.enemies = [{ name: 'Husk', hp: 1, power: 0, maxHp: 1 }];
-    let pending = null;
-    g.combatDelegate = (ctx) => { pending = ctx; return true; };
-    g.state.supplies = CONFIG.run.stepSupplyCost;
-    g.moveTo(target);
-    check(g.state.status === 'playing', 'held while the fight runs');
-    g.finishCombat(pending, { won: true, rounds: 3, interactive: true });
-    check(g.state.status === 'lost', 'a win that pays nothing still ends the run');
-    check(g.state.endReason[0] === 'end.supplies', 'and it ends on the supplies, not the fight');
+    let dialogs = [];
+    g.on((type, p) => { if (type === 'dialog') dialogs.push(p); });
+    g.state.supplies = 1;
+    g.moveTo(g.reachable()[0]);
+    check(dialogs.some((d) => d.kind === 'starvation'), 'a starving step opens the ambush window');
+    check(!!g.state.pendingAmbush, 'and the fight waits for the player to close it');
+    check(g.state.starvationAmbushes === 1, 'the run counts it');
   } finally {
-    CONFIG.battle.victorySupplies = saved;
+    CONFIG.run.starvationAmbushChance = saved;
   }
 }
 {
-  // A cache is NOT forceable, so it grants no reprieve: the party arrives on the
-  // tile with an empty pack and the run is over before they can open it. This is
-  // the rule as asked for - only a FORCED encounter holds the verdict - and it is
-  // asserted here so that changing one's mind about it is a deliberate act.
+  // Above the threshold: never.
   const g = newGame();
   clearAround(g);
-  const target = g.reachable()[0];
-  target.encounter = 'treasure';
-  g.state.supplies = CONFIG.run.stepSupplyCost;
-  g.moveTo(target);
-  check(g.state.status === 'lost', 'a cache the party never entered does not save them');
-  check(g.state.endReason[0] === 'end.supplies', 'they run out of supplies standing on it');
+  const saved = CONFIG.run.starvationAmbushChance;
+  CONFIG.run.starvationAmbushChance = 1;
+  try {
+    g.state.supplies = CONFIG.run.starvationThreshold + 5;
+    let fired = false;
+    g.on((type, p) => { if (type === 'dialog' && p.kind === 'starvation') fired = true; });
+    g.moveTo(g.reachable()[0]);
+    check(!fired, 'a well-stocked party is never ambushed for starving');
+  } finally {
+    CONFIG.run.starvationAmbushChance = saved;
+  }
 }
 {
-  // A supplies OFFER that is already open does hold the verdict - that is the
-  // shape a forced event takes when it pays in supplies (game.js offerSupplies).
+  // A tile that forces its own encounter takes the step: no ambush on top.
   const g = newGame();
   clearAround(g);
-  g.state.supplies = 0;
-  g.offerSupplies(30, 'treasure.title', 'treasure.text', 'treasure');
-  check(!!g.state.pendingSupplies, 'the find is offered');
-  g.checkEndOfRun();
-  check(g.state.status === 'playing', 'the run waits while the offer is open');
-  g.claimSupplies(false);
-  check(g.state.status === 'playing', 'taking the find saves the run');
-  check(g.state.supplies === 30, 'the pack holds the find');
-}
-{
-  // ...and an offer declined down to nothing gives the verdict on the way out.
-  const g = newGame();
-  clearAround(g);
-  g.state.supplies = 0;
-  g.offerSupplies(0, 'treasure.title', 'treasure.text', 'treasure');
-  g.claimSupplies(false);
-  check(g.state.status === 'lost', 'an offer worth nothing ends the run when it closes');
+  const saved = CONFIG.run.starvationAmbushChance;
+  CONFIG.run.starvationAmbushChance = 1;
+  try {
+    withDelegate(g, true);
+    const target = g.reachable()[0];
+    target.encounter = 'battle';
+    target.enemies = [{ name: 'Husk', hp: 1, maxHp: 1, power: 0 }];
+    g.state.supplies = 1;
+    let fired = false;
+    g.on((type, p) => { if (type === 'dialog' && p.kind === 'starvation') fired = true; });
+    g.moveTo(target);
+    check(!fired, 'a tile that already dragged them in is not also an ambush');
+    check(g.state.starvationAmbushes === 0, 'and the ladder does not advance');
+  } finally {
+    CONFIG.run.starvationAmbushChance = saved;
+  }
 }
 
-console.log('\nmaxSupplies is the ceiling');
+section('the ambush ladder climbs and then holds');
+{
+  const bands = Object.keys(CONFIG.battle.enemies.bands);
+  const g = newGame();
+  check(g.starvationBandFor(1) === bands[0], `the first ambush comes from "${bands[0]}"`);
+  check(g.starvationBandFor(2) === bands[1], `the second from "${bands[1]}"`);
+  check(g.starvationBandFor(3) === bands[2], `the third from "${bands[2]}"`);
+  check(g.starvationBandFor(4) === bands[bands.length - 1], 'the fourth stays on the last band');
+  check(g.starvationBandFor(99) === bands[bands.length - 1], 'and so does the ninety-ninth');
+}
+{
+  // End to end: three ambushes in one run, each a real fight, each escalating.
+  const g = newGame();
+  const saved = CONFIG.run.starvationAmbushChance;
+  CONFIG.run.starvationAmbushChance = 1;
+  try {
+    const seen = [];
+    g.on((type, p) => { if (type === 'dialog' && p.kind === 'starvation') seen.push(p.band); });
+    withDelegate(g, true);
+    for (let i = 0; i < 3; i++) {
+      clearAround(g);
+      g.state.supplies = 1;
+      g.moveTo(g.reachable().find((h) => !h.encounter));
+      check(!!g.state.pendingAmbush, `ambush ${i + 1} is announced`);
+      g.resolveStarvationAmbush();
+      check(!g.state.pendingAmbush, `ambush ${i + 1} resolved into a fight`);
+    }
+    const bands = Object.keys(CONFIG.battle.enemies.bands);
+    check(JSON.stringify(seen) === JSON.stringify(bands.slice(0, 3)),
+      `the three fights walked the ladder: ${seen.join(' -> ')}`);
+    check(g.state.supplies > 0, 'and winning them put supplies back in the pack');
+  } finally {
+    CONFIG.run.starvationAmbushChance = saved;
+  }
+}
+{
+  // The ambush borrows the tile; it must hand it back.
+  const g = newGame();
+  clearAround(g);
+  const saved = CONFIG.run.starvationAmbushChance;
+  CONFIG.run.starvationAmbushChance = 1;
+  try {
+    withDelegate(g, true);
+    const target = g.reachable()[0];
+    target.encounter = 'shop';
+    target.shop = g.rollShopStock();
+    target.recipe = null;
+    g.state.supplies = 1;
+    g.moveTo(target);
+    g.resolveStarvationAmbush();
+    check(target.encounter === 'shop', 'the shop the party was jumped outside is still there');
+    check(!target.enemies, 'no enemies are left standing on it');
+    check(target.recipe === null, "and it got its own map back, not the ambush's");
+  } finally {
+    CONFIG.run.starvationAmbushChance = saved;
+  }
+}
+
+section('maxSupplies is the ceiling');
 {
   const g = newGame();
+  check(g.state.maxSupplies === CONFIG.run.maxSupplies, 'a run starts with the configured ceiling');
   g.state.supplies = g.state.maxSupplies - 1;
-  const got = g.addSupplies(1000);
-  check(got === 1, 'a gain is clipped to the ceiling');
-  check(g.state.supplies === CONFIG.run.maxSupplies, `the ceiling is run.maxSupplies (${CONFIG.run.maxSupplies})`);
+  check(g.addSupplies(1000) === 1, 'a gain is clipped to it');
+  check(g.state.supplies === CONFIG.run.maxSupplies, 'and stops exactly there');
 }
 
 console.log('');

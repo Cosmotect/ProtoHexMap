@@ -242,10 +242,15 @@ export function makeRegulars(rng, cfg, ring, count) {
 // every map is broken, falls back to the whole crafted list rather than walk
 // into an empty arena; with no usable map at all the fight is a flat arena
 // with no enemies - and a console warning says so.
+// `pool` may also NAME a band directly ('inner' / 'middle' / 'outer', any key of
+// config.battle.enemies.bands). The ring is then ignored, which is what lets a
+// fight be pitched at a difficulty the party's location did not choose - the
+// starvation ambushes walk that ladder deliberately (game.js).
 export function makeArena(rng, config, ring, pool = 'regular', layer = 0) {
   const cfg = config.battle;
   const kind = pool === true || pool === 'boss' ? 'seed'
     : pool === 'colony' ? 'colonies'
+    : (typeof pool === 'string' && cfg.enemies?.bands?.[pool]) ? pool
     : ringBandId(cfg, ring);
   const ids = arenaPool(cfg, kind, layer);
   const pick = ids.length ? ids : Object.keys(craftedMapIndex(config));

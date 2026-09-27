@@ -63,20 +63,15 @@
         </div>
       </div>
 
-      <!-- Top-centre bar: the turn on the left, the fatigue scale in the middle
-           (one box per step, each showing the fatigue % that step brings; the
-           boxes fill as the party walks and empty on a reset), supplies on the
-           right. Hairline separators keep the three readings apart. -->
+      <!-- Top-centre bar: the fatigue scale and nothing else - one box per step,
+           each showing the fatigue % that step brings; the boxes fill as the party
+           walks and empty on a reset. The turn and supplies readings used to share
+           this bar; they moved down into the status bar on 2026-09-27, so that the
+           two numbers the player checks every step sit beside the button they
+           press - and so that hiding this bar (fatigue is disabled as an
+           experiment) no longer takes them away with it. -->
       <div class="panel top-center fatigue-bar" id="fatigue-bar">
-        <div class="bar-slot" id="slot-turn">
-          <div class="stat"><span class="label" data-i18n="status.turn">Turn</span><span id="stat-turn" class="value">-</span></div>
-        </div>
-        <div class="bar-sep"></div>
         <div id="fatigue-boxes" class="fatigue-boxes" data-i18n-title="fatiguebar.title"></div>
-        <div class="bar-sep"></div>
-        <div class="bar-slot" id="slot-supplies">
-          <div class="stat"><span class="label" data-i18n="status.supplies">Supplies</span><span id="stat-supplies" class="value">-</span></div>
-        </div>
       </div>
 
       <!-- Local Map Info (right side, in combat only): what this fight is, the
@@ -133,16 +128,29 @@
         </div>
       </div>
 
-      <!-- Status bar: just the one action button. Supplies, fatigue and the turn
-           all live in the top-centre bar. On the start screen, once a second
-           worldflake layer is unlocked, the layer selector sits right above the
-           Begin journey button and expands UPWARDS (src/ui.js fills it). -->
+      <!-- Status bar: the turn, the one action button (Enter / Make camp), and
+           supplies - three readings of one step, kept apart by hairline
+           separators. The two counters moved here from the top-centre bar on
+           2026-09-27; only the fatigue scale stayed up there. The counters hide
+           themselves on the start screen (style.css), so "Begin journey" stands
+           alone the way it always has.
+           On the start screen, once a second worldflake layer is unlocked, the
+           layer selector sits right above the button and expands UPWARDS
+           (src/ui.js fills it). -->
       <div class="panel bottom-center statusbar" id="statusbar">
         <div id="layer-select" class="layer-select hidden">
           <div id="layer-options" class="layer-options hidden"></div>
           <button id="btn-layer" class="layer-current"></button>
         </div>
+        <div class="bar-slot" id="slot-turn">
+          <div class="stat"><span class="label" data-i18n="status.turn">Turn</span><span id="stat-turn" class="value">-</span></div>
+        </div>
+        <div class="bar-sep"></div>
         <button id="btn-enter" class="enter" disabled>Enter</button>
+        <div class="bar-sep"></div>
+        <div class="bar-slot" id="slot-supplies">
+          <div class="stat"><span class="label" data-i18n="status.supplies">Supplies</span><span id="stat-supplies" class="value">-</span></div>
+        </div>
       </div>
 
       <!-- Battle bar: shown instead of the status bar while a fight runs on the

@@ -972,6 +972,63 @@ fs.mkdirSync(OUT, { recursive: true });
     return { ok: on ? (!hidden && boxes > 0) : (hidden && boxes === 0), on, hidden, boxes };
   });
   if (!barOk.ok) problems.push('fatigue bar does not match config.fatigue.enabled: ' + JSON.stringify(barOk));
+  // The turn and supplies readings moved into the STATUS bar on 2026-09-27, so
+  // they must survive the fatigue bar being hidden - that was the whole point of
+  // moving them. Checked by where they sit in the DOM, not just that they exist.
+  const countersOk = await page.evaluate(() => {
+    const sb = document.getElementById('statusbar');
+    const turn = document.getElementById('stat-turn');
+    const sup = document.getElementById('stat-supplies');
+    return {
+      inStatusBar: !!(sb && turn && sup && sb.contains(turn) && sb.contains(sup)),
+      seps: sb ? sb.querySelectorAll('.bar-sep').length : 0,
+      turnText: turn ? turn.textContent : null,
+      suppliesText: sup ? sup.textContent : null,
+    };
+  });
+  if (!countersOk.inStatusBar) problems.push('turn / supplies are not in the status bar: ' + JSON.stringify(countersOk));
+  if (countersOk.seps < 2) problems.push('the status bar is missing its separators: ' + JSON.stringify(countersOk));
+  if (!/\d/.test(countersOk.suppliesText || '')) problems.push('the supplies counter is blank: ' + JSON.stringify(countersOk));
+
+  // Starving on the road: below run.starvationThreshold a step can open the
+  // ambush window, and its one button starts a real fight. Driven through the
+  // rules layer with the chance pinned to 1, so the check is not a coin flip.
+  const starve = await page.evaluate(async () => {
+    const g = window.game;
+    const saved = g.config.run.starvationAmbushChance;
+    g.config.run.starvationAmbushChance = 1;
+    try {
+      g.state.supplies = 1;
+      const before = g.state.starvationAmbushes;
+      const target = g.reachable().find((h) => !h.encounter);
+      if (!target) return { skipped: true };
+      g.moveTo(target);
+      return {
+        skipped: false,
+        counted: g.state.starvationAmbushes === before + 1,
+        pending: !!g.state.pendingAmbush,
+        band: g.state.pendingAmbush?.band ?? null,
+      };
+    } finally {
+      g.config.run.starvationAmbushChance = saved;
+    }
+  });
+  if (!starve.skipped) {
+    if (!starve.counted || !starve.pending) problems.push('a starving step did not raise an ambush: ' + JSON.stringify(starve));
+    await page.waitForTimeout(250);
+    const starveDialog = await page.evaluate(() => {
+      const d = document.getElementById('dialog');
+      return { open: !d.classList.contains('hidden'), text: document.getElementById('dialog-body')?.textContent || '' };
+    });
+    if (!starveDialog.open || !/ambush/i.test(starveDialog.text)) {
+      problems.push('the starvation window did not appear: ' + JSON.stringify(starveDialog));
+    }
+    await page.screenshot({ path: path.join(OUT, '02e-starvation.png') });
+    // Clear it so the rest of the run is not blocked by a pending ambush.
+    await page.evaluate(() => { window.game.state.pendingAmbush = null; window.game.emit('change'); });
+    await dismissDialog();
+    await page.evaluate(() => { window.game.state.supplies = window.game.state.maxSupplies; window.game.emit('change'); });
+  }
   // Forced encounter: banner first, dialog later.
   await page.evaluate(() => { const g = window.game; g.emit('forced', { label: 'Battle', chance: 50 }); g.emit('dialog', { kind: 'event', title: 'Forced test', text: 't', effect: 'e' }); });
   await page.waitForTimeout(150);

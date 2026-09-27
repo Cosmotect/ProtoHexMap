@@ -311,7 +311,12 @@ function placeEncounters(result, config, rng) {
   const unique = new Set(enc.unique ?? []);
   const ids = bandIds(config);
   const dist = (a, b) => hexDistance(a.q, a.r, b.q, b.r);
-  const eligible = (h) => h.passable && h.supplyCost === 0 && !h.isStart && !h.isSeed && !h.isColony
+  // Any walkable tile can hold an encounter, hills and mountains included
+  // (2026-09-27). They used to be excluded by an `h.supplyCost === 0` clause,
+  // which quietly made half the map's interesting terrain empty: high ground was
+  // a place you walked over, never a place anything happened. A costly tile is
+  // simply a costly place to be dragged into a fight, which is the point.
+  const eligible = (h) => h.passable && !h.isStart && !h.isSeed && !h.isColony
     && hexDistance(h.q, h.r, result.start.q, result.start.r) > (enc.minDistanceFromStart ?? 0);
 
   // 1. the bands

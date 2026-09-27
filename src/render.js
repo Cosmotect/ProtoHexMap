@@ -609,16 +609,16 @@ export class MapRenderer {
     // of the box that step will fill in the fatigue bar: green while the walk
     // is free, then yellow and on into red.
     // With fatigue DISABLED (2026-09-22) there is no box and no rising risk, so
-    // the rings fall back to the flat reachableRing - except on a tile whose step
-    // would empty the pack, which wears the bar's danger hue (per tile, below).
+    // the rings fall back to the flat reachableRing - except on a step that would
+    // leave the party starving, which wears the bar's danger hue (per tile below).
     const fatigueOn = this.config.fatigue?.enabled !== false;
     const hue = fatigueOn ? fatigueStepHue(this.config, game.state.fatigueSteps + 1) : null;
     this.reachHue = hue;
     if (!this.reachColor) this.reachColor = new THREE.Color();
     if (hue !== null) this.reachColor.setHSL(hue / 360, 0.72, 0.55);   // matches the fbox border
     else this.reachColor.set(this.config.colors.reachableRing);
-    if (!this.lastStepColor) this.lastStepColor = new THREE.Color();
-    this.lastStepColor.setHSL((this.config.fatigueBar.hueHigh ?? 2) / 360, 0.78, 0.55);
+    if (!this.starvingColor) this.starvingColor = new THREE.Color();
+    this.starvingColor.setHSL((this.config.fatigueBar.hueHigh ?? 2) / 360, 0.78, 0.55);
     // The flat per-step charge (run.stepSupplyCost) is the same on every
     // neighbour, so it is left OFF the cost decals: a number every tile wears
     // says nothing about the choice in front of the player. The decal goes on
@@ -635,10 +635,11 @@ export class MapRenderer {
         rec.mesh.material.color.copy(this.targetColorFor(rec.hex));
       }
       rec.ring.visible = this.reachable.has(rec.hex.key);
-      // Painted red when this step is the run's last one - the only per-tile
-      // difference between the rings, and only while fatigue is off (with it on,
-      // the shared fatigue hue is the thing the rings are saying).
-      rec.ringColor = (!fatigueOn && rec.ring.visible && game.stepEndsRun(rec.hex)) ? this.lastStepColor : null;
+      // Painted red when the step would leave the party under the starvation line,
+      // where every step rolls for an ambush (game.js starvationRiskAhead) - the
+      // only per-tile difference between the rings, and only while fatigue is off
+      // (with it on, the shared fatigue hue is what the rings are saying).
+      rec.ringColor = (!fatigueOn && rec.ring.visible && game.starvationRiskAhead(rec.hex)) ? this.starvingColor : null;
       const cost = game.stepCost(rec.hex);
       this.syncCostDecal(rec, { ...cost, supplyCost: Math.max(0, (cost.supplyCost ?? 0) - flatStep) }, game.state.supplies, lowHp);
       // The marker on the party's own tile floats up so the token does not cut through it.

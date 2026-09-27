@@ -102,17 +102,21 @@ export class Game {
       lastBattle: null,
       coloniesCleared: 0,
       pendingSupplies: null,   // { amount, source } waiting to be collected (overflow dialog)
+      // Starving on the road (2026-09-27). `starvationAmbushes` counts how many
+      // have fired THIS RUN, and that count is what picks the band the next one
+      // is drawn from (first -> inner, second -> middle, third and after ->
+      // outer). It never goes down: the road remembers, even if the party
+      // restocks in between. `pendingAmbush` holds one that has been announced
+      // and is waiting for the player to close its window
+      // (resolveStarvationAmbush) - the same shape as pendingSupplies.
+      starvationAmbushes: 0,
+      pendingAmbush: null,
       endReason: '',
     };
 
     this.log = [];
     this.listeners = [];
     this.pendingArrival = null;   // set while the guide holds what happens on the tile just reached
-    // True from the moment an interactive fight is handed to the arena until
-    // finishCombat comes back with its result. The out-of-supplies verdict reads
-    // it (encounterInFlight): a party that walks its last ration onto a forced
-    // fight is not dead yet - the salvage from winning may refill the pack.
-    this.combatInFlight = false;
     // THE REVEAL QUEUE. Every reveal - a purchase, an event, a scripted set of
     // tiles, the debug lift - funnels through finishReveal(). While the world
     // map is off screen (an arena, the start screen; main.js says so through
@@ -200,31 +204,36 @@ export class Game {
   // mountain-to-hill, costs nothing. A biome's own flat HP cost (wither) is
   // NOT height-gated - it hurts every step regardless of where you came from.
   // On top of the terrain price, EVERY step costs run.stepSupplyCost (added
-  // 2026-09-22): walking itself is what empties the pack, and an empty pack ends
-  // the run.
+  // 2026-09-22): walking itself is what empties the pack.
+  //
+  // PAYING IN BLOOD (2026-09-27). A step the pack cannot cover is still taken -
+  // the party simply has nothing left to spend on it, so they pay the TILE's own
+  // HP cost instead, and they pay it whether or not they are climbing. On flat
+  // ground that is nothing, which is deliberate: walking home broke is free, and
+  // what actually threatens a starving party is the ambush roll
+  // (maybeStarvationAmbush), not the ground under them. On a mountain it is the
+  // mountain's 5 HP, charged even when ridge-walking across the top - the climb
+  // gate is a discount for a party that can pay its way, and they cannot.
+  // `unpaid` says the pack came up short, for the HUD and the log.
   stepCost(hex) {
     const from = this.state.position;
     const type = this.config.tileTypes[hex.type] ?? {};
     const biome = this.config.biomes[hex.biome] ?? {};
     const climbing = (hex.terrainHeight ?? 0) > (from?.terrainHeight ?? 0);
+    const supplyCost = (this.config.run.stepSupplyCost ?? 0) + (climbing ? (type.supplyCost ?? 0) : 0);
+    const unpaid = supplyCost > this.state.supplies;
     return {
-      supplyCost: (this.config.run.stepSupplyCost ?? 0) + (climbing ? (type.supplyCost ?? 0) : 0),
-      hpCost: (climbing ? (type.hpCost ?? 0) : 0) + (biome.hpCost ?? 0),
+      supplyCost,
+      // What is actually taken out of the pack: everything left, when it is short.
+      supplySpent: Math.min(supplyCost, this.state.supplies),
+      unpaid,
+      hpCost: ((climbing || unpaid) ? (type.hpCost ?? 0) : 0) + (biome.hpCost ?? 0),
     };
   }
 
-  // Would stepping onto `hex` empty the pack? The step is still LEGAL - running
-  // out of supplies is how a run ends, not something the rules forbid - but the
-  // HUD paints the tile as the last one and the hover tip says so.
-  stepEndsRun(hex) {
-    if (!hex || this.state.status !== 'playing') return false;
-    return this.state.supplies - this.stepCost(hex).supplyCost <= 0;
-  }
-
-  // Hexes the player could step to right now. Affordability is NOT a filter any
-  // more (it was until 2026-09-22, when supplies could not go below 0): a step
-  // the party cannot pay for is the last step of the run, and they are allowed
-  // to take it - see checkEndOfRun.
+  // Hexes the player could step to right now. Affordability is NOT a filter (it
+  // was until 2026-09-22): a step the party cannot pay for is taken anyway, in
+  // blood rather than supplies - see stepCost.
   reachable() {
     if (this.state.status !== 'playing') return [];
     const { q, r } = this.state.position;
@@ -381,17 +390,19 @@ export class Game {
     if (this.fatigueEnabled()) s.fatigue = lerpTable(this.config.fatigue.byStep, s.fatigueSteps);
 
     // The walking cost (run.stepSupplyCost) plus the terrain cost of a climb.
-    // Supplies floor at 0 rather than going negative: 0 IS the end of the run,
-    // and the end is decided in checkEndOfRun, after the arrival has played out.
-    if (cost.supplyCost > 0) s.supplies = Math.max(0, s.supplies - cost.supplyCost);
+    // Supplies floor at 0 and STAY there: since 2026-09-27 an empty pack does not
+    // end the run by itself - it is paid for in blood on costly ground (stepCost's
+    // `unpaid` branch) and in ambushes on the road (maybeStarvationAmbush below).
+    if (cost.supplySpent > 0) s.supplies = Math.max(0, s.supplies - cost.supplySpent);
 
     const radius = this.config.run.revealRadius + (hex.revealBonus || 0);
     const newlyRevealed = this.reveal(hex.q, hex.r, radius, false);
     this.emit('move', { from, to: hex, newlyRevealed });
 
     const costs = [];
-    if (cost.supplyCost > 0) costs.push(t('log.cost.supplies', { n: cost.supplyCost }));
+    if (cost.supplySpent > 0) costs.push(t('log.cost.supplies', { n: cost.supplySpent }));
     if (cost.hpCost > 0) costs.push(t('log.cost.hp', { n: cost.hpCost }));
+    if (cost.unpaid) costs.push(t('log.cost.unpaid'));
     // The step's line names the number that now paces the run: fatigue while the
     // mechanic is on, supplies while it is off.
     this.addLog(this.fatigueEnabled() ? 'log.moved' : 'log.moved.supplies', {
@@ -418,7 +429,11 @@ export class Game {
       this.emit('change');
       return true;
     }
-    this.onEnter(hex, rollChance);
+    const forcedIn = this.onEnter(hex, rollChance);
+    // Nothing on the tile grabbed them, and the pack is nearly empty: the road
+    // itself may. (Only when the tile did NOT force them into something - a party
+    // already fighting is not also jumped by opportunists.)
+    if (!forcedIn) this.maybeStarvationAmbush(hex);
     // The Stasis acts only AFTER the arrival is fully resolved, so a Colony can
     // never spawn under the player's feet in the same instant they step on it.
     this.advanceStasis();
@@ -432,7 +447,8 @@ export class Game {
     const a = this.pendingArrival;
     if (!a) return;
     this.pendingArrival = null;
-    this.onEnter(a.hex, a.rollChance);
+    const forcedIn = this.onEnter(a.hex, a.rollChance);
+    if (!forcedIn) this.maybeStarvationAmbush(a.hex);
     this.advanceStasis();
     this.checkEndOfRun();
     this.emit('change');
@@ -548,21 +564,13 @@ export class Game {
   //                the Acolyte, the gate - is still entered by choice.
   // In SCENARIO mode there are no random forces at all: the only forced fights
   // are the scripted ambushes, which fire at their exact step on an empty tile.
+  // RETURNS true when the tile pulled the party into something, which is what
+  // tells moveTo not to also roll a starvation ambush on top of it.
+  // (Until 2026-09-27 this also force-opened a TREASURE the party landed on with
+  // an empty pack, because the run ended on that very step and the cache would
+  // have been lost unopened. The run no longer ends there, so the cache can wait
+  // for Enter like any other - the special case went with the rule it served.)
   onEnter(hex, rollChance) {
-    // A treasure is never in fatigue.forceable - it is entered by choice, same as
-    // a shop or a cache - EXCEPT on the exact step that empties the pack. That
-    // step ends the run right after this (checkEndOfRun), scenario or not, so if
-    // it landed on a treasure the pickup is forced now or it is lost for good:
-    // the player never gets a chance to press Enter before the run is over.
-    // offerSupplies sets pendingSupplies, which checkEndOfRun already knows to
-    // wait for (encounterInFlight), so the run does not end out from under it.
-    if (hex.encounter === 'treasure' && this.state.supplies <= 0) {
-      const label = this.labelFor('treasure');
-      this.addLog('log.forced', { label: { key: 'visual.treasure.label' }, chance: 100 });
-      this.emit('forced', { hex, type: 'treasure', label, chance: 100 });
-      this.enter(true);
-      return;
-    }
     if (this.scenario) {
       const amb = this.nextScenarioAmbush(hex);
       if (amb) {
@@ -573,12 +581,12 @@ export class Game {
         this.addLog('log.forced', { label: { key: 'visual.battle.label' }, chance: 100 });
         this.emit('forced', { hex, type: 'battle', label, chance: 100 });
         this.enter(true);
-        return;
+        return true;
       }
       if (hex.encounter) this.addLog('log.encounterHere', { label: { key: `visual.${hex.encounter}.label` } });
-      return;
+      return false;
     }
-    if (!hex.encounter) return;
+    if (!hex.encounter) return false;
     const label = this.labelFor(hex.encounter);
     const forceable = this.isForceable(hex.encounter);
     // Fatigue off: certain. Fatigue on: rolled against the chance the HUD showed
@@ -589,9 +597,10 @@ export class Game {
       this.addLog('log.forced', { label: { key: `visual.${hex.encounter}.label` }, chance });
       this.emit('forced', { hex, type: hex.encounter, label, chance });
       this.enter(true);
-      return;
+      return true;
     }
     this.addLog('log.encounterHere', { label: { key: `visual.${hex.encounter}.label` } });
+    return false;
   }
 
   // The scripted ambush due right now, if any: the party has taken enough steps
@@ -603,6 +612,96 @@ export class Game {
     if (i < 0) return null;
     this.scenarioState.ambushesDone.add(i);
     return this.scenario.ambushes[i];
+  }
+
+  // ----- starving on the road (2026-09-27) ------------------------------
+  // The pressure that replaced "0 supplies ends the run". A party walking on
+  // `run.starvationThreshold` supplies or fewer is visibly in trouble, and every
+  // step they take rolls `run.starvationAmbushChance` to be jumped for it.
+  //
+  // Two things keep this from being a death spiral. The fight is a REAL one, so
+  // winning it salvages supplies like any other and can put the party back above
+  // the threshold; and the roll only happens on a step that did not already drag
+  // them into something (moveTo passes onEnter's verdict), so a tile's own fight
+  // and an ambush never land on the same turn.
+  //
+  // The escalation is what makes it a clock rather than a tax: the first ambush
+  // of a run is drawn from the first band's crafted maps, the second from the
+  // second, the third and every one after from the last. Whichever ring the party
+  // is actually standing on, the ladder is the same - being broke on the rim is
+  // no worse than being broke at the centre, but being broke REPEATEDLY is.
+  //
+  // Never in scenario mode: a tutorial's beats are scripted and a random fight
+  // would walk over them.
+
+  // Would stepping onto `hex` leave the party inside the starvation window, so
+  // that the step rolls for an ambush? A HUD query - the roll itself happens in
+  // maybeStarvationAmbush, after the tile has had its say. A tile that forces an
+  // encounter never rolls, so it never warns either.
+  starvationRiskAhead(hex) {
+    const s = this.state;
+    if (!hex || s.status !== 'playing' || this.scenario) return false;
+    if ((this.config.run.starvationAmbushChance ?? 0) <= 0) return false;
+    if (hex.revealed && hex.encounter && this.isForceable(hex.encounter)) return false;
+    const after = Math.max(0, s.supplies - this.stepCost(hex).supplySpent);
+    return after < (this.config.run.starvationThreshold ?? 0);
+  }
+
+  // The band id the next ambush should come from.
+  starvationBandFor(count) {
+    const ids = this.config.run.starvationBands ?? Object.keys(this.config.battle?.enemies?.bands ?? {});
+    if (!ids.length) return 'regular';
+    return ids[Math.min(Math.max(count, 1), ids.length) - 1];
+  }
+
+  // Rolled once per step by moveTo. Returns true when an ambush was ANNOUNCED -
+  // the fight itself waits for resolveStarvationAmbush(), so the player reads the
+  // window before the arena takes over.
+  maybeStarvationAmbush(hex) {
+    const s = this.state;
+    const cfg = this.config.run;
+    if (s.status !== 'playing' || this.scenario || s.pendingAmbush) return false;
+    if (s.supplies >= (cfg.starvationThreshold ?? 0)) return false;
+    if (!this.rng.chance(cfg.starvationAmbushChance ?? 0)) return false;
+
+    s.starvationAmbushes += 1;
+    const band = this.starvationBandFor(s.starvationAmbushes);
+    s.pendingAmbush = { hex, band, n: s.starvationAmbushes };
+    this.addLog('log.starvation', { n: s.starvationAmbushes, band });
+    this.emit('dialog', {
+      kind: 'starvation',
+      title: t('starvation.title'),
+      text: t('starvation.text'),
+      band,
+      n: s.starvationAmbushes,
+    });
+    this.emit('change');
+    return true;
+  }
+
+  // Called by the window's one button (and by the headless runner). Conjures the
+  // band's fight onto the tile the party is standing on and starts it.
+  // `alreadyConsumed` keeps whatever the tile actually holds - a shop, a cache -
+  // intact underneath: the ambush is something that happened ON the tile, not the
+  // tile's own encounter, and the party can still press Enter on it afterwards.
+  resolveStarvationAmbush() {
+    const s = this.state;
+    const pending = s.pendingAmbush;
+    if (!pending) return false;
+    s.pendingAmbush = null;
+    const hex = s.position;
+    const arena = makeArena(this.rng, this.config, hex.ring, pending.band, this.map.layer);
+    // prepareCombat reads the fight off the hex and clears `enemies` itself; the
+    // recipe it does NOT clear, so the tile's own map (a shop's, say) is put back
+    // by finishCombat via restoreRecipe.
+    const hadRecipe = hex.recipe ?? null;
+    hex.recipe = arena.recipe;
+    hex.enemies = arena.enemies;
+    return this.startCombat(hex, true, {
+      alreadyConsumed: true,
+      restoreRecipe: hadRecipe,
+      intro: { title: t('starvation.title'), text: t('starvation.text') },
+    });
   }
 
   // The Enter button. "forced" = triggered by fatigue (enemies act first in battles).
@@ -705,10 +804,6 @@ export class Game {
     this.applyRest();
     this.resetFatigue();
     this.emit('camp', {});
-    // Supplies buy the camp, so a camp can be the thing that empties the pack.
-    // (Held back while a cache's overflow dialog is open - claimSupplies, which
-    // is what asked for this camp, gives the verdict once the find is taken.)
-    this.checkEndOfRun();
     this.emit('change');
     return true;
   }
@@ -825,9 +920,6 @@ export class Game {
     // open window - and the tile's hover text - can still list what was here.
     // Fatigue is untouched: shop's reset rule is 'optional', not 'always'.
     if (this.shopSoldOut(hex)) this.consume(hex, 'shop', false);
-    // A purchase spends supplies, and spending the last of them ends the run the
-    // same way walking them off does.
-    this.checkEndOfRun();
     this.emit('change');
     return true;
   }
@@ -905,11 +997,6 @@ export class Game {
   finishCombat(ctx, result) {
     const s = this.state;
     const { hex, forced, opts, enemies, debuffs, saved } = ctx;
-    // The fight is back from the arena: the out-of-supplies verdict is free to
-    // read the pack again (see encounterInFlight). Cleared here, before the
-    // salvage below, so the re-check at the end of this method sees the truth.
-    this.combatInFlight = false;
-
     // Undo the temporary debuffs (wounds and deaths remain).
     for (let i = 0; i < s.party.length; i++) {
       const u = s.party[i];
@@ -975,6 +1062,11 @@ export class Game {
       this.addLog('log.victorySupplies', { got: result.supplies, n });
     }
 
+    // A fight that was never the tile's own (a starvation ambush, an event's
+    // battle) borrowed the hex to carry its arena. Hand the tile back its map, or
+    // a shop that was jumped outside its door would open onto the ambush's arena.
+    // (prepareCombat already cleared hex.enemies, so nothing is left but this.)
+    if (opts.restoreRecipe !== undefined) hex.recipe = opts.restoreRecipe;
     if (!opts.alreadyConsumed) this.consume(hex, hex.encounter, forced);
     else this.resetFatigue();
     this.emit('dialog', { kind: 'battle', result, intro: opts.intro });
@@ -1002,11 +1094,6 @@ export class Game {
         this.emit('stasis', {});
       }
     }
-    // The verdict this fight may have been holding back: the party walked their
-    // last ration onto a forced fight, and what they salvaged from it (or failed
-    // to) decides the run. A no-op when the pack is not empty, and when the run
-    // already ended above.
-    this.checkEndOfRun();
     this.emit('change');
     return true;
   }
@@ -1027,12 +1114,7 @@ export class Game {
   startCombat(hex, forced, opts = {}) {
     if (this.combatDelegate) {
       const ctx = this.prepareCombat(hex, forced, opts);
-      // The fight is about to leave for the arena and will not report back until
-      // finishCombat. Flagged BEFORE the delegate runs, because a delegate that
-      // finishes synchronously clears it on the way out.
-      this.combatInFlight = true;
       if (this.combatDelegate(ctx)) return true;
-      this.combatInFlight = false;
       // Delegate refused: fall through to the simulation on the SAME context.
       // partyFirst is always true now: forced no longer hands the enemy the opening move.
       const result = simulateBattle(this.rng, this.config.battle, this.state.party, ctx.enemies, true, ctx.damageMod);
@@ -1214,10 +1296,6 @@ export class Game {
     s.pendingSupplies = null;
     const got = this.addSupplies(p.amount);
     this.addLog(got < p.amount ? 'log.collected.partial' : 'log.collected', { got, amount: p.amount });
-    // The find may have been the last thing standing between an empty pack and
-    // the end of the run (see encounterInFlight): now that it is taken - or
-    // turned out not to be enough - the verdict can be given.
-    this.checkEndOfRun();
     this.emit('change');
     return true;
   }
@@ -1419,19 +1497,14 @@ export class Game {
     return `flavour.${kind}.${this.rng.int(1, FLAVOUR_POOL[kind] ?? 1)}`;
   }
 
-  // Is something the party was dragged into still resolving, and still able to
-  // hand them supplies? Two cases, and both are the reason the out-of-supplies
-  // verdict below can be held back:
-  //   * an interactive fight is out on the arena (combatInFlight) - winning it
-  //     salvages battle.victorySupplies;
-  //   * a cache or an event has offered supplies the player has not taken yet
-  //     (state.pendingSupplies, the overflow dialog).
-  // Both clear themselves (finishCombat, claimSupplies), and both call
-  // checkEndOfRun again on the way out, so the verdict is never simply dropped.
-  encounterInFlight() {
-    return this.combatInFlight || !!this.state.pendingSupplies;
-  }
-
+  // A run ends in exactly three ways now: the Seed destroyed (won), the whole
+  // party down (lost, handled where the damage lands), or nowhere left to walk.
+  // Running out of SUPPLIES is deliberately not one of them any more (2026-09-27):
+  // an empty pack used to end the run on the spot, which made the last stretch a
+  // countdown the player could only watch. It now costs blood on hard ground
+  // (stepCost's `unpaid` branch) and invites the escalating starvation ambushes
+  // (maybeStarvationAmbush) - a starving party can still fight its way back to
+  // supply, and dies only if the road actually kills it.
   checkEndOfRun() {
     const s = this.state;
     if (s.status !== 'playing') return;
@@ -1440,19 +1513,6 @@ export class Game {
       s.status = 'won';
       s.endReason = ['end.scenario', { turn: s.turn }];
       this.addLog('log.scenarioDone');
-      this.emit('end', { status: s.status });
-      return;
-    }
-    // OUT OF SUPPLIES (2026-09-22): an empty pack ends the run. The step that
-    // empties it is allowed to happen, so this is checked AFTER the arrival has
-    // played out - and if that arrival forced the party into something that can
-    // still pay them (a fight on the arena, a cache waiting to be claimed), the
-    // verdict waits for it. finishCombat / claimSupplies come back here.
-    if (s.supplies <= 0) {
-      if (this.encounterInFlight()) return;
-      s.status = 'lost';
-      s.endReason = ['end.supplies', { turn: s.turn }];
-      this.addLog('log.outOfSupplies', { turn: s.turn });
       this.emit('end', { status: s.status });
       return;
     }

@@ -32,7 +32,9 @@ for (let seed = 1; seed <= SEEDS; seed++) {
   const hexes = [...map.hexes.values()];
   for (const h of hexes) {
     if (!h.encounter || h.encounter === 'stasisSeed') continue;
-    if (!h.passable || h.supplyCost > 0 || h.isStart || h.isSeed || h.isColony) problems.push(`seed ${seed}: ${h.encounter} on an ineligible tile ${h.key} (${h.type})`);
+    // Costly terrain is eligible since 2026-09-27 (map.js placeEncounters): only
+    // impassable tiles and the three reserved ones are still off limits.
+    if (!h.passable || h.isStart || h.isSeed || h.isColony) problems.push(`seed ${seed}: ${h.encounter} on an ineligible tile ${h.key} (${h.type})`);
   }
   for (const t of enc.unique ?? []) {
     const n = hexes.filter((h) => h.encounter === t).length;
@@ -45,7 +47,7 @@ for (let seed = 1; seed <= SEEDS; seed++) {
       const n = tiles.filter((h) => h.encounter === t).length;
       push(`${t}/${b}`, n);
       const min = perBand(g, bi);
-      const room = tiles.filter((h) => h.passable && h.supplyCost === 0 && !h.isStart && !h.isSeed && !h.isColony).length;
+      const room = tiles.filter((h) => h.passable && !h.isStart && !h.isSeed && !h.isColony).length;
       if (n < min && room >= min) problems.push(`seed ${seed}: band ${b} has ${n} x ${t}, minimum ${min}`);
     });
     const list = hexes.filter((h) => h.encounter === t);

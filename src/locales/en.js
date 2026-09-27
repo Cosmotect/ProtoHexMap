@@ -128,9 +128,10 @@ export const en = {
   // step costs and what is left of the pack afterwards.
   'tip.forced.always': 'Stepping here <b>drags you in</b>',
   'tip.supplies': '-{spend} supplies, <b>{left}</b> left',
-  'tip.lastStep': '-{spend} supplies: <b>your last</b>',
-  'tip.lastStep.sub': 'the run ends when the pack is empty',
-  'tip.lastStep.forced': 'the run ends when the pack is empty - unless this fight pays',
+  'tip.broke': '<b>Nothing left to pay with</b>',
+  'tip.broke.blood': 'the climb takes {hp} HP from each of them instead',
+  'tip.broke.free': 'the ground asks nothing here',
+  'tip.starving': 'Starving: <b>{pct}%</b> chance of being ambushed on this step',
 
   // One of these is appended to every encounter's legend entry by text.js
   // encounterInfo, from config.fatigue - so the legend can never again promise a
@@ -300,6 +301,9 @@ export const en = {
   'log.moved.costs': ' {costs}.',
   'log.cost.supplies': '-{n} supplies',
   'log.cost.hp': '-{n} HP each',
+  // Appended to a step's cost line when the pack could not cover it: the party
+  // paid the ground in blood instead (game.js stepCost, the `unpaid` branch).
+  'log.cost.unpaid': 'nothing left to pay with',
   'log.perished': 'The whole party perished on the mountain after {turn} moves.',
   'log.forced': 'Ambushed! The party stumbles straight into the {label} encounter ({chance}% roll failed).',
   'log.encounterHere': '{label} encounter here. Press "Enter" to go in, or keep walking.',
@@ -342,7 +346,6 @@ export const en = {
   'log.learned': '{name} learns from the fight: {upgrade}.',
   'log.blackMarket': 'Black market: {name} loses {loss} max HP and learns {upgrade}.',
   'log.stuck': 'Stuck: nowhere left to step after {turn} moves.',
-  'log.outOfSupplies': 'The last of the supplies is gone after {turn} moves.',
   'log.debugReveal': 'Debug: whole map revealed.',
   'log.tooFar': 'Too far: you can only step to a neighbouring tile.',
   'log.impassable': 'That tile is impassable.',
@@ -352,7 +355,6 @@ export const en = {
   'end.won.title': 'Run complete',
   'end.lost.title': 'Run over',
   'end.fell': 'The whole party fell in battle after {turn} moves.',
-  'end.supplies': 'The pack came up empty after {turn} moves: with nothing left to march on, the party turns back.',
   'end.seed': 'You destroyed the Stasis Seed after {turn} moves and {enc} encounters, clearing {colonies} {colonies:Colony|Colonies} on the way.',
   'end.scenario': 'The waypoint was reached on turn {turn}. The training map is complete.',
   'end.nextMap': 'Next map',
@@ -414,6 +416,11 @@ export const en = {
 
   // ----- dialogs (main.js / ui.js) ---------------------------------------------------
   'dialog.continue': 'Continue',
+  // ----- starving on the road (game.js maybeStarvationAmbush) --------------
+  'starvation.title': 'Out of supplies',
+  'starvation.text': 'The party ran out of supplies. As they struggle to get back home. They are seen, and taken for easy prey. The party is ambushed.',
+  'starvation.go': 'Stand and fight',
+  'log.starvation': 'Starving, the party is ambushed on the road (ambush {n}, {band} band).',
   'dialog.continueReward': 'Continue: unlock {n} {n:upgrade|upgrades}',
   'dialog.campFirst': 'Make camp first ({cost} supplies), then collect',
   'dialog.campFirst.sub': 'Heals the party, resets fatigue; {fit} of {amount} will fit instead of {partial}',

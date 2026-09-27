@@ -1220,6 +1220,16 @@ function showDialog(d) {
       html: `<p>${escapeHtml(d.text)}</p><div class="effect">${escapeHtml(d.effect || '')}</div>`,
       actions: [{ label: t('dialog.continue'), onClick: () => ui.closeDialog() }],
     });
+  } else if (d.kind === 'starvation') {
+    // Starving on the road (game.js maybeStarvationAmbush): the window announces
+    // the ambush and its ONE button starts the fight. The fight deliberately
+    // waits for that click - the player should read WHY they are suddenly in a
+    // battle before the camera dives into the arena.
+    ui.openDialog({
+      title: d.title,
+      html: `<p>${escapeHtml(d.text)}</p>`,
+      actions: [{ label: t('starvation.go'), onClick: () => { ui.closeDialog(); game.resolveStarvationAmbush(); } }],
+    });
   } else if (d.kind === 'supplies') {
     // Supplies found. If they overflow, offer to make camp first (QoL).
     const actions = [];

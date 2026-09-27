@@ -203,8 +203,17 @@ button.npe:hover {
 .statusbar {
   display: flex;
   align-items: center;
-  gap: 22px;
+  gap: 16px;
   padding: 10px 18px;
+}
+
+/* The turn and supplies readings moved down here from the fatigue bar on
+   2026-09-27 and reuse its .bar-slot / .bar-sep pieces, so the two bars stay one
+   look. The START SCREEN keeps only "Begin journey": there is no turn to show and
+   no journey to spend supplies on yet, and the button has always stood alone. */
+body.start-screen .statusbar > .bar-slot,
+body.start-screen .statusbar > .bar-sep {
+  display: none;
 }
 
 /* ----- the layer selector (start screen) --------------------------------------
@@ -925,6 +934,8 @@ button.small {
    down. --hue (green -> yellow -> red) and --size are written per box by
    ui.js from CONFIG.fatigueBar. */
 /* The top bar holds three readings side by side: supplies | fatigue | turn. */
+/* Since 2026-09-27 this bar holds the fatigue boxes and nothing else (the turn
+   and supplies moved to the status bar), so it is simply a frame around them. */
 .fatigue-bar {
   padding: 8px 12px;
   display: flex;
@@ -1759,8 +1770,13 @@ button.small {
   }
 
   .statusbar {
-    gap: 10px;
+    gap: 8px;
     padding: 8px 10px;
+  }
+
+  /* Narrow screens: the counters lose their fixed width before the button does. */
+  .statusbar .bar-slot .stat {
+    min-width: 0;
   }
 
   .bottom-left {

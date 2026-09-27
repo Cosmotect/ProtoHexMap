@@ -494,16 +494,22 @@ export function createUI(config, handlers) {
       parts.push(`<div class="tip-small">${t('tip.after', { next, now: s.fatigue })}</div>`);
     } else if (canGo) {
       // Fatigue off: the pack is the clock, so the tip reads as supplies.
-      const spend = game.stepCost(hex).supplyCost;
-      const left = Math.max(0, s.supplies - spend);
+      const cost = game.stepCost(hex);
+      const left = Math.max(0, s.supplies - cost.supplySpent);
       if (game.forcedChanceFor(hex)) parts.push(`<div class="tip-big">${t('tip.forced.always')}</div>`);
-      if (game.stepEndsRun(hex)) {
-        // The step is still allowed - this is a warning, not a refusal. If the
-        // tile forces a fight, winning it may yet refill the pack.
-        parts.push(`<div class="tip-big tip-last">${t('tip.lastStep', { spend })}</div>`);
-        parts.push(`<div class="tip-sub">${t(game.forcedChanceFor(hex) ? 'tip.lastStep.forced' : 'tip.lastStep.sub')}</div>`);
+      if (cost.unpaid) {
+        // The step is legal - the party simply cannot pay for it, and the ground
+        // takes its price in HP instead (nothing at all on the flat). What they
+        // should really be reading here is the ambush risk, so that comes first.
+        parts.push(`<div class="tip-big tip-last">${t('tip.broke')}</div>`);
+        parts.push(`<div class="tip-sub">${t(cost.hpCost > 0 ? 'tip.broke.blood' : 'tip.broke.free', { hp: cost.hpCost })}</div>`);
       } else {
-        parts.push(`<div class="tip-small">${t('tip.supplies', { spend, left })}</div>`);
+        parts.push(`<div class="tip-small">${t('tip.supplies', { spend: cost.supplyCost, left })}</div>`);
+      }
+      // Below the starvation line every step is a coin flip for an ambush, and
+      // that is the thing worth knowing before clicking.
+      if (game.starvationRiskAhead(hex)) {
+        parts.push(`<div class="tip-sub tip-starving">${t('tip.starving', { pct: Math.round((config.run.starvationAmbushChance ?? 0) * 100) })}</div>`);
       }
     }
     // A shop the party has already entered lists what it still sells, from any distance.

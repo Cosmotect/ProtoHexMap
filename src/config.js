@@ -33,10 +33,15 @@ export const CONFIG = {
     // Supplies are the currency AND the run's clock: camps (rest.cost), shop
     // options (shop.*Cost) and every step spend them; treasure (treasure.supplies)
     // and won fights (battle.victorySupplies) restock them.
-    // RUN END (2026-09-22): the run is over the moment supplies reach 0. The step
-    // that empties the pack is allowed to happen - and if it lands the party on a
-    // forced encounter, the verdict WAITS for that encounter, because winning it
-    // may restock them (see game.js checkEndOfRun / encounterInFlight).
+    // RUNNING OUT (2026-09-27): an empty pack no longer ends the run - it used to,
+    // and that made the last stretch a countdown the player could only watch.
+    // Supplies floor at 0 and the party walks on, paying two prices instead:
+    //   * a step they cannot afford costs the TILE's own HP instead of supplies
+    //     (game.js stepCost - nothing on flat ground, the mountain's 5 up there),
+    //   * and below `starvationThreshold` every step rolls for an ambush
+    //     (see the three knobs below).
+    // The only ways a run ends now: the Seed destroyed, the party wiped out, or
+    // nowhere left to step.
     startSupplies: 60,
     // The ceiling, its own knob since 2026-09-22 - it used to be implicitly equal
     // to startSupplies, so a full pack could never grow. Gains never exceed it
@@ -48,6 +53,21 @@ export const CONFIG = {
     // leaves supplies draining only through terrain, camps and shops (the
     // behaviour before 2026-09-22).
     stepSupplyCost: 1,
+    // ----- Starving on the road (2026-09-27) ---------------------------
+    // Below `starvationThreshold` supplies, every step the party takes that did
+    // NOT already drag them into an encounter rolls `starvationAmbushChance`: on a
+    // hit they are jumped where they stand (game.js maybeStarvationAmbush). The
+    // fight is a real one out of a crafted-map band, and winning it salvages
+    // supplies as any fight does - which is how a starving party claws its way
+    // back into the run instead of simply losing it.
+    // The escalation is the pressure: the FIRST ambush of a run comes from the
+    // first band, the second from the second, the third and every one after from
+    // the last. `starvationBands` names them in order (ids from
+    // config.battle.enemies.bands); null follows that table's own order, which is
+    // what you want unless you are deliberately re-pointing the ladder.
+    starvationThreshold: 5,
+    starvationAmbushChance: 0.5,
+    starvationBands: null,
     revealRadius: 0,          // how many rings around the player get uncovered (0 = only the tile you stand on)
     seedAlwaysVisible: false, // false = the Stasis Seed hides under the fog like everything else
     revealStartRadius: 1,     // rings uncovered around the start tile at the beginning

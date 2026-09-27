@@ -39,6 +39,7 @@ export function runWorld({ config, seed, persona, bot, maxTurns = 500 }) {
   const fights = [];
   const dialogQueue = [];
   let gates = 0;
+  let starvations = 0;   // how many times the road jumped a starving party
 
   game.on((type, payload) => {
     if (type === 'dialog') dialogQueue.push(payload);
@@ -140,6 +141,16 @@ export function runWorld({ config, seed, persona, bot, maxTurns = 500 }) {
         }
         break;
       }
+      // Starving on the road: the window announces the ambush and the button
+      // starts the fight. A bot has no choice to make here - there is no "decline
+      // to be ambushed" - so it just takes the fight, exactly as the one button
+      // in the UI does. Forgetting this case would silently drop every starvation
+      // fight out of the numbers.
+      case 'starvation': {
+        starvations += 1;
+        game.resolveStarvationAmbush();
+        break;
+      }
       case 'gate': gates += 1; break;    // layer unlocks are meta-progression, nothing to answer
       default: break;                    // 'event' etc.: already applied by the rules
     }
@@ -208,6 +219,7 @@ export function runWorld({ config, seed, persona, bot, maxTurns = 500 }) {
     encountersCleared: s.encountersCleared,
     coloniesCleared: s.coloniesCleared,
     gatesFound: gates,
+    starvationAmbushes: starvations,
     deaths: game.deadUnits().length,
     upgradesTotal: totalUpgrades(game),
     suppliesLeft: s.supplies,

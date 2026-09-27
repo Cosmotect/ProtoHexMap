@@ -153,6 +153,8 @@ outside `src/config/*`.
   encountersCleared, coloniesCleared,
   lastBattle,
   pendingSupplies,               // { amount, source } | null, awaiting a claim/overflow choice
+  starvationAmbushes,             // how many have fired this run; picks the next one's band
+  pendingAmbush,                   // { hex, band, n } | null, announced and awaiting its button
   endReason,                       // [locale key, params]
 }
 
@@ -180,7 +182,7 @@ seed for the run's RNG comes from `?seed=` (a number, or any string, hashed).
 **Encounter placement** (`map.js placeEncounters`, config `encounters`; since
 2026-09-26 - until then every eligible tile rolled independently, which gave seeds
 with two fights in the first three rings or every cache in one corner). The
-eligible tiles (walkable, supply-free, not the start / Seed / Colony sites, past
+eligible tiles (walkable, not the start / Seed / Colony sites, past
 `minDistanceFromStart`) are split into the ring bands of
 `config.battle.enemies.bands` (inner 1-3, middle 4-7, outer 8-11) and each band
 is seeded on its own: it holds about `density` x its tiles worth of encounters;
@@ -227,11 +229,40 @@ the party is back on the map, never behind the arena.
 `run.stepSupplyCost` (1) plus the tile type's own `supplyCost` (hill 2, mountain 5),
 but the tile-type cost only applies when climbing to strictly higher ground; walking
 level or downhill only pays the flat step cost. HP cost from a tile's `hpCost`
-(wither: 1) applies on every step onto it. A step that would empty supplies is still
-legal - **running out of supplies ends the run** (`game.js checkEndOfRun()`), unless
-an encounter is still in flight (an unresolved fight, or an unclaimed supply pickup),
-in which case the verdict waits until that resolves, since winning or collecting can
-restock the party above zero.
+(wither: 1) applies on every step onto it. Supplies are capped at `run.maxSupplies`
+(100), which is its own knob and no longer tied to `startSupplies` (60).
+
+**Running out of supplies** (reworked 2026-09-27). An empty pack no longer ends the
+run. It used to, which made the last stretch a countdown the player could only watch;
+now supplies simply floor at zero and the party walks on, paying two prices instead.
+
+*Blood for ground.* A step the pack cannot cover is still taken - `game.js stepCost`
+marks it `unpaid`, spends whatever is left (`supplySpent`) and charges the TILE
+TYPE's own `hpCost` to every living unit, ungated by the climb rule: a solvent party
+ridge-walking between two mountains pays nothing, a broke one pays the mountain. On
+flat ground that is nothing at all, which is deliberate - walking home broke is free,
+and the threat to a starving party is the road, not the dirt. NOTE: every tile type
+currently carries `hpCost: 0`, so this rule is armed and tested but costs nothing in
+today's balance; give high ground a non-zero `hpCost` and it starts biting.
+
+*Ambushed for it.* Below `run.starvationThreshold` (5) supplies, every step that did
+not already drag the party into an encounter rolls `run.starvationAmbushChance` (0.5)
+in `game.js maybeStarvationAmbush`. On a hit the party is jumped where it stands: a
+window explains why (`dialog` kind `starvation`) and its one button calls
+`resolveStarvationAmbush()`, which conjures a real fight from a crafted-map band onto
+the current tile and starts it. Winning salvages supplies like any fight, which is
+how a starving party claws its way back into the run rather than simply losing it.
+The ESCALATION is the pressure: the first ambush of a run comes from the first band,
+the second from the second, the third and every one after from the last
+(`starvationBandFor`, following `config.battle.enemies.bands` unless
+`run.starvationBands` overrides the order). The count (`state.starvationAmbushes`)
+never resets, even if the party restocks. The ambush borrows the tile to carry its
+arena and hands it straight back (`opts.restoreRecipe` in `finishCombat`), so a shop
+the party was jumped outside is untouched and still enterable. Never in scenario
+mode, where the beats are scripted.
+
+A run therefore ends in exactly three ways now: the Seed destroyed (won), the whole
+party down, or nowhere left to step.
 
 **Party.** Three starting units, chosen from a twelve-character roster
 (`config/entities.js`). Each roster entry defines `name`, `icon`, `hp` (doubles as
@@ -247,11 +278,12 @@ which encounter types can drag the party in on arrival, but the chance is a flat
 100% rather than a rolled percentage - stepping onto a revealed tile holding one of
 those types always forces entry. Everything else is opt-in via the Enter button.
 Flipping `fatigue.enabled` back on restores the old rolled, rising chance of ambush;
-it is a config toggle, not a removed mechanic. One special case: if the party enters
-a `treasure` tile with supplies already at or below zero, the pickup is forced
-immediately (`game.js onEnter()`) rather than left to the Enter button, since the
-very next end-of-run check would otherwise erase the reward before the player could
-act on it. A forced encounter shows a banner reading "Stumbled into a fight" (combat
+it is a config toggle, not a removed mechanic. (Until 2026-09-27 there was one more
+special case: a `treasure` entered with an empty pack was picked up automatically,
+because the run ended on that very step and the cache would have been lost unopened.
+The run no longer ends there, so the cache waits for Enter like anything else and the
+special case went with the rule it served.) A forced encounter shows a banner reading
+"Stumbled into a fight" (combat
 types: `battle`, `stasisSeed`, `stasisColony`) or "Stumbled into something..." (tinted
 blue, everything else forced). Combat itself always lets the player act first, forced
 or not (see "The combat engine").
@@ -270,8 +302,13 @@ usual one; an active Colony's debuff also stacks onto the Seed fight.
 
 **Camera, HUD, Settings.** The world camera is a perspective-only, tilt/zoom-limited
 orbit around the party with optional follow. The HUD shows the party panel, the
-fatigue bar (hidden while fatigue is disabled), the event log, hover tooltips and the
-legend. The Settings window (`settings.js`) is a live editor bound directly to the
+event log, hover tooltips and the legend. The **status bar** (bottom centre) carries
+the turn, the action button (Enter / Make camp) and supplies, separated by hairlines;
+the two counters moved there from the top-centre bar on 2026-09-27, so that the
+numbers read every step sit beside the button pressed every step - and so that
+hiding the fatigue bar does not take them away with it. The counters hide themselves
+on the start screen, leaving "Begin journey" alone. The **fatigue bar** (top centre)
+now holds only the fatigue boxes and is hidden entirely while fatigue is disabled. The Settings window (`settings.js`) is a live editor bound directly to the
 shared `CONFIG` object, so edits reach the running game immediately; UI scale and log
 visibility persist across sessions.
 
@@ -778,7 +815,9 @@ downstream (renderer, HUD, combat) sees an ordinary, just small, map.
 `campaign`, `campaign:report` and `test:engine` scripts, but none of the headless
 harness, bots, gym, report generator, world runner, personas or campaign runner
 work today (`tools/engine-test.mjs` is stale and fails). What does run headlessly:
-`test:worldmap` (`tools/worldmap-test.mjs`, the world-map rules of 2026-09-22) and
+`test:worldmap` (`tools/worldmap-test.mjs`, the world-map rules of 2026-09-22 and
+2026-09-27: forcing, the supply economy, costly-terrain placement and the starvation
+ambush ladder) and
 `test:encounters` (`tools/encounter-distribution.mjs`, see "Encounter placement");
 the browser playtests are `tools/smoke-test.cjs`, `tools/hack-test.cjs` and
 `tools/shop-test.cjs`.
@@ -800,17 +839,18 @@ soft-lock a fight.
 ## Open questions
 
 1. Should fog ever re-cover tiles (line of sight), or stay permanent as it is today?
-2. Supplies are both the movement-cost resource and the run's clock (running out
-   ends it). Is that the pacing wanted, or should ending the run be decoupled from
-   the camp-cost resource?
+2. Supplies are the movement-cost resource, the shop currency AND the starvation
+   trigger. Since 2026-09-27 running out no longer ends the run - it escalates
+   ambushes instead. Open: is one resource carrying all three jobs right, and is a
+   50% roll per step the right intensity once the ladder reaches the last band?
 3. The old fatigue mechanic (a rising chance of ambush) is disabled in favor of
    forceable encounters always firing; the code for it is intact behind
    `config.fatigue.enabled` if the risk-based version is preferred instead. Whichever
    is kept, tutorial2 currently depends on fatigue being on and would need
    re-authoring if the flag stays off by default.
-4. Should a cache the party is standing on be able to save a run that just ran out
-   of supplies? Today it cannot - only a forced encounter's resolution holds the
-   verdict - so it is possible to run out of supplies standing on an unclaimed cache.
+4. Every tile type currently has `hpCost: 0`, so "an unaffordable step is paid in
+   the tile's blood" costs nothing anywhere. Should high ground get its HP price
+   back, or is the ambush roll meant to be the only consequence of walking broke?
 5. Party HP never grows, only abilities do (through the upgrade trees). Is that the
    pacing wanted, or should HP/healing scale too?
 6. Map variants: branching lanes, bigger fields, multiple Seeds?
