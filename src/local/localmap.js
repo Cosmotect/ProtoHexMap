@@ -23,6 +23,7 @@ import { COMBAT_CONFIG } from '../config/localmap.js';
 import { createRng } from '../rng.js';
 import { DIRS, PK, addK, hexDist, boardTiles } from './battle/bhex.js';
 import { evenSpread } from '../spread.js';
+import { createNoise } from '../noise.js';
 
 // The local grid uses the opposite orientation to the world grid.
 export function localOrientation(worldOrientation) {
@@ -173,25 +174,34 @@ export function pickClusteredTiles(map, count, random, exclude = new Set(), maxS
 //
 //  A hack is played on a completely FLAT board (every tile pinned to the
 //  neutral elevation, which is exactly what switches the random wave off in
-//  build), with the party seated here and NODES and MINES strewn EVENLY
-//  over the rest. buildHackRecipe returns an ordinary recipe (the
+//  build), with the party seated here and NODES (in islands) and MINES
+//  (evenly) strewn over the rest. buildHackRecipe returns an ordinary recipe (the
 //  handcrafted-map path above builds it with no special case) plus the node
 //  / mine keys and each node's seeded hp roll; main.js builds the pieces
 //  (HackNode / HackMine, local/battle/entity.js) from those and hands them
 //  to the engine as `entities`.
 //
-//  THE SPREAD. Until 2026-09-24 the pieces went down by one of twenty
-//  probabilistic LAYOUTS (clusters, rings, noise fields...), which read on
-//  the board as splotches: heaps of nodes here, bare ground there. Now there
-//  is one placer and it is a blue-noise spread (src/spread.js evenSpread,
-//  the same one the world map places its encounters with): the pieces are
-//  thrown down at random, but at the WIDEST spacing the board can fit that
-//  many pieces at (found by stepping the spacing down until they all fit),
-//  so they end up spaced out across the whole board at a steady density -
-//  never in heaps, never leaving a quarter of it empty - while no two
-//  boards are alike. `nodeSpacing` is the floor under that spacing: two
-//  nodes are never nearer than it (2 = never adjacent). The first ring
-//  around the party is always kept free of nodes and mines.
+//  THE NODES go down in ISLANDS (since 2026-09-26). A seeded Perlin field
+//  (src/noise.js fbm, H.nodeNoise: frequency, octaves, persistence) is
+//  sampled on every free tile, and the H.nodes highest tiles take a node - a
+//  single threshold, but set by RANK rather than by value, so the count is
+//  always exact whatever the field looks like. A frequency around 0.5 (per
+//  tile) gives a board of small islands and short chains with bare ground
+//  between them; three octaves rag the island edges and throw off a few
+//  strays. Nodes may touch - that is the point.
+//
+//  History: until 2026-09-24 the pieces went down by one of twenty
+//  probabilistic LAYOUTS (clusters, rings, noise fields...), which read as
+//  splotches; 2026-09-24..26 the nodes went down by a blue-noise spread
+//  (src/spread.js evenSpread), which came out too evenly spaced - every
+//  node its own island, no shape to the board. The islands were picked from
+//  contact sheets comparing banded Perlin, single-threshold Perlin at
+//  several frequencies, Worley, value and ridged noise.
+//
+//  THE MINES are still spread EVENLY (evenSpread, the same placer the world
+//  map places its encounters with): thrown down at random but at the WIDEST
+//  spacing the board can fit that many at, never nearer than H.mineSpacing.
+//  The first ring around the party is always kept free of nodes and mines.
 //
 //  There are no handcrafted hack boards today; if some are wanted, they are
 //  map codes and belong in config/encounters.js `craftedMaps`, next to the
@@ -248,14 +258,24 @@ export function buildHackRecipe(H, seed, hex, partySize) {
   const reserved = new Set(used);
   for (const k of used) for (const d of DIRS) reserved.add(addK(k, d));
 
-  // ----- the even spread (src/spread.js evenSpread, shared with the world
-  // map's encounter placement) -------------------------------------------
-  // The free tiles, the count, the floor under the spacing; the nodes go
-  // first, then the mines keep their own spacing from each other (they may
-  // sit next to a node).
+  // ----- the nodes: islands of a Perlin field ---------------------------
+  // Every free tile gets the field's value; the H.nodes highest take a node
+  // (ties broken by the tile key, so the order never depends on the sort).
   const freeTiles = () => all.filter((k) => !used.has(k) && !reserved.has(k));
-  const nodeKeys = evenSpread({ pool: freeTiles(), count: H.nodes ?? 16, floor: H.nodeSpacing ?? 2, rng, dist: hexDist, maxSpacing: R });
+  const NN = H.nodeNoise ?? {};
+  const noise = createNoise(rng);
+  const ox = rng.random() * 1000, oy = rng.random() * 1000;
+  const field = (k) => { const p = xyOf(k); return noise.fbm(p.x, p.y, { frequency: NN.frequency ?? 0.5, octaves: NN.octaves ?? 3, persistence: NN.persistence ?? 0.5, offsetX: ox, offsetY: oy }); };
+  const nodePool = freeTiles();
+  const height = new Map(nodePool.map((k) => [k, field(k)]));
+  const nodeKeys = nodePool
+    .sort((a, b) => (height.get(b) - height.get(a)) || (a < b ? -1 : a > b ? 1 : 0))
+    .slice(0, Math.max(0, Math.round(H.nodes ?? 32)));
   for (const k of nodeKeys) used.add(k);
+
+  // ----- the mines: the even spread (src/spread.js evenSpread, shared with
+  // the world map's encounter placement), their own spacing from each other
+  // (they may sit next to a node) ------------------------------------------
   const mineKeys = evenSpread({ pool: freeTiles(), count: H.mines ?? 8, floor: H.mineSpacing ?? 1, rng, dist: hexDist, maxSpacing: R });
   for (const k of mineKeys) used.add(k);
 

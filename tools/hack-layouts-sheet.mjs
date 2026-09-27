@@ -1,5 +1,5 @@
 // Draws a contact sheet (SVG) of generated hack boards - ten seeds of the
-// even spread (src/local/localmap.js buildHackRecipe) - so the placement
+// node islands and mine spread (src/local/localmap.js buildHackRecipe) - so the placement
 // can be judged at a glance: nodes blue, mines red, the party gold.
 //   node tools/hack-layouts-sheet.mjs > tools/shots/hack-layouts.svg
 import { buildHackRecipe } from '../src/local/localmap.js';

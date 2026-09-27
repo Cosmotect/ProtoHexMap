@@ -273,7 +273,7 @@ function carveCorridor(result, config, goal) {
 //       type still turns up), lifted to the type's guaranteed minimum for
 //       that band;
 //    3. within the band each type is spread EVENLY over the free tiles
-//       (src/spread.js evenSpread - the Hack board's placer), rarest type
+//       (src/spread.js evenSpread - also the Hack board's mine placer), rarest type
 //       first, so the picks of one type are never bunched in one corner;
 //    4. `unique` types are capped at one per map;
 //    5. the VALIDATOR counts every band again and places more of any type

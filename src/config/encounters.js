@@ -2051,15 +2051,24 @@ radius: 3
   hack: {
     // ----- the board -------------------------------------------------
     radius: 7,          // rings of local hexes (the arena is completely flat)
-    nodes: 16,          // nodes on the board
+    nodes: 32,          // nodes on the board
     mines: 8,           // mines on the board
     nodeHp: [1, 3],     // every node's hp (its discs) is a seeded roll in this range, both ends included
-    // The spread: the pieces are scattered at random but at the WIDEST
-    // spacing the board can fit that many at, so they come out evenly spaced
-    // over the whole board. These are the floors under that spacing - two
-    // nodes are never nearer than nodeSpacing (2 = never adjacent), two
-    // mines never nearer than mineSpacing; a mine may sit next to a node.
-    nodeSpacing: 2,
+    // The NODES go down in ISLANDS: a seeded Perlin field (src/noise.js fbm)
+    // is sampled on every free tile and the `nodes` highest tiles take a node
+    // - a single threshold, set by rank, so the count is always exact.
+    // Higher frequency = more, smaller islands (keep it up as `nodes` grows,
+    // or the islands merge into one network); more octaves = raggeder
+    // island edges and a few strays. Picked 2026-09-26 from the contact
+    // sheets in "Claude outputs" (hack-node-noises-32.png, row 2).
+    nodeNoise: {
+      frequency: 0.5,   // per tile (adjacent tiles are 1 apart)
+      octaves: 3,
+      persistence: 0.5, // each octave's weight relative to the one before
+    },
+    // The MINES are still spread EVENLY (src/spread.js evenSpread): random,
+    // but at the widest spacing the board fits them at, never nearer than
+    // mineSpacing to each other; a mine may sit next to a node.
     mineSpacing: 1,
     // Where the party is seated: 'centre' (within partyRingMax of the
     // middle) or 'edge' (a cluster on one random side of the rim). The first

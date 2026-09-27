@@ -190,7 +190,7 @@ per band), rounded seeded-randomly so a rare type (the gate) still turns up;
 `guaranteed` is the band's MINIMUM of the type (one number per band in band
 order, a plain number meaning every band) and lifts the share before placing.
 Within a band each type is spread EVENLY over the free tiles with `src/spread.js
-evenSpread` - the Hack board's placer (random picks at the widest spacing that
+evenSpread` - also the Hack board's mine placer (random picks at the widest spacing that
 fits, keeping their distance from the same type already down in earlier bands) -
 rarest type first. `unique` types are capped at one per map. A VALIDATOR then
 recounts every band and places more of any type still short of its minimum, on a
@@ -584,21 +584,27 @@ folder, overriding what it needs; nothing in the engine or the config knows it.
 **The board** (`buildHackRecipe` in `localmap.js`): a flat arena, radius `H.radius`
 (7), no elevation wave; the party seated at the centre (`partyStart: 'centre'`,
 within `partyRingMax`) or in a cluster on one side of the rim (`'edge'`), the first
-ring around them kept free. `H.nodes` (16) nodes and `H.mines` (8) mines are spread
-EVENLY over the rest: a blue-noise scatter - the pieces are thrown down at random
-but at the widest spacing the board can fit that many at (the spacing steps down
-until they all fit), with `nodeSpacing` (2, never adjacent) and `mineSpacing` (1)
-as the floors it never goes below - so every board is different but no board has
-heaps of nodes here and bare ground there. (Until 2026-09-24 the pieces went down
-by one of twenty probabilistic layouts - clusters, rings, noise fields - which
-read on the board as splotches; the layouts are gone. There are no handcrafted
-hack boards; if some are wanted they are map codes and belong in
-`config.craftedMaps`, next to the combat and shop maps.) Each node's hp is a seeded
-roll in `H.nodeHp` ([1, 3]), part of the same stream as the rest of the board; the
-bridge builds the pieces from the recipe's keys and rolls.
-`tools/hack-layouts-sheet.mjs` draws ten seeded boards as an SVG contact sheet to
-eyeball the spread. The placer is `src/spread.js evenSpread`, shared with the world
-map's encounter placement.
+ring around them kept free. `H.nodes` (32) nodes go down in ISLANDS: a seeded
+Perlin field (`src/noise.js` fbm, `H.nodeNoise`: frequency 0.5 per tile, 3 octaves,
+persistence 0.5) is sampled on every free tile and the 32 highest tiles take a node
+- a single threshold set by rank, so the count is always exact. The result is a
+board of small islands and short chains with bare ground between them, ragged at
+the edges with a few strays; nodes may touch. Higher frequency means more, smaller
+islands - keep it up as `H.nodes` grows, or the islands merge into one network.
+`H.mines` (8) mines are then spread EVENLY over what is left (`src/spread.js
+evenSpread`, shared with the world map's encounter placement: random picks at the
+widest spacing that fits, never nearer than `mineSpacing` (1)); a mine may sit next
+to a node. (History: until 2026-09-24 the pieces went down by one of twenty
+probabilistic layouts - clusters, rings, noise fields - which read on the board as
+splotches; from 2026-09-24 to 2026-09-26 the nodes used the blue-noise spread too,
+which came out too even - every node its own island. The islands were picked on
+2026-09-26 from contact sheets comparing banded Perlin, single-threshold Perlin at
+several frequencies, Worley, value and ridged noise. There are no handcrafted hack
+boards; if some are wanted they are map codes and belong in `config.craftedMaps`,
+next to the combat and shop maps.) Each node's hp is a seeded roll in `H.nodeHp`
+([1, 3]), part of the same stream as the rest of the board; the bridge builds the
+pieces from the recipe's keys and rolls. `tools/hack-layouts-sheet.mjs` draws ten
+seeded boards as an SVG contact sheet to eyeball the placement.
 
 **The turn** reuses the ordinary fight's aim-lock flow. Nodes and mines occupy
 their tiles (they block walking; fliers glide over, as over a barrier). A node at 0

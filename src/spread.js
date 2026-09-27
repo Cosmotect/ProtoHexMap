@@ -1,6 +1,6 @@
 // =====================================================================
 //  EVEN SPREAD - blue-noise placement shared by the world map (encounters,
-//  map.js placeEncounters) and the local map (the Hack's nodes and mines,
+//  map.js placeEncounters) and the local map (the Hack's mines,
 //  local/localmap.js buildHackRecipe).
 //
 //  `count` items are picked out of `pool` at random, but at the WIDEST
