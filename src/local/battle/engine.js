@@ -1805,6 +1805,8 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       done && done(fired);
     };
     const step = () => {
+      // Only an OUTSIDE event ends a fight mid-volley now (a debug win/loss,
+      // say): this volley's own kills never do, on purpose - see below.
       if (sb.over) { finish(); return; }
       let cast = false;
       while (i < locks.length && !cast) {
@@ -1821,8 +1823,14 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       }
       if (!cast) { sb.activeUid = null; finish(); return; }
       emit();
-      // A decided fight (the last enemy down mid-volley) stops the volley.
-      if (checkEnd()) { st.overlap = null; for (const u of locks) u.lock = null; return; }
+      // The fight may already be decided (the last enemy down mid-volley), but
+      // we do NOT check for it here and stop: every unit that locked an
+      // ability this turn still gets to fire, in fireOrder, before checkEnd()
+      // is asked - see fireLocks's caller (endTurn), which asks it once the
+      // whole volley (and its `done` callback) has finished. Checking here
+      // used to cut the volley short the instant the last enemy died,
+      // silently swallowing any ally's still-queued heal or buff that was due
+      // to fire later in the same volley.
       wait(step, i < locks.length ? (CFG.volleyStepMs ?? 450) : 0);
     };
     step();
