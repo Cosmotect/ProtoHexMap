@@ -141,7 +141,7 @@ export const ABILITIES = {
   glaive: A({ name: 'Glaive Strike', icon: '⚔️', color: '#e0b25f', desc: 'Downward jab with a sleek glaive.', damage: 4, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], rotatable: true }),
   shardProjectile: A({ name: 'Volley', icon: '🎯', color: '#a8e05f', desc: 'Bone shard projectile fired out .', damage: 2, castZone: ringOffsets(2, 4), dmgZone: [[0, 0]] }),
 
-  spikeShot: A({ name: 'Spike Shot', icon: '🖊', color: '#e0b25f', desc: 'A sparce cloud of toxin tipped spikes.', damage: "1x2", castZone: ringOffsets(1, 2), dmgZone: [[0, 0]] }),
+  spikeShot: A({ name: 'Spike Shot', icon: '🖊', color: '#e0b25f', desc: 'A sparce cloud of toxin tipped spikes.', damage: "1x2", castZone: ringOffsets(1, 1), dmgZone: [[0, 0]] }),
   mendingTouch: A({ name: 'Mend', icon: '🏥', color: '#a8e05f', desc: 'Heals one ally standing on or next to the caster.', heal: 2, castZone: ringOffsets(0, 1), dmgZone: [[0, 0]], cost: { supplies: 1 } }),
 
 
@@ -303,7 +303,7 @@ export const STATUSES = {
   nerveAgent: S({
     name: 'Poisoned', icon: '🧪', color: '#8fd14f',
     desc: 'Takes {n} damage at the start of each of its turns, then the nerveAgent fades.',
-    tickHP: -2, turns: 3,
+    tickHP: -2, turns: 1,
     aiValue: -20,
   }),
   regen: S({
@@ -490,8 +490,7 @@ export function checkTrigger(e, quiet = false) {
 //    statusEffectAdd  { statusEffect, ...field: number } - `statusEffect` (a
 //                 STATUSES row id) is REQUIRED and says which status this node
 //                 touches. If the ability does not already apply that status,
-//                 it now does - the node GIVES the ability a status effect it
-//                 never had, starting fresh from the table's own numbers.
+//                 it now does.
 //                 If the ability already applies that same status, this only
 //                 tunes it further: every other field is summed onto its
 //                 current numbers (its own override where it has one, else
@@ -629,20 +628,41 @@ export const ABILITY_UPGRADES = {
     deadeye: U({ name: 'Deadeye', icon: '👁️', desc: '+2 damage', requires: ['closework', 'rain'], add: { damage: 2 } }),
   },
 
+  spikeShot: {
+    //level 1
+    farShot: U({
+      castZoneAdd: ringOffsets(2, 2),
+      name: 'Far Shot I', icon: '➡️', desc: '+1 range', lore: 'Distance is a resource. Master loved to repeat.'
+    }),
+    multiShotI: U({
+      add: { damage: "x1" },
+      name: 'Multi Shot I', icon: '➡️', desc: '+1 hit', lore: 'For Viridi, numbr of quills is a matter of pride, unfortunate individuals who produce only a few see more closed doors than their productive brethren.'
+    }),
+    mightyShotI: U({
+      add: { damage: "1" },
+      name: 'Mighty Shot I', icon: '➡️', desc: '+1 damage', lore: 'Sharper quills are not an aspect by which Viridi are judged socially, but it does make them more dangerous.'
+    }),
+    //level 2
+    poisonShot: U({
+      requires: ['multiShotI'], statusEffectAdd: { statusEffect: 'nerveAgent', turns: 1 },
+      name: 'Poison Shot', icon: '➡️', desc: 'Apply nerve agent status for 1 turn', lore: 'For Viridi, numbr of quills is a matter of pride, unfortunate individuals who produce only a few see more closed doors than their productive brethren.'
+    }),
+  },
+
   mendingTouch: {
     //level 1
     soothe: U({
       add: { heal: 1 },
-      name: 'Soothe', icon: '💚', desc: '+1 healing',
+      name: 'Soothe', icon: '💚', desc: '+1 healing', lore: 'Action in the field surfaces some old memories of basic healer practices from the days back in the temple.'
     }),
     tend: U({
       castZoneAdd: ringOffsets(2, 2),
-      name: 'Tend', icon: '📏', desc: 'can heal from 2 tiles away',
+      name: 'Tend', icon: '📏', desc: 'Can heal 1 tile further', lore: 'The teching goes, "as one removes distractions from their path, the real goal reveals itself."'
     }),
     //level 2
     bloom: U({
       requires: ['soothe'], dmgZoneAdd: ringOffsets(1, 1),
-      name: 'Bloom', icon: '🌸', desc: 'also heals everyone around the target',
+      name: 'Bloom', icon: '🌸', desc: 'Also heals everyone around the target', lore: 'Prosperity is meaningless unless its shared. 4th tenet of The Construct.'
     }),
     mercy: U({
       requires: ['tend'], add: { heal: 1 },
