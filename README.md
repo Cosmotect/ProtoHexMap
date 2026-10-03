@@ -70,7 +70,7 @@ hex-world-map/
     config/abilities.js   combat rules, abilities, tile tags, per-unit combat stats
     main.js      entry point, wires the parts together (incl. the combat bridge)
     game.js      rules and state: movement, fog, fatigue, party, encounters, win / lose (no graphics)
-    battle.js    builds each fight from its handcrafted map (makeArena) + the legacy auto-resolve (fallback when no arena)
+    battle.js    builds each fight from its handcrafted map (makeArena) + the bestiary helpers (enemy units, reinforcements)
     events.js    flavour texts for Event encounters
     tutorial.js  the new player experience (guided first run)
     text.js      texts generated from config numbers (legend entries, guide cards)

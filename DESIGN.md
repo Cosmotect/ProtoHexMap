@@ -53,7 +53,7 @@ Current event types: `change`, `log`, `move`, `end`, `arrive`, `wither`, `stasis
 **The local-map boundary.** `src/local/` knows nothing of fog, fatigue or encounter
 types - only hex/tile data and the combat engine's own state. It connects to the rest
 of the game through a small number of hooks on `Game`, all wired in `main.js`:
-`game.combatDelegate(ctx)` (drives an interactive fight instead of auto-resolving one),
+`game.combatDelegate(ctx)` (drives the interactive fight; with no delegate, or one that declines, `startCombat` starts nothing and returns false),
 `game.combatIntro(hex, resume)` (forced-encounter dives), `game.finishCombat(ctx, result)`
 (the arena reports back `{ won, rounds, interactive: true }` and `Game` applies
 deaths/rewards/state transitions), and `game.hackDelegate` (the same pattern for the
@@ -184,7 +184,7 @@ seed for the run's RNG comes from `?seed=` (a number, or any string, hashed).
 with two fights in the first three rings or every cache in one corner). The
 eligible tiles (walkable, not the start / Seed / Colony sites, past
 `minDistanceFromStart`) are split into the ring bands of
-`config.battle.enemies.bands` (inner 1-3, middle 4-7, outer 8-11) and each band
+`config.map.bands` (inner 1-3, middle 4-7, outer 8-11) and each band
 is seeded on its own: it holds about `density` x its tiles worth of encounters;
 each type takes its `weight`'s share of those (the table is
 `encounters.types: { id: { weight, guaranteed } }`, a weight being a number or one
@@ -254,7 +254,7 @@ the current tile and starts it. Winning salvages supplies like any fight, which 
 how a starving party claws its way back into the run rather than simply losing it.
 The ESCALATION is the pressure: the first ambush of a run comes from the first band,
 the second from the second, the third and every one after from the last
-(`starvationBandFor`, following `config.battle.enemies.bands` unless
+(`starvationBandFor`, following `config.map.bands` unless
 `run.starvationBands` overrides the order). The count (`state.starvationAmbushes`)
 never resets, even if the party restocks. The ambush borrows the tile to carry its
 arena and hands it straight back (`opts.restoreRecipe` in `finishCombat`), so a shop

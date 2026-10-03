@@ -265,7 +265,7 @@ section('starving on the road: the ambush');
 
 section('the ambush ladder climbs and then holds');
 {
-  const bands = Object.keys(CONFIG.battle.enemies.bands);
+  const bands = Object.keys(CONFIG.map.bands);
   const g = newGame();
   check(g.starvationBandFor(1) === bands[0], `the first ambush comes from "${bands[0]}"`);
   check(g.starvationBandFor(2) === bands[1], `the second from "${bands[1]}"`);
@@ -290,7 +290,7 @@ section('the ambush ladder climbs and then holds');
       g.resolveStarvationAmbush();
       check(!g.state.pendingAmbush, `ambush ${i + 1} resolved into a fight`);
     }
-    const bands = Object.keys(CONFIG.battle.enemies.bands);
+    const bands = Object.keys(CONFIG.map.bands);
     check(JSON.stringify(seen) === JSON.stringify(bands.slice(0, 3)),
       `the three fights walked the ladder: ${seen.join(' -> ')}`);
     check(g.state.supplies > 0, 'and winning them put supplies back in the pack');

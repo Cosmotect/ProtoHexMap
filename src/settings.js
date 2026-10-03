@@ -302,8 +302,8 @@ export function createSettings({ config, defaults, onChange, getUiScale, getUiSc
     return [renderGroup(section, rest, def, section), ...tables];
   }
 
-  // Everything under `battle` that no hand-built editor owns: the damage curve,
-  // the danger bands, the simulation numbers. Rendered on the ENCOUNTERS tab,
+  // Everything under `battle` that no hand-built editor owns: the danger
+  // chevrons, the victory salvage, the reinforcement list. Rendered on the ENCOUNTERS tab,
   // beside the table that decides which fight happens where.
   function battleScalars() {
     const rest = {};

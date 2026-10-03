@@ -528,7 +528,6 @@ export const en = {
   'battle.defeat': 'Defeat after {n} {n:round|rounds}.',
   'battle.partyFirst': 'The party struck first.',
   'battle.enemies': 'Enemies: {list}',
-  'battle.round': 'Round {n}',
   // The deployment bar (placing the party before a fight it walked into).
   'deploy.step': 'Placing {n} of {total}',
   'deploy.hint': 'Click a tile to place this unit.',
@@ -572,8 +571,6 @@ export const en = {
   'battle.cost.short.move': 'not enough movement left this round',
   'battle.cost.short.disarmed': 'disarmed - no abilities this activation',
   'battle.ui.heal': 'heals {n}',
-  'battle.hit': '{attacker} hits {defender} for {dmg}',
-  'battle.hitDown': '{attacker} hits {defender} for {dmg} - {defender} is down',
   'battle.lessons.title': 'Lessons of battle',
   'battle.lessons.text': 'Every standing unit puts one of its ability upgrades on the table. Unlock ONE.',
   'battle.lessons.left': '{n} {n:pick|picks} left.',

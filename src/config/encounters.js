@@ -12,7 +12,7 @@ export const ENCOUNTERS = {
   // final list of walkable, supply-free tiles (no water, ether, hills or
   // mountains; not the start, the Seed or a Colony site; not within
   // minDistanceFromStart of the start). Those tiles are split into the RING
-  // BANDS of config.battle.enemies.bands (inner / middle / outer, by ring),
+  // BANDS of config.map.bands (inner / middle / outer, by ring),
   // and every band is seeded on its own:
   //   * the band holds about `density` x its tiles worth of encounters;
   //   * each type's share of those is its `weight` over the sum of weights
@@ -169,7 +169,7 @@ radius: 6
 -2,4: ground 2 !Stalker
 -2,-2: ground 2 !Husk
 4,0: ground 2 !Husk`,
-        // ----- INNER RINGS (config.battle.enemies.bands.inner) - one to five weak creatures -----
+        // ----- INNER RINGS (config.map.bands.inner) - one to five weak creatures -----
         `# A sunken creek bed winds across the arena; the raiders wait on the far bank
 # where the ground rises again. Cross in the open or go the long way round.
 id: dry-creek

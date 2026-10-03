@@ -18,7 +18,7 @@ const SEEDS = Number(process.argv[2]) || 200;
 const SPREAD_SHARE = 0.5;
 const enc = CONFIG.encounters;
 const types = Object.keys(enc.types ?? enc.weights ?? {});
-const bandIds = Object.keys(CONFIG.battle.enemies.bands);
+const bandIds = Object.keys(CONFIG.map.bands);
 const perBand = (v, i) => (Array.isArray(v) ? Number(v[Math.min(i, v.length - 1)] ?? 0) : Number(v ?? 0)) || 0;
 const problems = [];
 const agg = {};

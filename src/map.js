@@ -267,7 +267,7 @@ function carveCorridor(result, config, goal) {
 //  documented on config.encounters (config/encounters.js); in short:
 //    1. the eligible tiles (walkable, supply-free, not the start / Seed /
 //       Colony sites, past minDistanceFromStart) are split into the RING
-//       BANDS of config.battle.enemies.bands;
+//       BANDS of config.map.bands;
 //    2. each band gets about density x its tiles worth of encounters, each
 //       type its weight's share of those (seeded-randomly rounded, so a rare
 //       type still turns up), lifted to the type's guaranteed minimum for
@@ -282,10 +282,10 @@ function carveCorridor(result, config, goal) {
 //  result.encounterReport = { bands: { <band>: { tiles, want, placed, topped } } }.
 // =====================================================================
 export function bandIds(config) {
-  return Object.keys(config.battle?.enemies?.bands ?? { all: { maxRing: Infinity } });
+  return Object.keys(config.map?.bands ?? { all: { maxRing: Infinity } });
 }
 export function bandIndexOf(config, ring) {
-  const bands = config.battle?.enemies?.bands;
+  const bands = config.map?.bands;
   if (!bands) return 0;
   const ids = Object.keys(bands);
   for (let i = 0; i < ids.length; i++) if (ring <= bands[ids[i]].maxRing) return i;

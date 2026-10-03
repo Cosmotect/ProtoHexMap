@@ -4,7 +4,7 @@ import { createRng } from './rng.js';
 import { generateMap, setType, setBiome } from './map.js';
 import { buildScenarioMap, cloneEnemies } from './scenarios/scenario.js';
 import { hexKey, neighbors, hexesInRange, hexDistance } from './hex.js';
-import { simulateBattle, makeArena, makeRegulars, renameDuplicates } from './battle.js';
+import { makeArena, makeRegulars, renameDuplicates } from './battle.js';
 import { recipeFromCode } from './local/mapcode.js';
 import { availableUpgrades, unlockUpgrade, upgradeCount } from './upgrades.js';
 import { EVENTS } from './events.js';
@@ -649,7 +649,7 @@ export class Game {
 
   // The band id the next ambush should come from.
   starvationBandFor(count) {
-    const ids = this.config.run.starvationBands ?? Object.keys(this.config.battle?.enemies?.bands ?? {});
+    const ids = this.config.run.starvationBands ?? Object.keys(this.config.map?.bands ?? {});
     if (!ids.length) return 'regular';
     return ids[Math.min(Math.max(count, 1), ids.length) - 1];
   }
@@ -936,8 +936,7 @@ export class Game {
   // (src/local/battle/) can slot in between them:
   //   prepareCombat()  takes the tile's fight (map + enemies), applies the Stasis debuffs, logs the
   //                    opening - and returns a context describing the fight
-  //   ...the fight...  either simulateBattle (the old auto-resolve) or the
-  //                    combatDelegate set by main.js (the playable arena)
+  //   ...the fight...  the combatDelegate set by main.js (the playable arena)
   //   finishCombat()   lifts the debuffs, applies deaths, rewards, dialogs, end
   prepareCombat(hex, forced, opts = {}) {
     const s = this.state;
@@ -954,9 +953,8 @@ export class Game {
     // Stasis debuffs: temporarily weaken the party and/or reinforce the enemy for
     // this one fight. Damage taken stays after the fight; max HP comes back.
     // The "damage" debuff travels on the context as a flat ability-damage penalty
-    // (damageMod) - both the interactive engine and the auto-resolve simulation
-    // apply it the same way now (see dmgMod() in local/battle/engine.js and
-    // damageFor() in battle.js).
+    // (damageMod), which the arena applies to every party cast (see dmgMod() in
+    // local/battle/engine.js).
     const debuffs = this.activeDebuffsFor(hex);
     const cfgDebuffs = this.config.stasis.debuffs;
     const saved = s.party.map((u) => ({ maxHp: u.maxHp }));
@@ -1006,7 +1004,6 @@ export class Game {
 
     // An interactive fight reports only the outcome; deaths are read off the party.
     if (result.interactive) {
-      result.lines = result.lines ?? [];
       result.deaths = result.deaths ?? [];
       result.partyFirst = true;   // always, forced or not - see startCombat
       // DOWN BUT NOT OUT: a unit left downed on the arena (not shoved into the
@@ -1098,29 +1095,25 @@ export class Game {
     return true;
   }
 
-  // The auto-resolve fallback: the same three steps with simulateBattle in the
-  // middle. Used when no combatDelegate is wired in (headless tests, safety net).
-  resolveBattle(hex, forced, opts = {}) {
-    const ctx = this.prepareCombat(hex, forced, opts);
-    // partyFirst is always true now: forced no longer hands the enemy the opening move.
-    const result = simulateBattle(this.rng, this.config.battle, this.state.party, ctx.enemies, true, ctx.damageMod);
-    return this.finishCombat(ctx, result);
-  }
-
-  // Routes a fight to the interactive arena when main.js has provided one.
-  // The delegate receives the prepared context and must later call
-  // finishCombat(ctx, { won, rounds, interactive: true }); returning false
-  // means "cannot take it now" and the fight auto-resolves instead.
+  // Routes a fight to the arena main.js provides. The delegate receives the
+  // prepared context and must later call finishCombat(ctx, { won, rounds,
+  // interactive: true }). There is no auto-resolve any more: with no delegate
+  // wired in (a headless run that did not install one) nothing is started, and
+  // when the delegate cannot take the fight right now (an arena is already up,
+  // or a camera flight is in the way) everything prepareCombat touched is put
+  // back and false is returned, so the encounter is still on its tile and can
+  // simply be entered again.
   startCombat(hex, forced, opts = {}) {
-    if (this.combatDelegate) {
-      const ctx = this.prepareCombat(hex, forced, opts);
-      if (this.combatDelegate(ctx)) return true;
-      // Delegate refused: fall through to the simulation on the SAME context.
-      // partyFirst is always true now: forced no longer hands the enemy the opening move.
-      const result = simulateBattle(this.rng, this.config.battle, this.state.party, ctx.enemies, true, ctx.damageMod);
-      return this.finishCombat(ctx, result);
-    }
-    return this.resolveBattle(hex, forced, opts);
+    if (!this.combatDelegate) return false;
+    const party = this.state.party.map((u) => ({ hp: u.hp, maxHp: u.maxHp }));
+    const hadEnemies = hex.enemies ? [...hex.enemies] : hex.enemies;
+    const hadRecipe = hex.recipe;
+    const ctx = this.prepareCombat(hex, forced, opts);
+    if (this.combatDelegate(ctx)) return true;
+    this.state.party.forEach((u, i) => { u.hp = party[i].hp; u.maxHp = party[i].maxHp; });
+    hex.enemies = hadEnemies;
+    hex.recipe = hadRecipe;
+    return false;
   }
 
   // ----- the Hack terminal (config.hack, see DESIGN.md) ---------------------

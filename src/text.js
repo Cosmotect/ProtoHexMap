@@ -42,8 +42,6 @@ export function placeholders(config) {
     colonyChevrons: c.battle.danger.colony,
     seedChevrons: c.battle.danger.seed,
     unitCount: c.party.size ?? 3,
-    damageMin: c.battle.damageMin,
-    damageMax: c.battle.damageMax,
     victorySupplies: c.battle.victorySupplies ?? 0,
     // The Hack terminal (config.hack): its turn budget and badge thresholds.
     turns: c.hack?.turns ?? 5,

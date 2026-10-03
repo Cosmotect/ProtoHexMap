@@ -122,18 +122,9 @@ export const ENTITIES = {
     defaultCombat: { speed: 4, flying: false, abilities: ['strike'] },
   },
 
-  // ----- Battle simulation --------------------------------------------
+  // ----- Battle -------------------------------------------------------
+  // Every fight is played in the arena; damage comes from the abilities.
   battle: {
-    damageMin: 2,
-    damageMax: 8,
-    // Bell curve control: the roll is the average of this many uniform rolls.
-    // 1 = flat (every value equally likely), 2 = triangle, 3+ = increasingly bell shaped.
-    // This is the AUTO-RESOLVE simulation's damage roll only (battle.js damageFor) -
-    // it does not read abilities, so every unit rolls the same band regardless of
-    // type. The interactive fight always uses the ability's own `damage` instead
-    // (config/abilities.js). (There used to be a power-ratio multiplier on top of
-    // this roll too - removed 2026-09-10 along with the "power" stat itself.)
-    bellDice: 2,
     // Danger preview - the chevrons above a revealed fight. ABSOLUTE, not relative
     // to the party: reading whether a fight is takeable is the player's job. A
     // STRICT rule, no calculation: a regular fight shows 0..2 chevrons purely by
@@ -143,14 +134,7 @@ export const ENTITIES = {
     // shows `seed`, both deliberately higher than the outer band's 2 so they
     // still read as harder than a normal fight.
     danger: { ringBands: [3, 7], colony: 3, seed: 5, maxChevrons: 8 },
-    // Player units hit harder the closer they are to death ("playing carefully"):
-    // damage *= 1 + desperation * (1 - hp / maxHp). 0 = off, 0.5 = up to +50% at 1 HP.
-    desperation: 0.5,
-    // Enemy target choice: weight grows with the target's remaining HP fraction,
-    // raised to this exponent (0 = pick uniformly at random).
-    healthyTargetBias: 2,
     victorySupplies: 5,       // supplies salvaged after winning any battle (incl. Stasis)
-    maxRounds: 100,           // safety cap for the simulation loop
     // =================================================================
     //  THE BESTIARY - every enemy that exists, by id.
     //  A row here is the WHOLE creature - since 2026-09-01 nothing about an
@@ -231,27 +215,12 @@ export const ENTITIES = {
       rotChorister: { name: 'Rot Chorister', shape: 'tetrahedron', color: '#6f7d4a', hp: 8, init: 5, speed: 4, flying: false, intellect: 'C', abilities: ['strike'] },
     },
 
-    // (The GROUPS table - `enemyGroups`, a title plus a line-up of bestiary
-    // ids per fight - lived here until 2026-09-16. A fight's line-up is now
-    // pinned tile by tile in its handcrafted map code: config/encounters.js
-    // craftedMaps.combat.maps, `!Enemy` lines. See battleMaps there for
-    // which map each kind of fight may roll.)
-
-    // How far out each RING band reaches (distance from the map centre). A ring
-    // past the last band's maxRing keeps using the last one. WHICH handcrafted
-    // maps each band rolls, per layer, is `battleMaps` in config/encounters.js
-    // (wired in here as CONFIG.battle.maps by config.js - it sits with the map
-    // codes and the rest of encounter design instead of the party/battle-sim
-    // numbers this file holds).
-    enemies: {
-      bands: {
-        inner: { maxRing: 3 },
-        middle: { maxRing: 7 },
-        outer: { maxRing: 11 },
-      },
-      // Types the Stasis "extra enemies" debuff conjures, one rolled per extra.
-      reinforcements: ['husk', 'raider', 'stalker'],
-    },
+    // Types the Stasis "extra enemies" debuff conjures, one rolled per extra
+    // (battle.js makeRegulars). The RING BANDS these creatures (and every
+    // other fight) are placed by now live in config/world.js, next to the
+    // world map's own radius (config.map.bands) - this table only needs to
+    // know WHICH ids to roll, not how far out each band reaches.
+    reinforcements: ['husk', 'raider', 'stalker'],
   },
 
   // The INTELLECT CLASSES, as part of the config object, so the Settings window

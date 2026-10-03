@@ -63,7 +63,7 @@ export const CONFIG = {
     // The escalation is the pressure: the FIRST ambush of a run comes from the
     // first band, the second from the second, the third and every one after from
     // the last. `starvationBands` names them in order (ids from
-    // config.battle.enemies.bands); null follows that table's own order, which is
+    // config.map.bands); null follows that table's own order, which is
     // what you want unless you are deliberately re-pointing the ladder.
     starvationThreshold: 5,
     starvationAmbushChance: 0.5,

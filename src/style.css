@@ -840,25 +840,6 @@ button.small {
   font-size: 12px;
 }
 
-.battle-lines {
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--muted);
-  line-height: 1.45;
-}
-
-.battle-lines .party {
-  color: #b8e39a;
-}
-
-.battle-lines .enemy {
-  color: #ff9a9a;
-}
-
-.battle-lines .round {
-  color: var(--accent);
-  margin-top: 4px;
-}
 
 .effect {
   margin-top: 6px;

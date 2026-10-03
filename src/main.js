@@ -1096,7 +1096,8 @@ function startRun(seed, opts = {}) {
   game.combatIntro = (hex, resume) => (cinematic.isActive() ? false : startCombatDive(hex, resume));
   // Fights are played out on the local map. Camera already down in the arena:
   // start straight away. Not there yet (the Nomads event): dive first. Anything
-  // in between should not happen; refusing makes the fight auto-resolve safely.
+  // in between should not happen; refusing leaves the encounter on its tile
+  // (game.js startCombat puts everything back) to be entered again.
   game.hackDelegate = (ctx) => hackDelegate(ctx);   // the Hack terminal, below
   game.combatDelegate = (ctx) => {
     if (battle) return false;
@@ -1282,13 +1283,6 @@ function showDialog(d) {
     });
   } else if (d.kind === 'battle') {
     const r = d.result;
-    const lines = [];
-    let lastRound = 0;
-    for (const l of r.lines) {
-      if (l.round !== lastRound) { lines.push(`<div class="round">${t('battle.round', { n: l.round })}</div>`); lastRound = l.round; }
-      const text = t(l.down ? 'battle.hitDown' : 'battle.hit', { attacker: tn(l.attacker), defender: tn(l.defender), dmg: l.dmg });
-      lines.push(`<div class="${l.side}">${escapeHtml(text)}</div>`);
-    }
     const enemies = r.enemies.map((e) => t('log.battle.enemy', { name: tn(e.name), hp: e.maxHp })).join(', ');
     const intro = d.intro ? `<p>${escapeHtml(d.intro.text)}</p>` : '';
     // Stasis debuffs that shaped this fight, listed under the summary.
@@ -1310,7 +1304,7 @@ function showDialog(d) {
     ui.openDialog({
       title: d.intro ? d.intro.title : r.stasis ? (r.title ? t('battle.stasis.title', { title: tn(r.title) }) : t('battle.stasis.untitled')) : t('battle.title'),
       html: `${intro}<div class="battle-sum ${r.won ? 'won' : 'lost'}">${t(r.won ? 'battle.victory' : 'battle.defeat', { n: r.rounds })} ${t('battle.partyFirst')}</div>
-             ${debuffs}${flavour}${salvage}${enemies ? `<p class="muted">${escapeHtml(t('battle.enemies', { list: enemies }))}</p>` : ''}<div class="battle-lines">${lines.join('')}</div>`,
+             ${debuffs}${flavour}${salvage}${enemies ? `<p class="muted">${escapeHtml(t('battle.enemies', { list: enemies }))}</p>` : ''}`,
       actions: [{
         label: picks ? t('dialog.continueReward', { n: picks }) : t('dialog.continue'),
         onClick: () => {

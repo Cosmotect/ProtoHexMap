@@ -6,12 +6,28 @@
 export const WORLD = {
   // ----- Map shape ---------------------------------------------------
   map: {
-    radius: 11,             // rings of hexes around the centre tile (7 = 169 tiles, 9 = 271, 11 = 397)
+    radius: 21,             // rings of hexes around the centre tile (7 = 169 tiles, 9 = 271, 11 = 397)
     orientation: 'flat',    // 'flat' (flat edge up, default) or 'pointy' - the LOCAL map always uses the opposite
     hexSize: 1.0,           // distance from hex centre to a corner, in world units
     gap: 0.08,              // empty space between neighbouring tiles (world units)
     tileHeight: 0.35,       // thickness of a revealed tile
     // (Stasis Seed / Colony placement lives in config/encounters.js under "stasis".)
+    // ----- Ring bands -----------------------------------------------------
+    // How far out each RING band reaches (distance from the map centre). A
+    // ring past the last band's maxRing keeps using the last one. Everything
+    // that cares how far a fight is from the centre reads this table (battle.js
+    // ringBandId/ringBand/makeArena, map.js encounter placement, game.js
+    // dangerRank's starvation fallback) - it lives next to `radius` above
+    // because it is a property of the WORLD's shape, not of any one battle.
+    // WHICH handcrafted maps each band rolls, per layer, is `battleMaps` in
+    // config/encounters.js (wired in as CONFIG.battle.maps by config.js - it
+    // sits with the map codes and the rest of encounter design instead of
+    // here).
+    bands: {
+      inner: { maxRing: 6 },
+      middle: { maxRing: 13 },
+      outer: { maxRing: 21 },
+    },
   },
 
   // ----- The worldflake's layers ---------------------------------------
