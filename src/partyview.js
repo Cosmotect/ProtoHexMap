@@ -28,11 +28,13 @@
 //  so the portrait is the unit, not a picture of it.
 // =====================================================================
 import * as THREE from 'three';
-import { hasDamage, parseDamage } from './damage.js';
 import { t, tn } from './i18n.js';
-import { ABILITIES, ABILITY_UPGRADES, STATUSES, checkTrigger } from './config/abilities.js';
-import { combatStatsFor } from './config/entities.js';
-import { unitAbilityIds, upgradeRef, upgradeInfo, abilityDesc, resolveAbility, triggersFor, unlockUpgrade } from './upgrades.js';
+import { ABILITIES } from './config/abilities.js';
+import { ABILITY_UPGRADES } from './config/upgrades.js';
+import { STATUSES } from './config/statuses.js';
+import { COMBAT_TAGS } from './config/entities.js';
+import { checkTrigger } from './local/battle/rules.js';
+import { unitAbilityIds, upgradeInfo, abilityDesc, resolveAbility, resolveUnitStats, ownedNodes, triggersFor, unlockUpgrade, abilitySummary } from './upgrades.js';
 import { abilityTreeHtml } from './upgradetree.js';
 import { statusesFor, statusInfo, badgeNumber } from './status.js';
 import { makePartyBody } from './local/localview.js';
@@ -69,18 +71,16 @@ export function createPartyView({ config, getGame, getBattle, onClose, onUnitCha
   function passiveRows(unit) {
     const out = [];
     const add = (e, source) => {
-      const p = checkTrigger(e, true);
+      const p = checkTrigger(e, 'partyview', { statuses: STATUSES, tags: COMBAT_TAGS }, true);
       if (!p) return;
-      const dup = out.find((q) => q.statusEffect === p.statusEffect && q.when === p.when);
-      if (dup) { if (!dup.sources.includes(source)) dup.sources.push(source); return; }
       out.push({ ...p, sources: [source] });
     };
-    const unlocked = new Set(unit?.upgrades ?? []);
     for (const abilityId of unitAbilityIds(unit?.name)) {
       const tree = ABILITY_UPGRADES[abilityId];
       if (!tree) continue;
+      const have = ownedNodes(unit?.upgrades ?? [], abilityId);
       for (const [nodeId, node] of Object.entries(tree)) {
-        if (!unlocked.has(upgradeRef(abilityId, nodeId))) continue;
+        if (!have.has(nodeId)) continue;
         for (const e of node.triggers ?? []) add(e, upgradeInfo(abilityId, nodeId).name);
       }
     }
@@ -88,17 +88,20 @@ export function createPartyView({ config, getGame, getBattle, onClose, onUnitCha
     for (const e of unit?.auraTriggers ?? []) add(e, t('partyview.source.aura'));
     // Anything triggersFor knows that the walk above did not (a source added
     // later) still shows, unattributed, rather than silently missing.
-    for (const p of triggersFor(unit)) if (!out.some((q) => q.statusEffect === p.statusEffect && q.when === p.when)) out.push({ ...p, sources: [] });
+    const known = out.length;
+    for (const p of triggersFor(unit).slice(known)) out.push({ ...p, sources: [] });
     return out;
   }
 
   function abilityNumbers(ab) {
+    const sm = abilitySummary(ab);
     const parts = [];
-    if (hasDamage(ab.damage)) { const d = parseDamage(ab.damage); parts.push(d.times > 1 ? t('battle.ui.dmgTimes', { n: d.base, t: d.times }) : t('battle.ui.dmg', { n: d.base })); }
-    if (ab.heal > 0) parts.push(t('battle.ui.heal', { n: ab.heal }));
-    if (ab.statusEffect && STATUSES[ab.statusEffect]) parts.push(statusInfo(ab.statusEffect).name);
+    if (sm.damage && sm.damage.amount > 0) parts.push(sm.damage.times > 1 ? t('battle.ui.dmgTimes', { n: sm.damage.amount, t: sm.damage.times }) : t('battle.ui.dmg', { n: sm.damage.amount }));
+    if (sm.heal > 0) parts.push(t('battle.ui.heal', { n: sm.heal }));
+    for (const id of sm.statuses) if (STATUSES[id]) parts.push(statusInfo(id).name);
+    if ((ab.aims || 1) > 1) parts.push(`${ab.aims} aims`);
     for (const res of ['hp', 'supplies', 'move']) {
-      const n = ab.cost?.[res] || 0;
+      const n = sm.cost[res] || 0;
       if (n) parts.push(`${COST_ICON[res]} ${t(n < 0 ? `battle.cost.gain.${res}` : `battle.cost.${res}`, { n: Math.abs(n) })}`);
     }
     return parts.join(' · ');
@@ -131,11 +134,12 @@ export function createPartyView({ config, getGame, getBattle, onClose, onUnitCha
 
   function passivesSection(unit) {
     const rows = passiveRows(unit).map((p) => {
-      const info = statusInfo(p.statusEffect);
+      const info = p.kind === 'status' ? statusInfo(p.status) : { icon: p.kind === 'gain' ? '🔶' : p.kind === 'extraAttack' ? '🔁' : '✨', color: '#ffd75f', name: p.kind, desc: '' };
       const when = t(`partyview.moment.${p.when}`);
+      const to = p.targets && p.targets !== 'self' ? ` → ${p.targets}` : '';
       const from = p.sources.length ? t('partyview.source', { list: p.sources.join(', ') }) : '';
       return `<li><span class="pv-st-icon" style="color:${escapeHtml(info.color)}">${info.icon}</span>
-        <div><b>${escapeHtml(info.name)}</b> <span class="pv-when">${escapeHtml(when)}</span>
+        <div><b>${escapeHtml(info.name)}</b> <span class="pv-when">${escapeHtml(when + to)}</span>
         <div class="pv-up-desc">${escapeHtml(info.desc)}</div>
         ${from ? `<div class="pv-from">${escapeHtml(from)}</div>` : ''}</div></li>`;
     }).join('');
@@ -152,7 +156,7 @@ export function createPartyView({ config, getGame, getBattle, onClose, onUnitCha
     const rows = statusesFor(live).map((hs) => {
       const info = statusInfo(hs);
       const num = badgeNumber(hs);
-      const tail = hs.turns > 0 ? t('status.turns', { n: hs.turns }) : hs.charges > 1 ? t('partyview.charges', { n: hs.charges }) : '';
+      const tail = hs.turns > 0 ? t('status.turns', { n: hs.turns }) : '';
       return `<li><span class="pv-st-icon" style="color:${escapeHtml(info.color)}">${info.icon}${num ? `<i>${num}</i>` : ''}</span>
         <div><b>${escapeHtml(info.name)}</b> ${tail ? `<span class="pv-when">${escapeHtml(tail)}</span>` : ''}
         <div class="pv-up-desc">${escapeHtml(info.desc)}</div></div></li>`;
@@ -169,8 +173,9 @@ export function createPartyView({ config, getGame, getBattle, onClose, onUnitCha
     const alive = live ? live.hp > 0 : unit.alive;
     const pct = Math.max(0, Math.min(100, (hp / maxHp) * 100));
     const segPct = (config.party.hpSegment / maxHp) * 100;
-    const cs = combatStatsFor(unit.name);
-    const stats = [t('party.hp', { hp, max: maxHp }), t('partyview.speed', { n: cs.speed }), cs.flying ? t('partyview.flying') : ''].filter(Boolean).join(' · ');
+    const cs = resolveUnitStats(unit);
+    const stats = [t('party.hp', { hp, max: maxHp }), t('partyview.speed', { n: cs.speed }), cs.flying ? t('partyview.flying') : '',
+      cs.stackMax > 0 ? t('partyview.stacks', { n: cs.stackMax, gen: cs.stackGen }) : ''].filter(Boolean).join(' · ');
     const abs = unitAbilityIds(unit.name);
     while (abs.length < 2) abs.push(null);
     return `<div class="pv-member ${!alive ? 'dead' : pct < 50 ? 'hurt' : ''}" data-i="${index}">
@@ -196,7 +201,7 @@ export function createPartyView({ config, getGame, getBattle, onClose, onUnitCha
   function render(force = false) {
     const ms = members();
     const sig = JSON.stringify(ms.map(({ unit, live }) => [unit.name, unit.hp, unit.maxHp, unit.alive, unit.upgrades, unit.relic?.name,
-      live ? [live.hp, live.status] : null]));
+      live ? [live.hp, live.statuses, live.stacks] : null]));
     if (!force && sig === signature) return;
     signature = sig;
     membersEl.innerHTML = ms.map(memberHtml).join('');

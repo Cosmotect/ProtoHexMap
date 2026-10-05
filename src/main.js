@@ -13,7 +13,7 @@ import { createSettings, deepClone } from './settings.js';
 import { createCombatCinematic } from './local/transition.js';
 import { createBattle } from './local/battle/engine.js';
 import { COMBAT_CONFIG } from './config/localmap.js';
-import { resolvedAbilitiesFor, availableUpgrades, triggersFor } from './upgrades.js';
+import { resolvedAbilitiesFor, availableUpgrades, triggersFor, resolveUnitStats } from './upgrades.js';
 import { recipeFromCode } from './local/mapcode.js';
 import { buildHackRecipe } from './local/localmap.js';
 import { createHackRules } from './local/battle/engine.js';
@@ -295,7 +295,7 @@ function beginInteractiveBattle(ctx, placementOverride = null) {
     // right now - unlocked upgrade nodes, a carried relic, a world-map aura it was
     // standing in. Deriving it per fight rather than storing it on the unit is what
     // makes a trigger go away by itself when its source does (src/upgrades.js).
-    .map((u, i) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.maxHp, partyIndex: i, alive: u.alive, abilityDefs: resolvedAbilitiesFor(u), triggers: triggersFor(u) }))
+    .map((u, i) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.maxHp, partyIndex: i, alive: u.alive, ...resolveUnitStats(u), abilityDefs: resolvedAbilitiesFor(u), triggers: triggersFor(u) }))
     .filter((u) => u.alive && u.hp > 0);
   // shape and colour ride along from the bestiary entry (src/battle.js) so the
   // arena can build the right body for each enemy.
@@ -472,7 +472,7 @@ function beginHack(ctx, recipe, partyKeys = null) {
   const H = CONFIG.hack;
   const view = cinematic.localView;
   const partyDefs = game.state.party
-    .map((u, i) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.maxHp, partyIndex: i, alive: u.alive, abilityDefs: resolvedAbilitiesFor(u), triggers: triggersFor(u) }))
+    .map((u, i) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.maxHp, partyIndex: i, alive: u.alive, ...resolveUnitStats(u), abilityDefs: resolvedAbilitiesFor(u), triggers: triggersFor(u) }))
     .filter((u) => u.alive && u.hp > 0);
   const placement = partyKeys
     ? view.placeUnitsAt(partyDefs, [], partyKeys, [])

@@ -2244,6 +2244,11 @@ button.small {
   stroke: rgba(143, 212, 122, 0.75);
   stroke-width: 2;
 }
+/* a requiresAny edge (one of several parents is enough) is dashed */
+.ut-edge.any { stroke-dasharray: 4 3; }
+/* an auto milestone: earned by the count of picks, never picked itself */
+.ut-card.auto { border-style: dashed; }
+
 
 /* A card is a <button>: an `open` node is pressed to take the upgrade, every
    other node is disabled. The generic button look is undone here - this one

@@ -6,17 +6,14 @@
 //  with src/local/localmap.js - that one is the local-map GENERATOR code,
 //  this one is only data.)
 //
-//  COMBAT_CONFIG moved here from config/abilities.js on 2026-09-12, along
-//  with the two lines that glue ABILITY_UPGRADES and STATUSES onto it: the
-//  arena's rules and those two tables are all read by the same combat
-//  engine that plays out on this map, so they now sit next to the rest of
-//  the local map's config instead of in the file that defines the
-//  ABILITIES / ABILITY_UPGRADES / STATUSES tables themselves. abilities.js
-//  still owns those three tables and is where a new ability, upgrade or
-//  status gets written - this file only wires two of them onto
-//  COMBAT_CONFIG, exactly as abilities.js used to.
+//  The three tables live in their own files (config/abilities.js,
+//  config/upgrades.js, config/statuses.js); this file only wires them onto
+//  COMBAT_CONFIG so the Settings window and the engine read them off the
+//  same object.
 // =====================================================================
-import { ABILITIES, ABILITY_UPGRADES, STATUSES } from './abilities.js';
+import { ABILITIES } from './abilities.js';
+import { ABILITY_UPGRADES } from './upgrades.js';
+import { STATUSES } from './statuses.js';
 
 export const COMBAT_CONFIG = {
   // ----- Combat rules (hex-box "settings" block) ----------------------
@@ -40,6 +37,9 @@ export const COMBAT_CONFIG = {
     // Grew out of the Hack terminal (config.hack, see DESIGN.md).
     lockedAim: true,
     stack: { bonusPerOverlap: 1 },
+    // The furthest a single shove can carry: pushes that scale (per stacks
+    // consumed, per elevation step) are clamped here.
+    maxPush: 4,
     // The volley is SEQUENCED (since 2026-09-22): the locks fire one after
     // another, this many ms apart, in the order of the party panel's cards
     // (drag them to reorder) - so an earlier shove can set up a later blow.

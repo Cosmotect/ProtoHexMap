@@ -16,7 +16,8 @@
     "test:engine": "node tools/engine-test.mjs",
     "test:worldmap": "node tools/worldmap-test.mjs",
     "test:encounters": "node tools/encounter-distribution.mjs",
-    "test:dbno": "node tools/dbno-test.mjs"
+    "test:dbno": "node tools/dbno-test.mjs",
+    "test:upgrades": "node tools/upgrades-test.mjs"
   },
   "dependencies": {
     "three": "^0.185.1"

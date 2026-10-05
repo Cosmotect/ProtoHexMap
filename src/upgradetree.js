@@ -21,7 +21,8 @@
 //  a real unit (the roster's detail pane, the party view) listen for that and
 //  call unlockUpgrade; a window with nobody to grant it to just does not listen.
 // =====================================================================
-import { upgradeTree, treeLayout, upgradeRef, upgradeInfo } from './upgrades.js';
+import { upgradeTree, treeLayout, upgradeRef, upgradeInfo, ownedNodes } from './upgrades.js';
+import { t } from './i18n.js';
 
 const SIZES = {
   full: { cardW: 152, cardH: 62, colGap: 34, rowGap: 10, padY: 4 },
@@ -51,16 +52,23 @@ export function abilityTreeHtml(abilityId, unlocked, size = 'full') {
       pos[n] = { x: d * (T.cardW + T.colGap), y: top + i * (T.cardH + T.rowGap) };
     });
   });
-  const isOpen = (n) => (tree[n].requires ?? []).every((p) => unlocked.has(upgradeRef(abilityId, p)));
+  // Owned = picked, or an auto milestone the picks have earned. Open = every
+  // `requires` owned and (when it has some) one of `requiresAny`; an auto
+  // node is never open to a click.
+  const owned = ownedNodes([...unlocked], abilityId);
+  const isOpen = (n) => !tree[n].auto
+    && (tree[n].requires ?? []).every((p) => owned.has(p))
+    && (!(tree[n].requiresAny ?? []).length || tree[n].requiresAny.some((p) => owned.has(p)));
   // Edges leave a parent's right edge and arrive at a child's left edge; the
   // cubic keeps them clear of the cards they pass.
-  const lines = edges.map(([a, b]) => {
+  const lines = edges.map(([a, b, kind]) => {
     const p = pos[a], c = pos[b];
     const x1 = p.x + T.cardW, y1 = p.y + T.cardH / 2;
     const x2 = c.x, y2 = c.y + T.cardH / 2;
     const mid = x1 + (x2 - x1) / 2;
-    const on = unlocked.has(upgradeRef(abilityId, a)) ? ' on' : '';
-    return `<path class="ut-edge${on}" d="M${x1} ${y1} C${mid} ${y1} ${mid} ${y2} ${x2} ${y2}"></path>`;
+    const on = owned.has(a) ? ' on' : '';
+    const any = kind === 'any' ? ' any' : '';
+    return `<path class="ut-edge${on}${any}" d="M${x1} ${y1} C${mid} ${y1} ${mid} ${y2} ${x2} ${y2}"></path>`;
   }).join('');
   // Every card is a BUTTON, carrying its own node reference. Only an `open`
   // one is enabled, so the browser itself refuses a click on an owned or a
@@ -70,11 +78,12 @@ export function abilityTreeHtml(abilityId, unlocked, size = 'full') {
   const cards = Object.keys(tree).map((n) => {
     const p = pos[n];
     const ref = upgradeRef(abilityId, n);
-    const cls = unlocked.has(ref) ? 'owned' : isOpen(n) ? 'open' : 'locked';
+    const cls = owned.has(n) ? 'owned' : isOpen(n) ? 'open' : 'locked';
     const { name, desc, lore, icon } = upgradeInfo(abilityId, n);
+    const note = tree[n].auto ? ` (${t('partyview.auto', { n: tree[n].auto.count })})` : '';
     const style = `left:${p.x}px;top:${p.y}px;width:${T.cardW}px;height:${T.cardH}px`;
-    const attrs = `type="button" class="ut-card ${size === 'mini' ? 'mini ' : ''}${cls}" style="${style}"`
-      + ` data-ref="${escapeAttr(ref)}" title="${escapeAttr(`${name} - ${lore || desc}`)}"${cls === 'open' ? '' : ' disabled'}`;
+    const attrs = `type="button" class="ut-card ${size === 'mini' ? 'mini ' : ''}${cls}${tree[n].auto ? ' auto' : ''}" style="${style}"`
+      + ` data-ref="${escapeAttr(ref)}" title="${escapeAttr(`${name}${note} - ${lore || desc}`)}"${cls === 'open' ? '' : ' disabled'}`;
     if (size === 'mini') {
       return `<button ${attrs}>
         <span class="ut-text"><b>${escapeHtml(name)}</b><i>${escapeHtml(desc)}</i></span>

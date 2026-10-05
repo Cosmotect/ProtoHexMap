@@ -16,10 +16,15 @@
 //
 //  Original behaviours kept: free player activation order, enemy phase by
 //  initiative, one move + one cast per activation (the cast ends it), terrain
-//  tag ticks, statuses (shield / crit / stun / speed change), pushes with
-//  collisions, falls, crush chains and void edges, height changes, tag
-//  placement with on-destroy / on-expire / periodic casts, high/low ground
-//  damage modifiers, and the outcome-scoring enemy AI.
+//  tag ticks, pushes with collisions, falls, crush chains and void edges,
+//  height changes, tag placement with on-destroy / on-expire / periodic casts,
+//  high/low ground damage modifiers, and the outcome-scoring enemy AI.
+//  SINCE 2026-10-05 an ability is a LIST OF EFFECTS in the vocabulary of
+//  local/battle/rules.js (quantities over facts, conditions, triggers), run by
+//  one executor per kind (runEffect) in a fixed phase order (resolveCast);
+//  statuses are "<Name> X for Y turns" instances (src/config/statuses.js);
+//  units have STACKS; Taunt / Fear / Charm / Confused steer the AI; an ability
+//  may take several AIMS; a killing blow may earn an extra attack.
 //  Added for Everlands: every ability carries its own flat `damage` (no more
 //  ENEMY-only power bonus - removed 2026-09-10, a bestiary row's abilities are
 //  its whole strength now); PARTY units instead fight with their UPGRADED
@@ -54,9 +59,9 @@
 //  Every unit is a Unit, the Entity with agency.
 // =====================================================================
 import { DIRS, K, PK, addK, hexDist, hexLine, rotOff, aimRot, abRotFor, rotDir, boardTiles } from './bhex.js';
-import { abilityById, statusOverridesFor } from '../../config/abilities.js';
+import { abilityById } from '../../config/abilities.js';
 import { tagDefById } from '../../config/entities.js';
-import { parseDamage, hasDamage, damageTotal } from '../../damage.js';
+import { qty, cond, zoneMaxRange } from './rules.js';
 import { Entity, Unit, HackNode, HackMine } from './entity.js';
 
 export function createBattle({ config, radius, heights, party, enemies, partyKeys, enemyKeys, forced,
@@ -171,7 +176,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   function tagInst(d, id, k) {
     return { tid: nid(), defId: id, k, name: d.name, icon: d.icon, color: d.color, desc: d.desc,
       dmg: d.dmg, heal: d.heal, life: d.life, hp: d.hp, maxHp: d.hp,
-      pushable: d.pushable, collectible: d.collectible, passPickup: d.passPickup,
+      pushable: d.pushable, collectible: d.collectible, passPickup: d.passPickup, roots: !!d.roots,
       onDestroy: d.onDestroy, onExpire: d.onExpire, onPickup: d.onPickup, onPeriodic: d.onPeriodic,
       everyX: d.everyX || 0, everyOff: d.everyOff || 0,
       everyCd: (d.everyOff > 0 ? d.everyOff : d.everyX) || 0 };
@@ -232,18 +237,24 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   const moveLeft = (u) => Math.max(0, moveBudget(u) - walked(u));
 
   // ----- what an ability costs to cast ------------------------------------
-  // `ab.cost` is { hp, supplies, move }, any of them optional and any of them
-  // possibly NEGATIVE - a negative cost GRANTS that resource instead of taking
-  // it, and is never a reason to block a cast.
-  const costOf = (ab) => ({ hp: ab?.cost?.hp || 0, supplies: ab?.cost?.supplies || 0, move: ab?.cost?.move || 0 });
+  // `ab.cost` is { hp, supplies, move }, each a QUANTITY (rules.js) read
+  // against the caster's own facts - "+1 hp per use this battle" is a cost
+  // term, not a rule. Any of them may be NEGATIVE: a negative cost GRANTS the
+  // resource instead of taking it, and is never a reason to block a cast.
+  const costOf = (u, ab) => {
+    const ctx = castCtx(liveSt(), u, ab, null);
+    return { hp: qty(ab?.cost?.hp, ctx) || 0, supplies: qty(ab?.cost?.supplies, ctx) || 0, move: qty(ab?.cost?.move, ctx) || 0 };
+  };
 
   // Can `u` pay for `ab` right now? Returns '' when it can, or the id of the
   // resource that is short - which is what the HUD shows on the greyed button.
   function shortOf(u, ab) {
-    const c = costOf(ab);
+    const c = costOf(u, ab);
     // A DISARMED unit can pay for nothing: every ability greys out, and the enemy
-    // AI (which asks the same question) walks instead of casting.
+    // AI (which asks the same question) walks instead of casting. A status that
+    // FORBIDS a kind of ability (Grounded Aim: 'ranged') greys those out.
     if (agencyLost(u, 'disarmed')) return 'disarmed';
+    if ((ab?.tags ?? []).some((tg) => statusListed(u, 'forbids', tg))) return 'forbidden';
     // hp can never be spent down to death: strictly MORE than the cost is
     // needed, so the ability greys out at exactly the cost.
     if (c.hp > 0 && u.hp <= c.hp) return 'hp';
@@ -261,11 +272,11 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // resolveCast, which the enemy AI replays on a copy of the board to score its
   // options and would otherwise spend the resource dozens of times per turn.
   function payCost(u, ab) {
-    const c = costOf(ab);
+    const c = costOf(u, ab);
     if (c.hp) {
       // A negative hp cost heals, and healing stops at maxHp - "if there is room".
       const before = u.hp;
-      u.hp = Math.max(0, Math.min(u.maxHp, u.hp - c.hp));
+      u.hp = Math.max(0, Math.min(maxHpOf(u), u.hp - c.hp));
       const delta = u.hp - before;
       if (delta) floater(u.pos, delta > 0 ? `+${delta}` : String(delta), delta > 0 ? '#8fd47a' : '#ff6b6b');
     }
@@ -278,186 +289,239 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     // what the packs have room for.
     if (c.supplies && !u.isEnemy && supplies) supplies.add(-c.supplies);
   }
+  // A cast is COMMITTED: counted for the `castsThisBattle` fact (read by the
+  // next cast's numbers, never by this one's). Called at the three places a
+  // cast really happens, after it resolved - never from resolveCast, which the
+  // AI replays on copies.
+  function commitCast(u, ab) {
+    if (!u || !ab || !ab.id) return;
+    u.casts = u.casts || {};
+    u.casts[ab.id] = (u.casts[ab.id] || 0) + 1;
+  }
 
   // ----- statuses --------------------------------------------------------
-  // Everything about a status lives in the table (config.statuses, written out in
-  // src/config/abilities.js); the code below only knows the SHAPE of a row, never
-  // a particular status. A unit carries a bag:
-  //     u.status = { poison: { turns: 3, charges: 0, over: { tickHP: -4 } } }
-  // `over` is what the ability changed about this status through statusEffectOverride - only the
-  // knobs it actually named. Every other field is read from the table.
+  // Everything about a status lives in the table (config.statuses, written in
+  // src/config/statuses.js); the code below only knows the SHAPE of a row,
+  // never a particular status. A unit carries a LIST OF INSTANCES:
+  //     u.statuses = [{ id: 'regen', amount: 2, turns: 0, source: 's3', seen: true }]
+  // `amount` is the row's X, `turns` its Y, `source` who put it on. A verb's
+  // value on a unit is the sum over its instances of amount * the row's
+  // coefficient, so two Hastes stack and Haste 2 counts double.
   const statusDef = (id) => (config.statuses ?? {})[id] ?? null;
-  const carried = (u) => (u && u.status) || null;
-  // Every row this unit is under. A trigger's status is in here too: it was put on by
-  // fireMoment through the same applyStatus a cast uses, so nothing below has to
-  // know it came from an upgrade node or a bestiary row rather than a cast.
-  const carriedIds = (u) => Object.keys(carried(u) || {});
-  // One field of one row this unit is under, with the ability's own overrides
-  // (statusEffectOverride) folded in.
-  function statusField(u, id, field) {
-    const def = statusDef(id);
-    const slot = carried(u) && u.status[id];
-    if (!def || !slot) return undefined;
-    const over = slot.over;
-    return over && over[field] !== undefined ? over[field] : def[field];
-  }
-  // Additive fields (speed), multiplicative ones (damageDealt / damageTaken) and
-  // plain switches (blocks), summed / multiplied over everything held.
-  function statusSum(u, field) {
+  const carried = (u) => (u && u.statuses) || [];
+  function statusSum(u, verb) {
     let n = 0;
-    for (const id of carriedIds(u)) { const v = statusField(u, id, field); if (typeof v === 'number') n += v; }
+    for (const inst of carried(u)) { const d = statusDef(inst.id); if (d && typeof d[verb] === 'number' && d[verb]) n += d[verb] * (inst.amount || 0); }
     return n;
   }
-  function statusMul(u, field) {
+  // Multiplicative switches (impactTaken / impactDealt): multiplied over everything held.
+  function statusMul(u, verb) {
     let n = 1;
-    for (const id of carriedIds(u)) { const v = statusField(u, id, field); if (typeof v === 'number') n *= v; }
+    for (const inst of carried(u)) { const d = statusDef(inst.id); if (d && typeof d[verb] === 'number' && d[verb] !== 1) n *= d[verb]; }
     return n;
   }
-  // The id of the first held row with this switch on (null = none).
-  function statusWith(u, field) {
-    for (const id of carriedIds(u)) { if (statusField(u, id, field)) return id; }
+  const statusHas = (u, id) => carried(u).some((i) => i.id === id);
+  // The first instance whose row LISTS `value` under `field` (agency, forbids,
+  // immune, ignoresImpact), or null.
+  function statusListed(u, field, value) {
+    for (const inst of carried(u)) { const d = statusDef(inst.id); if (d && Array.isArray(d[field]) && d[field].includes(value)) return inst; }
     return null;
   }
   // AGENCY: the id of the first held row that takes this right away from the
-  // carrier ('stunned' = the whole activation, 'disarmed' = abilities only), or
-  // null when it may still do that. A list on the row, like ignoresImpact.
-  function agencyLost(u, kind) {
-    for (const id of carriedIds(u)) {
-      const list = statusField(u, id, 'agency');
-      if (Array.isArray(list) && list.includes(kind)) return id;
+  // carrier ('stunned' = the whole activation, 'disarmed' = abilities only,
+  // 'rooted' = walking, 'confused' = the engine plays it), or null.
+  const agencyLost = (u, kind) => { const inst = statusListed(u, 'agency', kind); return inst ? inst.id : null; };
+  // An AI DIRECTIVE the carrier is under: the unit its row points at
+  // ({ mustTarget / avoidAdjacentTo / friend: 'source' }), or null.
+  function directive(st, u, key) {
+    for (const inst of carried(u)) {
+      const d = statusDef(inst.id);
+      if (!d || !d.ai || !d.ai[key]) continue;
+      const src = st.units.find((x) => x.uid === inst.source && x.hp > 0);
+      if (src) return src;
     }
     return null;
   }
+  // The unit's numbers with its statuses folded in.
+  const maxHpOf = (u) => Math.max(1, (u.maxHp || 0) + statusSum(u, 'maxHp'));
+  const flies = (u) => { const f = statusSum(u, 'flight'); return f > 0 || (!!u.flying && f >= 0); };
+  const stackMaxOf = (u) => Math.max(0, (u.stackMax || 0) + statusSum(u, 'maxStacks'));
+  const stackGenOf = (u) => Math.max(0, (u.stackGen || 0) + statusSum(u, 'stackGen'));
+  function addStacks(st, u, n) {
+    if (!u || !u.isUnit || !(n > 0)) return 0;
+    const before = u.stacks || 0;
+    u.stacks = Math.min(stackMaxOf(u), before + n);
+    const got = u.stacks - before;
+    if (got > 0 && !st.sim) floater(u.pos, `🔶 +${got}`, '#ffd75f');
+    return got;
+  }
   // IMPACT damage - a crash into a wall or a body, a fall off a ledge, being
-  // crushed between two things. It goes through here rather than straight to
-  // sHit so that one row (`ignoresImpact`, see the status table) can wave a kind
-  // of it away for whoever holds it.
-  function sImpact(st, ent, amt, label) {
+  // crushed between two things. One row may wave a kind of it away
+  // (ignoresImpact), another make it bite harder (impactTaken); `dealer`
+  // is whoever was shoved into the victim, whose impactDealt counts too.
+  function sImpact(st, ent, amt, label, dealer = null) {
     if (ent && ent.isUnit && ent.hp > 0) {
-      for (const id of carriedIds(ent)) {
-        const list = statusField(ent, id, 'ignoresImpact');
-        if (Array.isArray(list) && list.includes(label)) {
-          if (!st.sim) {
-            const v = statusView(ent, id);
-            floater(ent.pos, v.icon, v.color);
-            blog(ent.name + ' shrugs off the ' + label);
-          }
-          return;
-        }
+      const inst = statusListed(ent, 'ignoresImpact', label);
+      if (inst) {
+        if (!st.sim) { const v = statusView(ent, inst.id); floater(ent.pos, v.icon, v.color); blog(ent.name + ' shrugs off the ' + label); }
+        return;
       }
+      amt = Math.round(amt * statusMul(ent, 'impactTaken') * (dealer && dealer.isUnit ? statusMul(dealer, 'impactDealt') : 1));
     }
     sHit(st, ent, amt, label);
   }
-  // Icon and colour to show. Every status is its own row, so there is nothing to
-  // work out here - a slow is not a haste wearing a different face.
+  // Icon and colour to show.
   function statusView(u, id) {
     const def = statusDef(id) || {};
     return { icon: def.icon, color: def.color };
   }
-  // Puts a status on a unit (re-applying refreshes it rather than stacking).
-  // `override` is the ability's statusEffectOverride; what a field MEANS is the
-  // table's business. WHEN the status went on does not matter here: its clock
-  // only starts counting from the first activation it is present at the START
-  // of (see tickStatuses / endActivation), so a status put on at battle setup,
-  // during the enemy's turn or by a hit all mean the same thing - `turns: 1` is
-  // one full activation with it.
-  function applyStatus(st, u, id, override) {
+  // Puts a status on a unit. `opts` = { amount, turns, source, sourceName }: X
+  // and Y when whoever applies it has an opinion (otherwise the row's), and
+  // who did it (the uid the row's triggers and AI directives point back at;
+  // the name is for the badge's text).
+  // How a second application combines is the ROW's business (stacking). A
+  // status the unit is IMMUNE to bounces. WHEN it went on does not matter:
+  // its clock only starts counting from the first activation it is present at
+  // the start of (tickStatuses / endActivation).
+  function applyStatus(st, u, id, opts = {}) {
     const def = statusDef(id);
-    if (!def || !u || !u.isUnit || u.hp <= 0) return;
-    // Only the fields the override names change; everything else keeps the
-    // number the table wrote (config/abilities.js, statusOverridesFor).
-    const over = statusOverridesFor(def, override);
-    // The two counters are knobs like any other, so an ability can say how long
-    // its poison lasts; they just also happen to be what ticks down from here.
-    if (!u.status) u.status = {};
-    u.status[id] = {
-      turns: over.turns !== undefined ? over.turns : (def.turns || 0),
-      charges: over.charges !== undefined ? over.charges : (def.charges || 0),
-      over,
-    };
+    if (!def || !u || !u.isUnit || u.hp <= 0) return null;
+    const imm = statusListed(u, 'immune', id);
+    if (imm) { if (!st.sim) floater(u.pos, statusView(u, imm.id).icon + ' immune', '#9aa7bd'); return null; }
+    const amount = opts.amount !== undefined && opts.amount !== null ? opts.amount : def.amount;
+    const turns = opts.turns !== undefined && opts.turns !== null ? opts.turns : def.turns;
+    if (!(amount > 0)) return null;   // "Weak 0" is nothing to apply
+    if (!u.statuses) u.statuses = [];
+    let inst = null;
+    if (def.stacking !== 'separate') {
+      // 'add' merges only with an instance of the same permanence: a Shielded
+      // with no clock and one with a clock stay two things.
+      inst = u.statuses.find((i) => i.id === id && (def.stacking === 'refresh' || (i.turns > 0) === (turns > 0))) || null;
+    }
+    const hpBefore = u.hp;
+    if (!inst) {
+      inst = { id, amount, turns, source: opts.source ?? null, sourceName: opts.sourceName ?? null, seen: false };
+      u.statuses.push(inst);
+    } else if (def.stacking === 'add') {
+      inst.amount += amount;
+      if (inst.turns > 0 && turns > 0) inst.turns += turns;
+      if (opts.source) { inst.source = opts.source; inst.sourceName = opts.sourceName ?? null; }
+    } else {   // refresh
+      inst.amount = amount; inst.turns = turns; inst.seen = false;
+      if (opts.source) { inst.source = opts.source; inst.sourceName = opts.sourceName ?? null; }
+    }
+    // A row that raises max hp raises hp with it (Fortified).
+    if (def.maxHp) u.hp = Math.min(maxHpOf(u), hpBefore + def.maxHp * amount);
     if (st.sim) (st.rec.applied[u.uid] ??= {})[id] = 1;
-    else { const v = statusView(u, id); floater(u.pos, v.icon, v.color); }
+    else { const v = statusView(u, id); floater(u.pos, v.icon + (amount > 1 ? ' ' + amount : ''), v.color); }
+    // A STUN lands on a player unit that still has its turn this round: it
+    // loses THAT turn on the spot rather than the next one.
+    if (!st.sim && def.agency.includes('stunned') && sb.phase === 'player' && sb.activeUid && !u.isEnemy && !u.done && u.uid !== sb.activeUid) {
+      u.done = true;
+      dropStatus(st, u, inst, false);
+      blog(u.name + ' loses this turn');
+    }
+    return inst;
   }
-  // A MOMENT for one unit: every trigger of its that names `when` puts its status
-  // on now, through the very same applyStatus a cast uses. This is the whole of
-  // what a trigger is to the engine (see TRIGGERS in config/abilities.js). The
-  // moments that exist are the places this is called from:
-  //   'battleStart'  start(), once, before either side moves
-  //   'hit'          sHit(), after hp was actually lost
-  // A new moment is one more call at the place it happens, nothing else. Runs in
-  // the AI's simulations too (applyStatus records it in st.rec), so a creature
-  // weighs the Enraged its hit would trigger.
-  function fireMoment(st, u, when) {
-    if (!u || u.hp <= 0) return;
-    for (const p of u.triggers ?? []) {
-      if (p.when !== when) continue;
-      // Crashes and falls stun through sStun for its "loses this turn" rule; a
-      // trigger that stuns its own carrier goes the same way.
-      if (p.statusEffect === 'stun') { sStun(st, u); continue; }
-      applyStatus(st, u, p.statusEffect, p.statusEffectOverride);
+  function dropStatus(st, u, inst, stripped) {
+    if (!u || !u.statuses) return;
+    const i = u.statuses.indexOf(inst);
+    if (i < 0) return;
+    u.statuses.splice(i, 1);
+    const def = statusDef(inst.id);
+    if (def && def.maxHp) u.hp = Math.min(u.hp, maxHpOf(u));
+    // A status TAKEN OFF a unit matters to the AI as much as one put on.
+    if (st && st.sim && stripped) (st.rec.stripped[u.uid] ??= {})[inst.id] = 1;
+  }
+  // Every instance of a row the unit carries, gone (a cleanse, a revive).
+  function dropAll(st, u, id) { for (const inst of carried(u).filter((i) => i.id === id)) dropStatus(st, u, inst, false); }
+  // Wears a status down: by its decay at the start of the carrier's turn, by
+  // decayOnHit when it takes damage. An instance at 0 is gone. The per-turn
+  // decay follows the clocks' rule - only an instance that was already there
+  // at an earlier activation start wears (a Shielded put on at battle start
+  // is still whole through the enemy's first phase) - except that a row that
+  // TICKS wears right after its tick, so Bleed 2 bites 2, then 1, then ends.
+  function decayStatuses(st, u, field) {
+    for (const inst of [...carried(u)]) {
+      const def = statusDef(inst.id);
+      if (!def || !(def[field] > 0)) continue;
+      if (field === 'decay' && !inst.aged && !def.tickHP) continue;
+      inst.amount -= def[field];
+      if (inst.amount <= 0) { dropStatus(st, u, inst, false); if (!st.sim) floater(u.pos, statusView(u, inst.id).icon + ' ends', '#7c8aa5'); }
     }
   }
-  function dropStatus(st, u, id, stripped) {
-    if (!carried(u) || !u.status[id]) return;
-    delete u.status[id];
-    // A status TAKEN OFF a unit matters to the AI as much as one put on: popping a
-    // shield is the whole reason an enemy swings at a shielded target.
-    if (st && st.sim && stripped) (st.rec.stripped[u.uid] ??= {})[id] = 1;
-  }
-  // Spends one charge of the statuses this event uses up. `only` limits it to the
-  // one status that actually did the work (the shield that blocked THIS hit).
-  function spendStatus(st, u, event, only) {
-    for (const id of Object.keys(carried(u) || {})) {
-      if (only && id !== only) continue;
-      const def = statusDef(id);
-      if (!def || def.spentOn !== event) continue;
-      const slot = u.status[id];
-      slot.charges = (slot.charges || 1) - 1;
-      if (slot.charges <= 0) dropStatus(st, u, id, true);
+  // A MOMENT for one unit: every trigger it is under (its own, from its
+  // upgrade nodes / bestiary row / relic / aura; and its STATUS ROWS', for
+  // whoever carries them) that names `when` runs now - through the very same
+  // effect executors a cast uses. `extra` carries who else was involved:
+  // { killer, victim, source }. The moments that exist are the places this is
+  // called from (see TRIGGER_MOMENTS in rules.js). Runs in the AI's
+  // simulations too, so a creature weighs the Enraged its hit would trigger.
+  function fireMoment(st, u, when, extra = {}) {
+    if (!u || !u.isUnit) return;
+    // A dead unit still has its last 'hit' and its 'death' to report; every
+    // other moment is for the living.
+    if (u.hp <= 0 && when !== 'death' && when !== 'hit') return;
+    const list = [];
+    for (const p of u.triggers ?? []) if (p.when === when) list.push({ eff: p, source: null });
+    for (const inst of [...carried(u)]) {
+      const def = statusDef(inst.id);
+      for (const p of def?.triggers ?? []) if (p.when === when) list.push({ eff: p, source: inst.source, def });
     }
+    if (!list.length) return;
+    const ctx = castCtx(st, u, null, null);
+    ctx.killer = extra.killer ?? null; ctx.victim = extra.victim ?? null;
+    const prevAtk = st.atk, prevSign = st.sign;
+    for (const { eff, source, def } of list) {
+      ctx.source = source ?? extra.source ?? null;
+      if (eff.if && !cond(eff.if, ctx)) continue;
+      // What a trigger does is signed by what fired it, so a heal from a
+      // Lifelink reads "+1 🔗" and not like a blow the player just landed.
+      st.atk = def ? def.name : u.name + "'s " + when;
+      st.sign = def ? def.icon : '✨';
+      runEffect(st, u, eff, ctx, [u.pos], 0);
+    }
+    st.atk = prevAtk; st.sign = prevSign;
   }
-  // The START of a unit's own activation: statuses bite. This happens even on a
-  // turn the unit is about to lose to a stun, and before it can step off a
-  // burning tile. The clocks do NOT run down here - that is endActivation's job
-  // - but every status present now is marked, so that only those count down when
-  // the activation ends. (Until 2026-09-13 the countdown happened here too, so a
-  // one-turn status put on during the enemy's turn was gone before its carrier
-  // ever acted with it, and battle-start statuses needed a special "first tick
-  // free" flag to survive. Both are gone.)
+  // The START of a unit's own activation: stacks come in, 'activationStart'
+  // triggers fire, statuses bite (tickHP), then wear down (decay). This
+  // happens even on a turn the unit is about to lose to a stun. The clocks
+  // do NOT run down here - that is endActivation's job - but every status
+  // present now is marked, so that only those count down when the
+  // activation ends.
   function tickStatuses(u) {
     if (u.hp <= 0) return;
     const st = liveSt();
-    // The ticks run over everything held, so a permanent status that heals every turn
-    // (regen with its clock switched off) works through the very same line a timed one does.
-    for (const id of carriedIds(u)) {
-      // tickHP: signed - below zero it bites (a poison), above it heals.
-      const hp = statusField(u, id, 'tickHP') || 0;
-      if (hp < 0) { st.atk = null; sHit(st, u, -hp, statusDef(id).name); }
-      if (hp > 0 && u.hp > 0) sHeal(st, u, hp);
-    }
+    u.steps = 0;
+    addStacks(st, u, stackGenOf(u));
+    fireMoment(st, u, 'activationStart');
+    if (u.hp <= 0) return;
+    const bite = statusSum(u, 'tickHP');
+    if (bite < 0) { st.atk = null; sHit(st, u, -bite, 'tick'); }
+    if (bite > 0 && u.hp > 0) for (let i = 0; i <= statusSum(u, 'extraTicks'); i++) sHeal(st, u, bite);
     flushDeaths(st);
     if (u.hp <= 0) return;
-    for (const id of carriedIds(u)) u.status[id].seen = true;
+    decayStatuses(st, u, 'decay');
+    // `seen`: present at the start of THIS activation (cleared at its end -
+    // the clocks' rule); `aged`: has been through one, ever (the decay's).
+    for (const inst of carried(u)) { inst.seen = true; inst.aged = true; }
   }
-  // The END of a unit's own activation: what the activation used up is spent
-  // ('activation' statuses - a stun spent itself earlier, the moment it skipped
-  // the activation), and every clock that was running at the activation's start
-  // counts down one. A status put on DURING the activation (a self-cast, a
-  // trigger fired by a hit taken mid-walk) is not charged for it. A row with no
-  // clock (turns 0) is simply skipped, which is all "permanent" means here.
+  // The END of a unit's own activation: 'activationEnd' triggers fire, and
+  // every clock that was running at the activation's start counts down one.
+  // A status put on DURING the activation is not charged for it. A row with
+  // no clock (turns 0) is simply skipped, which is all "permanent" means here.
   function endActivation(u) {
     if (!u || u.hp <= 0) return;
     const st = liveSt();
-    spendStatus(st, u, 'activation');
-    for (const id of carriedIds(u)) {
-      const slot = u.status[id];
-      if (!slot || !slot.seen) continue;
-      slot.seen = false;
-      if (!(slot.turns > 0)) continue;
-      slot.turns -= 1;
-      if (slot.turns <= 0) {
-        const v = statusView(u, id);
-        dropStatus(st, u, id, false);
+    fireMoment(st, u, 'activationEnd');
+    for (const inst of [...carried(u)]) {
+      if (!inst.seen) continue;
+      inst.seen = false;
+      if (!(inst.turns > 0)) continue;
+      inst.turns -= 1;
+      if (inst.turns <= 0) {
+        const v = statusView(u, inst.id);
+        dropStatus(st, u, inst, false);
         floater(u.pos, v.icon + ' ends', '#7c8aa5');
       }
     }
@@ -509,7 +573,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   function liveSt() { return { sim: false, units: sb.units, objects: sb.objects, tags: sb.tags, heights: sb.heights, deathQueue: sb.deathQueue, rec: null }; }
   function simSt(blind) {
     return { sim: true, blind: blind || null,
-      // Every entity copied by its own clone() (a unit's status bag one level
+      // Every entity copied by its own clone() (a unit's status list one level
       // deep - forgetting that is what used to make the AI simulate a board it
       // could not actually see; an object's own state as its class sees fit).
       units: sb.units.map((u) => u.clone()),
@@ -523,47 +587,55 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   const sBodyAt = (st, k) => st.units.find((u) => u.downed && u.pos === k);
   const sObjectAt = (st, k) => st.objects.find((o) => o.alive && o.pos === k);
   const sBarrier = (st, k) => { const t = st.tags[k]; return t && t.hp > 0 ? t : null; };
+  const sHazard = (st, k) => { const t = st.tags[k]; return t && !(t.hp > 0) ? t : null; };
   // What an Entity hook is handed (see entity.js): the board the blow lands
   // on, whether it is a simulation, who struck, and ways to say so.
   const hookCtx = (st, label = '') => ({ st, sim: !!st.sim, caster: st.csr ?? null, cast: st.cast ?? null, label,
     floater: st.sim ? () => {} : floater, log: st.sim ? () => {} : blog });
 
+  // A unit that just died, and who did it: the 'death' moment on the victim
+  // (Marked rewards its killer) and the 'kill' moment on the killer.
+  function noteKill(st, v, killer) {
+    fireMoment(st, v, 'death', { killer: killer && killer.isUnit ? killer : null });
+    if (killer && killer.isUnit && killer.hp > 0 && killer !== v) fireMoment(st, killer, 'kill', { victim: v });
+  }
+
   // `quiet` skips the floater and the log line (a multi-hit ability reports its
-  // hits as one). Returns { dealt, blocked } so the caller can add them up.
-  function sHit(st, v, amt, label, pre, quiet = false) {
+  // hits as one). `opts` = { pierce, lifesteal }: pierce ignores the target's
+  // damage REDUCTION (its negative damageTaken), lifesteal heals the attacker
+  // by that much when the blow lands. Returns { dealt, blocked }.
+  function sHit(st, v, amt, label, pre, quiet = false, opts = null) {
     if (amt <= 0 || !v) return { dealt: 0, blocked: false };
     pre = pre || '';
     const atk = st.atk ? st.atk + ' -> ' : '';
     if (v.isUnit) {
       if (v.hp <= 0) return { dealt: 0, blocked: false };
-      // A status that BLOCKS eats the whole hit. That is not a wasted swing: it
-      // spends the status, and the sim records the strip (st.rec.stripped) so the AI
-      // values it - recording nothing at all is what used to make enemies ignore a
-      // shielded unit for the rest of the fight, and a shield nobody attacks never
-      // expires. One charge covers a whole cast (st.shieldUsed), so a wide ability
-      // cannot chew through it with its second tile.
-      const blockId = statusWith(v, 'blocks');
-      if (blockId || (st.shieldUsed && st.shieldUsed.has(v.uid))) {
-        if (blockId) {
-          if (st.shieldUsed) st.shieldUsed.add(v.uid);
-          const view = statusView(v, blockId);
-          spendStatus(st, v, 'hit', blockId);
-          if (!st.sim && !quiet) { floater(v.pos, pre + view.icon, view.color); blog(atk + v.name + ': blocked'); }
-        } else if (!st.sim && !quiet) { floater(v.pos, pre + 'BLOCKED', '#5fc7e0'); blog(atk + v.name + ': blocked'); }
-        return { dealt: 0, blocked: true };
-      }
-      // Statuses that change how much damage this unit TAKES (vulnerable, fortified).
-      amt = Math.max(1, Math.round(amt * statusMul(v, 'damageTaken')));
-      const dealt = v.takeDamage(amt, hookCtx(st, label));
+      // Statuses that change how much damage this unit TAKES: Shielded and
+      // Impervious soften it, Vulnerable sharpens it. A hit never goes below 0 -
+      // and a hit softened to nothing is still a hit on the shield (it wears).
+      let taken = statusSum(v, 'damageTaken');
+      if (opts && opts.pierce && taken < 0) taken = 0;
+      amt = Math.max(0, Math.round(amt + taken));
+      const dealt = amt > 0 ? v.takeDamage(amt, hookCtx(st, label)) : 0;
+      decayStatuses(st, v, 'decayOnHit');
       if (st.sim) { st.rec.dmg[v.uid] = (st.rec.dmg[v.uid] || 0) + amt; if (v.hp <= 0) st.rec.killed[v.uid] = 1; }
       else {
-        if (!quiet) { floater(v.pos, pre + '-' + amt + (label ? ' ' + label : ''), '#ff5d73'); blog(atk + v.name + ': -' + amt + (label ? ' ' + label : '')); }
+        if (!quiet) {
+          if (amt > 0) { floater(v.pos, pre + '-' + amt + (label ? ' ' + label : ''), '#ff5d73'); blog(atk + v.name + ': -' + amt + (label ? ' ' + label : '')); }
+          else { floater(v.pos, pre + '0 ' + (label || ''), '#9aa7bd'); blog(atk + v.name + ': absorbed'); }
+        }
         if (v.hp <= 0) { v.lock = null; blog(v.name + ' is down'); noteDeath(st, v, v.pos, label || 'damage'); }
       }
-      // The 'hit' moment: hp was actually lost (a blocked hit returned above).
-      // A unit that just died gets nothing - applyStatus refuses the dead.
-      fireMoment(st, v, 'hit');
-      return { dealt, blocked: false };
+      if (dealt > 0 && opts && opts.lifesteal > 0 && st.csr && st.csr.isUnit && st.csr.hp > 0) sHeal(st, st.csr, opts.lifesteal);
+      // The 'hit' moment: hp was actually lost - the killing blow included
+      // (a Lifelink heals on it like on any other; a status the victim would
+      // have put on itself simply finds nobody to carry it). A unit that died
+      // then gets 'death', and its killer 'kill'.
+      if (dealt > 0) {
+        fireMoment(st, v, 'hit', { source: st.csr ?? null });
+        if (v.hp <= 0) noteKill(st, v, st.csr ?? null);
+      }
+      return { dealt, blocked: amt <= 0 };
     } else if (v instanceof Entity) {
       // An OBJECT: its class decides what a blow does to it (entity.js). In a
       // simulation too - it acts on the copy, so the forecast reads it right.
@@ -591,34 +663,28 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     }
   }
   // The HITS of an ability on one target: `times` separate blows of `base`
-  // each (X damage Y times), reported as one floater. A block eats the whole
-  // cast on that unit (st.shieldUsed), so the first blocked blow ends it.
-  function sHits(st, tgt, base, times, label, pre) {
-    if (times <= 1) return sHit(st, tgt, base, label, pre);
-    let dealt = 0, blocked = false, hits = 0;
+  // each. Every blow is its own hit - its own floater, its own 'hit' moment
+  // (a Lifelink heals per quill), its own wear on a shield - and a blow that
+  // lands on a target already down is simply not thrown.
+  function sHits(st, tgt, base, times, label, pre, opts) {
+    let dealt = 0;
+    const tag = times > 1 ? (i) => `${pre || ''}${i + 1}/${times} ` : () => (pre || '');
     for (let i = 0; i < times; i++) {
       if (!tgt || tgt.hp <= 0) break;
-      const r = sHit(st, tgt, base, label, pre, true);
-      if (r.blocked) { blocked = true; break; }
-      dealt += r.dealt; hits++;
+      const r = sHit(st, tgt, base, label, tag(i), false, opts);
+      dealt += r.dealt;
     }
-    if (!st.sim) {
-      const at = tgt.pos ?? tgt.k;
-      const atk = st.atk ? st.atk + ' -> ' : '';
-      if (blocked && hits === 0) { floater(at, (pre || '') + 'BLOCKED', '#5fc7e0'); blog(atk + tgt.name + ': blocked'); }
-      else {
-        floater(at, `${pre || ''}-${dealt} (${base}x${hits}${label ? ' ' + label : ''})`, tgt.isUnit ? '#ff5d73' : '#ffd75f');
-        blog(`${atk}${tgt.name}: -${dealt} (${base} x ${hits}${label ? ' ' + label : ''})`);
-      }
-    }
-    return { dealt, blocked };
+    return { dealt, blocked: false };
   }
   function sHeal(st, v, amt) {
     if (amt <= 0 || !v || !v.isUnit || v.hp <= 0) return;
-    const g = Math.min(amt, v.maxHp - v.hp);
+    const g = Math.min(amt, maxHpOf(v) - v.hp);
+    // A heal with no room to land still says so: "+0 full" tells the player
+    // the heal happened and why nothing changed.
+    if (g <= 0) { if (!st.sim) { floater(v.pos, '+0 full' + (st.sign ? ' ' + st.sign : ''), '#7c8aa5'); blog((st.atk ? st.atk + ' -> ' : '') + v.name + ': already at full hp'); } return; }
     v.hp += g;
     if (st.sim) st.rec.dmg[v.uid] = (st.rec.dmg[v.uid] || 0) - g;
-    else if (g > 0) { floater(v.pos, '+' + g, '#a8e05f'); blog((st.atk ? st.atk + ' -> ' : '') + v.name + ': +' + g); }
+    else { floater(v.pos, '+' + g + (st.sign ? ' ' + st.sign : ''), '#a8e05f'); blog((st.atk ? st.atk + ' -> ' : '') + v.name + ': +' + g); }
   }
   // DOWN BUT NOT OUT: a heal landing on a downed body brings it back, with the
   // heal as its hp. It gets up fresh - the statuses it went down with are gone,
@@ -627,27 +693,18 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   function sRevive(st, v, amt) {
     if (amt <= 0 || !v || !v.isUnit || !v.downed) return;
     v.hp = Math.min(v.maxHp, amt);
-    v.status = {};
+    v.statuses = [];
     v.lock = null;
     v.done = true;
     if (st.sim) { st.rec.dmg[v.uid] = (st.rec.dmg[v.uid] || 0) - v.hp; st.rec.revived[v.uid] = 1; }
     else { floater(v.pos, 'REVIVED +' + v.hp, '#a8e05f'); blog((st.atk ? st.atk + ' -> ' : '') + v.name + ' is back up (+' + v.hp + ')'); }
   }
-  // Falls and crushes always stun; a plain crash stuns too, but only when the
-  // ability behind it carries flags.stunOnCrash (see sCrash below) - and so
-  // does any ability with statusEffect: 'stun'. All of them come through
-  // here, and what "stunned" DOES is the table's business, not this line's.
+  // Falls and crushes always stun; a crash stuns when the push behind it says
+  // so (onCrash). What "stunned" DOES is the table's business.
   function sStun(st, v) {
     if (!v || !v.isUnit || v.hp <= 0) return;
-    applyStatus(st, v, 'stun');
-    if (st.sim) return;
-    blog(v.name + ' is stunned');
-    // A player unit that still has its turn this round loses THAT turn on the spot.
-    if (sb.phase === 'player' && sb.activeUid && !v.isEnemy && !v.done && v.uid !== sb.activeUid) {
-      v.done = true;
-      dropStatus(st, v, 'stun', false);
-      blog(v.name + ' loses this turn');
-    }
+    applyStatus(st, v, 'stun', { turns: 1 });
+    if (!st.sim) blog(v.name + ' is stunned');
   }
   function sVoid(st, ent) {
     // A downed body shoved over the edge goes too: out of the world, gone.
@@ -680,6 +737,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       ent.hp = 0;
       ent.gone = true;   // no body: it fell out of the world (not downed)
       ent.lock = null;
+      noteKill(st, ent, st.csr ?? null);
     } else {
       ent.hp = 0;
       if (st.tags[ent.k] === ent) delete st.tags[ent.k];
@@ -700,44 +758,31 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       if (t.onPickup) { if (!st.sim) blog(u.name + ' picks up ' + t.name); const ab = abById(t.onPickup); if (ab) resolveCast(st, { pos: u.pos, name: t.name }, ab, u.pos, depth + 1); }
     }
   }
-  // A crash the currently-resolving ability marked `flags.stunOnCrash` for
-  // also stuns whoever just took it - on top of the flat impact damage, never
-  // instead of it. Reads `st.cast` (the ability resolveCast is mid-way
-  // through), so it only ever affects the unit THIS push belongs to, never a
-  // bystander it happens to collide with (see the two-sided low-height
-  // collision branch in sPush, which calls this only for the pushed unit).
+  // A crash: flat impact damage, plus whatever the push behind it says happens
+  // to whoever crashes (onCrash: a status - Concussive Charge's stun). Reads
+  // `st.cast.onCrash` (set by the push effect mid-resolution), so it only
+  // ever affects the unit THIS push belongs to, never a bystander.
   function sCrash(st, ent) {
     sImpact(st, ent, 2, 'crash');
-    if (st.cast?.ab?.flags?.stunOnCrash) sStun(st, ent);
+    const oc = st.cast && st.cast.onCrash;
+    if (oc && ent && ent.isUnit && ent.hp > 0) applyStatus(st, ent, oc.status, { amount: oc.amount, turns: oc.turns, source: st.csr?.uid ?? null, sourceName: st.csr?.name ?? null });
   }
   function sPush(st, ent, dir, depth = 0) {
     if (depth > 8) return;
     const isU = !!ent.isUnit;
-    if (isU && ent.hp > 0) {
-      const c = st.csr;
-      const hostile = !c || c.isEnemy === undefined || c.isEnemy !== ent.isEnemy;
-      const pushBlockId = hostile ? statusWith(ent, 'blocks') : null;
-      if (hostile && (pushBlockId || (st.shieldUsed && st.shieldUsed.has(ent.uid)))) {
-        const view = pushBlockId ? statusView(ent, pushBlockId) : { icon: 'BLOCKED', color: '#5fc7e0' };
-        if (pushBlockId) { if (st.shieldUsed) st.shieldUsed.add(ent.uid); spendStatus(st, ent, 'hit', pushBlockId); }
-        if (!st.sim) { floater(ent.pos, view.icon, view.color); blog((st.atk ? st.atk + ' -> ' : '') + ent.name + ': push blocked'); }
-        return;
-      }
-    }
     const k = ent instanceof Entity ? ent.pos : ent.k;
     const nk = addK(k, DIRS[dir]);
     if (isVoid(nk)) { sVoid(st, ent); return; }
     const wall = !tilePass(nk) || (stH(st, nk) - stH(st, k) >= 2);
     if (wall) { sCrash(st, ent); return; }
     // A downed body in the way is an occupant like any other: a collision (it
-    // takes nothing from it - sHit/sStun pass a body by), or a crush from above.
+    // takes nothing from it - sHit passes a body by), or a crush from above.
     const occ = sUnitAt(st, nk) || sObjectAt(st, nk) || sBarrier(st, nk) || sBodyAt(st, nk);
     const drop = stH(st, k) - stH(st, nk);
     if (occ) {
       if (drop >= 2) {
-        sImpact(st, occ, 2, 'crush'); sStun(st, occ);
-        const saved = occ.isUnit && st.shieldUsed && st.shieldUsed.has(occ.uid);
-        if (occ.hp > 0 && !saved) {
+        sImpact(st, occ, 2, 'crush', ent); sStun(st, occ);
+        if (occ.hp > 0) {
           const nk2 = addK(nk, DIRS[dir]);
           const room = isVoid(nk2) || (tilePass(nk2) && (stH(st, nk2) - stH(st, nk) < 2) && !sUnitAt(st, nk2) && !sObjectAt(st, nk2) && !sBarrier(st, nk2) && !sBodyAt(st, nk2));
           // (An object that cannot be pushed is crushed where it stands, like a barrier.)
@@ -747,6 +792,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
             else { floater(nk, 'CRUSHED', '#ff5d73'); blog(occ.name + ' is crushed flat'); }
             noteDeath(st, occ, nk, 'crush');
             occ.hp = 0;
+            noteKill(st, occ, st.csr ?? null);
           } else sHit(st, occ, 999, '');
         }
         // (A unit crushed flat above is now a downed body on nk: still in the way.
@@ -760,7 +806,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
           if (isU) sArrive(st, ent, depth);
         }
       } else {
-        sCrash(st, ent); sImpact(st, occ, 2, 'crash');
+        sCrash(st, ent); sImpact(st, occ, 2, 'crash', ent);
       }
     } else {
       sMoveTo(st, ent, nk);
@@ -777,100 +823,405 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     }
   }
 
-  // The cast pipeline: damage/heal/status -> pushes -> heights -> tags -> spawns -> dash.
-  function resolveCast(st, caster, ab, targetK, depth = 0) {
+  // ----- the cast context: the FACTS a quantity or a condition may read -----
+  // Built once per cast (or per moment) for its caster; `withTarget` gives a
+  // view of the same context for the unit an effect is landing on. The names
+  // are listed in rules.js; the engine is the only place they are worked out.
+  function castCtx(st, caster, ab, anchors) {
+    const aim = anchors && anchors.length ? anchors[0] : null;
+    const ctx = { st, caster, ab, anchors, aim, consumed: 0, amounts: {}, target: null, killer: null, victim: null, source: null };
+    const alive = (x) => x && x.isUnit && x.hp > 0;
+    const side = (a, b) => a.isEnemy === b.isEnemy;
+    const adjacent = (u, same) => st.units.filter((o) => alive(o) && o !== u && hexDist(o.pos, u.pos) === 1 && side(o, u) === same).length;
+    const onTag = (u, id) => { const tg = u && st.tags[u.pos]; return tg && tg.defId === id && !(tg.hp > 0) ? 1 : 0; };
+    // A method, not an arrow: a withTarget VIEW of this context must answer
+    // for its own target, and `this` is what makes it do so.
+    ctx.fact = function fact(name) {
+      const c = this.caster, tg = this.target;
+      const i = name.indexOf(':');
+      const head = i > 0 ? name.slice(0, i) : name, arg = i > 0 ? name.slice(i + 1) : '';
+      switch (head) {
+        case 'tilesTravelled': return c && c.isUnit ? (c.steps || 0) : 0;
+        case 'moveSpent': return c && c.isUnit ? walked(c) : 0;
+        case 'moveLeft': return c && c.isUnit ? moveLeft(c) : 0;
+        case 'didNotMove': return c && c.isUnit ? (c.pos === c.startPos ? 1 : 0) : 0;
+        case 'hp': return c ? c.hp || 0 : 0;
+        case 'maxHp': return c && c.isUnit ? maxHpOf(c) : 0;
+        case 'hpFrac': return c && c.isUnit && maxHpOf(c) > 0 ? c.hp / maxHpOf(c) : 0;
+        case 'stacks': return c && c.isUnit ? (c.stacks || 0) : 0;
+        case 'consumed': return this.consumed;
+        case 'castsThisBattle': return c && c.casts && this.ab && this.ab.id ? (c.casts[this.ab.id] || 0) : 0;
+        case 'adjacentAllies': return c && c.isUnit ? adjacent(c, true) : 0;
+        case 'adjacentEnemies': return c && c.isUnit ? adjacent(c, false) : 0;
+        case 'onTag': return onTag(c, arg);
+        case 'distance': return c && this.aim ? hexDist(c.pos, this.aim) : 0;
+        case 'maxRange': return this.ab ? (this.ab.castAny ? 99 : zoneMaxRange(this.ab.castZone)) : 0;
+        case 'atMaxRange': return c && this.aim && this.ab && !this.ab.castAny && hexDist(c.pos, this.aim) === zoneMaxRange(this.ab.castZone) ? 1 : 0;
+        case 'elevationDiff': return c && this.aim ? stH(st, this.aim) - stH(st, c.pos) : 0;
+        case 'elevationClimb': return c && this.aim ? Math.max(0, stH(st, this.aim) - stH(st, c.pos)) : 0;
+        case 'elevationDrop': return c && this.aim ? Math.max(0, stH(st, c.pos) - stH(st, this.aim)) : 0;
+        case 'targetHp': return tg ? tg.hp || 0 : 0;
+        case 'targetMaxHp': return tg && tg.isUnit ? maxHpOf(tg) : (tg ? tg.maxHp || 0 : 0);
+        case 'targetHpFrac': return tg && tg.isUnit && maxHpOf(tg) > 0 ? tg.hp / maxHpOf(tg) : 0;
+        case 'targetHas': return tg && tg.isUnit && statusHas(tg, arg) ? 1 : 0;
+        case 'targetOnTag': return onTag(tg, arg);
+        case 'targetAdjacentAllies': return tg && tg.isUnit ? adjacent(tg, true) : 0;
+        case 'unitsWith': return st.units.filter((o) => alive(o) && statusHas(o, arg)).length;
+        case 'amount': return this.amounts[arg] || 0;
+        case 'round': return sb.round;
+        default: return 0;
+      }
+    };
+    ctx.withTarget = (u) => { const v = Object.create(ctx); v.target = u; return v; };
+    return ctx;
+  }
+
+  // ----- the effect executors -----------------------------------------------
+  // The tiles one effect covers around one anchor, rotated with the aim.
+  function effectTiles(st, caster, ab, e, anchor, rk) {
+    const out = [];
+    // (A zone that still names another effect - an ability handed in without
+    // going through resolveZones - falls back to the anchor tile.)
+    for (const off of Array.isArray(e.zone) ? e.zone : [[0, 0]]) {
+      const dt = addK(anchor, rotOff([off[0], off[1]], rk));
+      if (tilePass(dt) && !out.includes(dt)) out.push(dt);
+    }
+    return out;
+  }
+  // Does `u` fit what the effect is for? (`sel` is the effect's `targets`.)
+  function targetFits(ctx, u, sel) {
+    const c = ctx.caster;
+    if (!u) return false;
+    if (sel === 'any' || sel === 'units') return true;
+    if (sel === 'self') return u === c;
+    if (!c || c.isEnemy === undefined) return sel === 'enemies' ? !!u.isEnemy : true;
+    if (sel === 'enemies') return u.isEnemy !== c.isEnemy;
+    if (sel === 'allies') return u.isEnemy === c.isEnemy && u !== c;
+    if (sel === 'party') return u.isEnemy === c.isEnemy;
+    if (sel === 'source') return !!ctx.source && u.uid === ctx.source;
+    if (sel === 'killer') return !!ctx.killer && u === ctx.killer;
+    return false;
+  }
+  // The UNITS an effect lands on. With a zone: the living units standing on
+  // it that fit `targets`. Without one (a trigger, or targets 'self' /
+  // 'source' / 'killer'): every living unit on the board that fits.
+  function effectUnits(st, ctx, e, tiles) {
+    const sel = e.targets || 'any';
+    if (sel === 'self') return ctx.caster && ctx.caster.isUnit && ctx.caster.hp > 0 ? [ctx.caster] : [];
+    if (sel === 'source') { const u = st.units.find((x) => x.uid === ctx.source && x.hp > 0); return u ? [u] : []; }
+    if (sel === 'killer') return ctx.killer && ctx.killer.hp > 0 ? [ctx.killer] : [];
+    if (!e.zone) return st.units.filter((u) => u.hp > 0 && targetFits(ctx, u, sel));
+    const out = [];
+    for (const dt of tiles) { const u = sUnitAt(st, dt); if (u && targetFits(ctx, u, sel) && !out.includes(u)) out.push(u); }
+    return out;
+  }
+  // One effect of a cast, around `anchors`, with `hits` (per anchor) saying how
+  // many of a damage effect's blows land there. Everything a cast or a moment
+  // can do goes through here, one branch per kind.
+  function runEffect(st, caster, e, ctx, anchors, depth, hits = null) {
+    const ab = ctx.ab;
+    const rkFor = (a) => (ab ? abRotFor(ab, caster.pos, a) : 0);
+    switch (e.kind) {
+      case 'consume': {
+        if (e.if && !cond(e.if, ctx)) return;
+        if (!caster.isUnit) return;
+        const cap = e.max !== undefined && e.max !== null ? qty(e.max, ctx) : Infinity;
+        const n = Math.max(0, Math.min(caster.stacks || 0, cap));
+        if (n <= 0) return;
+        caster.stacks -= n;
+        ctx.consumed += n;
+        if (!st.sim) { floater(caster.pos, `🔶 -${n}`, '#ffd75f'); blog(`${caster.name} spends ${n} stack${n === 1 ? '' : 's'}`); }
+        return;
+      }
+      case 'damage': {
+        anchors.forEach((anchor, ai) => {
+          const times = hits ? hits[ai] : Math.max(1, Math.round(qty(e.times, ctx)));
+          if (times <= 0) return;
+          const rk = rkFor(anchor);
+          for (const dt of effectTiles(st, caster, ab, e, anchor, rk)) {
+            const u = sUnitAt(st, dt), ob = sObjectAt(st, dt), bt = sBarrier(st, dt);
+            // A HAZARD tag under a hex of the pattern (the Hack's mines): the
+            // rules hear about it whether or not anything stands there. Real casts only.
+            const hz = sHazard(st, dt);
+            if (hz && !st.sim && rules && rules.onHazardHit) rules.onHazardHit(st, hz, caster, dt, ab);
+            const sel = e.targets || 'any';
+            const tgt = (u && targetFits(ctx, u, sel)) ? u : (!u && (sel === 'any') ? (ob || bt) : null);
+            if (!tgt) { if (!st.sim && !u) floater(dt, '✸', ab ? ab.color : '#5fc7e0'); continue; }
+            const tctx = ctx.withTarget(tgt);
+            if (e.if && !cond(e.if, tctx)) continue;
+            // Everything below changes the BASE - every one of the hits. The
+            // caster's own Strong / Weak, its lifesteal, the height, then the
+            // multiplier, then the volley's overlap bonus.
+            const ls = qty(e.lifesteal, tctx) + (caster.isUnit ? statusSum(caster, 'lifesteal') : 0);
+            let dmg = qty(e.amount, tctx) + dmgMod(caster) + (caster.isUnit ? statusSum(caster, 'damageDealt') : 0) + ls;
+            let lbl = '';
+            // A mind blind to elevation judges the blow as if the ground were flat.
+            if (u && !(st.blind && st.blind.elevation)) {
+              const hd = stH(st, caster.pos) - stH(st, dt);
+              if (hd >= 2 && CFG.highBonus > 0) { dmg += CFG.highBonus; lbl = 'HIGH'; }
+              else if (hd <= -2 && CFG.lowPenalty > 0) { dmg = Math.max(0, dmg - CFG.lowPenalty); lbl = 'LOW'; }
+            }
+            const mul = qty(e.multiplier, tctx);
+            if (mul !== 1) { dmg = Math.round(dmg * mul); lbl = (lbl ? lbl + ' ' : '') + 'x' + mul; }
+            dmg = Math.max(0, dmg);
+            // AIM LOCKS firing one after another: +bonusPerOverlap base damage on
+            // this hex for every damaging ability that hit it EARLIER in the volley.
+            if (st.overlap) { const b = overlapBonus(st.overlap[dt] || 0); if (b > 0) { dmg += b; lbl = (lbl ? lbl + ' ' : '') + '+' + b; } }
+            if (dmg > 0) sHits(st, tgt, dmg, times, lbl, '✸ ', { pierce: !!e.pierce, lifesteal: ls > 0 ? ls : 0 });
+            else if (!st.sim) floater(dt, '✸ 0 ' + lbl, '#9aa7bd');
+            ctx.hitTiles.add(dt);
+          }
+        });
+        // The volley's overlap ledger: this ability now counts as having hit
+        // every hex of its pattern, for whoever fires after it. Only the
+        // party's own casts (depth 0). Resonance heals the caster per tile
+        // someone already hit; Synergy and overlapGrant raise what later
+        // casts get.
+        if (st.overlap && depth === 0 && caster.isUnit) {
+          const grant = qty(e.overlapGrant, ctx) + statusSum(caster, 'overlapGrant');
+          const res = statusSum(caster, 'healOnOverlap');
+          let already = 0;
+          for (const dt of ctx.hitTiles) { if (ctx.ledgered.has(dt)) continue; ctx.ledgered.add(dt); if (st.overlap[dt] > 0) already++; st.overlap[dt] = (st.overlap[dt] || 0) + grant; }
+          if (res > 0 && already > 0) sHeal(st, caster, res * already);
+        }
+        return;
+      }
+      case 'heal': {
+        for (const anchor of anchors) {
+          const rk = rkFor(anchor);
+          const tiles = e.zone ? effectTiles(st, caster, ab, e, anchor, rk) : [];
+          const sel = e.targets || 'any';
+          // A downed body takes only a heal, which revives it (and gets up
+          // with that hp - it is not healed a second time below).
+          const revived = new Set();
+          if (e.zone) for (const dt of tiles) {
+            if (sUnitAt(st, dt)) continue;
+            const body = sBodyAt(st, dt);
+            if (body && targetFits(ctx, body, sel)) { const n = qty(e.amount, ctx.withTarget(body)); if (n > 0) { sRevive(st, body, n); revived.add(body); } }
+            else if (!body && !st.sim) floater(dt, '✸', ab ? ab.color : '#a8e05f');
+          }
+          for (const u of effectUnits(st, ctx, e, tiles)) {
+            if (revived.has(u)) continue;
+            const tctx = ctx.withTarget(u);
+            if (e.if && !cond(e.if, tctx)) continue;
+            const n = qty(e.amount, tctx);
+            if (e.id) ctx.amounts[e.id] = n;
+            if (n > 0) sHeal(st, u, n);
+          }
+          if (!e.zone) break;
+        }
+        return;
+      }
+      case 'status': {
+        for (const anchor of anchors) {
+          const rk = rkFor(anchor);
+          const tiles = e.zone ? effectTiles(st, caster, ab, e, anchor, rk) : [];
+          for (const u of effectUnits(st, ctx, e, tiles)) {
+            const tctx = ctx.withTarget(u);
+            if (e.if && !cond(e.if, tctx)) continue;
+            const amount = e.amount !== undefined && e.amount !== null ? qty(e.amount, tctx) : undefined;
+            const turns = e.turns !== undefined && e.turns !== null ? qty(e.turns, tctx) : undefined;
+            const repeat = Math.max(0, Math.round(qty(e.repeat, tctx)));
+            for (let r = 0; r < repeat; r++) applyStatus(st, u, e.status, { amount, turns, source: caster.uid ?? null, sourceName: caster.name ?? null });
+          }
+          if (!e.zone) break;
+        }
+        return;
+      }
+      case 'gain': {
+        for (const anchor of anchors) {
+          const rk = rkFor(anchor);
+          const tiles = e.zone ? effectTiles(st, caster, ab, e, anchor, rk) : [];
+          for (const u of effectUnits(st, ctx, e, tiles)) {
+            const tctx = ctx.withTarget(u);
+            if (e.if && !cond(e.if, tctx)) continue;
+            addStacks(st, u, qty(e.amount, tctx));
+          }
+          if (!e.zone) break;
+        }
+        return;
+      }
+      case 'extraAttack': {
+        for (const u of effectUnits(st, ctx, e, [])) {
+          if (e.if && !cond(e.if, ctx.withTarget(u))) continue;
+          u.extraAttacks = (u.extraAttacks || 0) + 1;
+          if (!st.sim) { floater(u.pos, '🔁 again', '#ffd166'); blog(u.name + ' may attack again'); }
+        }
+        return;
+      }
+      case 'push': {
+        // Collected into the cast's shove list; resolveCast runs the waves.
+        for (const anchor of anchors) {
+          const rk = rkFor(anchor);
+          for (const dt of effectTiles(st, caster, ab, e, anchor, rk)) {
+            const rd = rotDir(e.dir, rk);
+            const u = sUnitAt(st, dt) || sBodyAt(st, dt);
+            let ent = null;
+            if (u) { if (targetFits(ctx, u, e.targets || 'any')) ent = u; }
+            else { const ob = sObjectAt(st, dt); if (ob) { if (ob.pushable) ent = ob; } else { const t = st.tags[dt]; if (t && t.hp > 0 && t.pushable) ent = t; } }
+            if (!ent) continue;
+            const tctx = ent.isUnit ? ctx.withTarget(ent) : ctx;
+            if (e.if && !cond(e.if, tctx)) continue;
+            const dist = Math.max(0, Math.min(CFG.maxPush ?? 2, Math.round(qty(e.dist, tctx))));
+            if (dist > 0) ctx.shoves.push({ ent, dir: rd, dist, onCrash: e.onCrash ?? null });
+          }
+        }
+        return;
+      }
+      case 'throw': {
+        // Over the caster, onto the tile behind it: the step from the thrown
+        // unit's tile towards the caster, carried on one more.
+        for (const anchor of anchors) {
+          const rk = rkFor(anchor);
+          for (const dt of effectTiles(st, caster, ab, e, anchor, rk)) {
+            const u = sUnitAt(st, dt) || sBodyAt(st, dt);
+            if (!u || !targetFits(ctx, u, e.targets || 'any') || u === caster) continue;
+            if (e.if && !cond(e.if, ctx.withTarget(u))) continue;
+            const line = hexLine(u.pos, caster.pos);
+            if (line.length < 2) continue;
+            const stepK = line[1];
+            const [q0, r0] = PK(u.pos), [q1, r1] = PK(stepK);
+            const dir = DIRS.findIndex((d) => d[0] === q1 - q0 && d[1] === r1 - r0);
+            if (dir < 0) continue;
+            const dest = addK(caster.pos, DIRS[dir]);
+            if (isVoid(dest)) { sVoid(st, u); continue; }
+            const blocked = !tilePass(dest) || sUnitAt(st, dest) || sObjectAt(st, dest) || sBarrier(st, dest) || sBodyAt(st, dest);
+            if (blocked) { sCrash(st, u); continue; }
+            const from = u.pos;
+            sMoveTo(st, u, dest);
+            if (!st.sim) { floater(dest, '🔃 ' + u.name, '#ffd166'); blog(caster.name + ' throws ' + u.name + ' over'); }
+            if (stH(st, from) - stH(st, dest) >= 2) { sImpact(st, u, 2, 'fall'); sStun(st, u); }
+            if (u.hp > 0) sArrive(st, u, depth);
+          }
+        }
+        return;
+      }
+      case 'swap': {
+        for (const anchor of anchors) {
+          const rk = rkFor(anchor);
+          for (const dt of effectTiles(st, caster, ab, e, anchor, rk)) {
+            const u = sUnitAt(st, dt);
+            if (!u || u === caster || !targetFits(ctx, u, e.targets || 'allies')) continue;
+            if (e.if && !cond(e.if, ctx.withTarget(u))) continue;
+            if (!caster.isUnit) continue;
+            const a = caster.pos, b = u.pos;
+            sMoveTo(st, u, a); sMoveTo(st, caster, b);
+            if (!st.sim) { floater(b, '🔃 swap', '#ffd166'); blog(caster.name + ' changes places with ' + u.name); }
+            sArrive(st, u, depth); sArrive(st, caster, depth);
+            return;   // one swap per cast
+          }
+        }
+        return;
+      }
+      case 'height': {
+        if (e.if && !cond(e.if, ctx)) return;
+        const n = qty(e.amount, ctx);
+        for (const anchor of anchors) {
+          const rk = rkFor(anchor);
+          for (const dt of effectTiles(st, caster, ab, e, anchor, rk)) {
+            const h0 = st.heights[dt] ?? 0;
+            st.heights[dt] = Math.max(0, Math.min(CFG.elevationLevels, e.mode === 'abs' ? n : h0 + n));
+          }
+        }
+        return;
+      }
+      case 'tag': {
+        if (e.if && !cond(e.if, ctx)) return;
+        const d = tagDefById(e.tag);
+        if (!d) return;
+        for (const anchor of anchors) {
+          const rk = rkFor(anchor);
+          for (const dt of effectTiles(st, caster, ab, e, anchor, rk)) {
+            if (d.hp > 0 && (sUnitAt(st, dt) || sObjectAt(st, dt) || sBarrier(st, dt) || sBodyAt(st, dt))) continue;
+            const inst = tagInst(d, e.tag, dt);
+            if (e.life !== undefined && e.life !== null) inst.life = Math.max(0, Math.round(qty(e.life, ctx)));
+            st.tags[dt] = inst;
+            if (d.collectible && d.hp <= 0) { const u = sUnitAt(st, dt); if (u) sArrive(st, u, depth); }
+          }
+        }
+        return;
+      }
+      case 'dash': {
+        if (e.if && !cond(e.if, ctx)) return;
+        const aim = anchors[0];
+        if (!aim || !caster.isUnit || caster.hp <= 0 || caster.pos === aim) return;
+        const land = dashLanding(st, caster, aim, e.through === 'allies');
+        if (land !== caster.pos) {
+          sMoveTo(st, caster, land);
+          if (!st.sim) {
+            floater(land, '⤳', '#5fc7e0');
+            blog(caster.name + (land === aim ? ' moves to the target' : ' charges in as far as it can'));
+          }
+          sArrive(st, caster, depth);
+          flushDeaths(st, depth);
+        }
+        return;
+      }
+      default: return;
+    }
+  }
+  // The phase an effect runs in. Fixed by kind (and by the 'landing' anchor),
+  // so folding upgrades over an ability never has to order anything.
+  const PHASE = { consume: 0, damage: 1, heal: 1, status: 1, gain: 1, extraAttack: 1, push: 2, throw: 2, swap: 2, height: 3, tag: 4, dash: 6 };
+  const phaseOf = (e) => (e.anchor === 'landing' ? 7 : (PHASE[e.kind] ?? 5));
+
+  // THE CAST. `anchors` is one aim tile or a list of them (an ability with
+  // aims > 1). Effects run by phase; a damage effect's hits are dealt
+  // round-robin over the anchors; the shoves of every push effect resolve
+  // together in waves after the hits; the dash runs last but for the effects
+  // anchored on where the caster lands.
+  function resolveCast(st, caster, ab, anchors, depth = 0) {
     if (!ab || depth > 6) return;
-    const prevAtk = st.atk, prevCsr = st.csr, prevSU = st.shieldUsed, prevCast = st.cast;
-    st.csr = caster; st.shieldUsed = new Set();
-    st.cast = { caster, ab };   // this cast's token, for an Entity that counts attacks (hookCtx)
+    const list = Array.isArray(anchors) ? anchors.filter(Boolean) : [anchors];
+    if (!list.length) return;
+    const prevAtk = st.atk, prevCsr = st.csr, prevCast = st.cast;
+    st.csr = caster;
+    st.cast = { caster, ab, onCrash: null };   // this cast's token, for an Entity that counts attacks (hookCtx)
     if (caster.name) st.atk = caster.name;
     if (!st.sim && caster.name) blog(caster.name + ' casts ' + ab.name);
-    const rk = abRotFor(ab, caster.pos, targetK);
-    // 1 - damage / heal / statuses
-    // How hard this caster hits right now: every status it carries with a
-    // damageDealt multiplier, folded together. Read BEFORE the cast spends any of
-    // them, so a one-shot buff applies to the whole cast and not just its first tile.
-    const abDmg = parseDamage(ab.damage);
-    const dealtMul = abDmg.base > 0 ? statusMul(caster, 'damageDealt') : 1;
-    const dealtLabel = dealtMul > 1 ? 'CRIT' : dealtMul < 1 ? 'WEAK' : '';
-    if (abDmg.base > 0) spendStatus(st, caster, 'attack');
-    for (const off of ab.dmgZone) {
-      const dt = addK(targetK, rotOff(off, rk)); if (!tilePass(dt)) continue;
-      const u = sUnitAt(st, dt), ob = sObjectAt(st, dt), bt = sBarrier(st, dt);
-      // A HAZARD tag under a hex of the pattern (the Hack's mines): the rules
-      // hear about it whether or not anything stands there. Real casts only.
-      const hz = st.tags[dt];
-      if (hz && hz.hp <= 0 && !st.sim && rules && rules.onHazardHit) rules.onHazardHit(st, hz, caster, dt, ab);
-      const tgt = u || ob || bt;
-      // A downed body takes no blow and no status - only a heal, which revives it.
-      if (!tgt) {
-        const body = sBodyAt(st, dt);
-        if (body && ab.heal > 0) { sRevive(st, body, ab.heal); continue; }
-        if (!st.sim) floater(dt, '✸', ab.color);
-        continue;
+    const ctx = castCtx(st, caster, ab, list);
+    ctx.shoves = []; ctx.hitTiles = new Set(); ctx.ledgered = new Set();
+    const casterStart = caster.pos;
+    const effects = (ab.effects ?? []).map((e, i) => ({ e, i })).sort((a, b) => phaseOf(a.e) - phaseOf(b.e) || a.i - b.i);
+    let phase = -1;
+    const anchorsFor = (e) => (e.anchor === 'caster' ? [casterStart] : e.anchor === 'landing' ? [caster.pos] : list);
+    for (const { e } of effects) {
+      const ph = phaseOf(e);
+      if (ph !== phase) {
+        // Leaving the push phase: the shoves resolve in waves (see hex-box).
+        if (phase === 2) runShoves(st, ctx, depth);
+        if (phase >= 1) flushDeaths(st, depth);
+        phase = ph;
       }
-      if (abDmg.base > 0) {
-        // Everything below changes the BASE - every one of the ability's hits.
-        let dmg = Math.max(0, abDmg.base + dmgMod(caster)), lbl = '';
-        // A mind blind to elevation judges the blow as if the ground were flat. The
-        // REAL cast (st.sim false) always counts the height - the rule is the rule.
-        if (u && !(st.blind && st.blind.elevation)) {
-          const hd = stH(st, caster.pos) - stH(st, dt);
-          if (hd >= 2 && CFG.highBonus > 0) { dmg += CFG.highBonus; lbl = 'HIGH'; }
-          else if (hd <= -2 && CFG.lowPenalty > 0) { dmg = Math.max(0, dmg - CFG.lowPenalty); lbl = 'LOW'; }
-        }
-        if (u && dealtMul !== 1) { dmg = Math.max(0, Math.round(dmg * dealtMul)); lbl = (lbl ? lbl + ' ' : '') + dealtLabel; }
-        // AIM LOCKS firing one after another: +bonusPerOverlap base damage on
-        // this hex for every damaging ability that hit it EARLIER in the volley
-        // (st.overlap counts them; this cast adds itself below, after its pass).
-        if (st.overlap) { const b = overlapBonus(st.overlap[dt] || 0); if (b > 0) { dmg += b; lbl = (lbl ? lbl + ' ' : '') + '+' + b; } }
-        if (dmg > 0) sHits(st, tgt, dmg, abDmg.times, lbl, '✸ ');
-        else if (!st.sim) floater(dt, '✸ 0 ' + lbl, '#9aa7bd');
-      } else if (!st.sim) floater(dt, '✸', ab.color);
-      if (u && u.hp > 0) {
-        if (ab.heal > 0) sHeal(st, u, ab.heal);
-        // ONE line for every status there is or ever will be: the ability names one
-        // (statusEffect) and its overrides (statusEffectOverride), and the table decides the rest.
-        if (ab.statusEffect === 'stun') sStun(st, u);
-        else if (ab.statusEffect && statusDef(ab.statusEffect)) applyStatus(st, u, ab.statusEffect, ab.statusEffectOverride);
+      if (caster.isUnit && caster.hp <= 0) break;
+      let hits = null;
+      if (e.kind === 'damage' && e.anchor !== 'caster' && e.anchor !== 'landing') {
+        // Hits split over the aims: the first aims get the extra one.
+        const times = Math.max(0, Math.round(qty(e.times, ctx)));
+        hits = list.map((_, i) => Math.floor(times / list.length) + (i < times % list.length ? 1 : 0));
       }
+      runEffect(st, caster, e, ctx, anchorsFor(e), depth, hits);
     }
-    // The volley's overlap ledger: this ability now counts as having hit every
-    // hex of its pattern, for whoever fires after it. Only the party's own
-    // casts (depth 0) - a tag's chained cast is not an ability in the order.
-    if (st.overlap && abDmg.base > 0 && depth === 0) {
-      const seen = new Set();
-      for (const off of ab.dmgZone) {
-        const dt = addK(targetK, rotOff(off, rk));
-        if (!tilePass(dt) || seen.has(dt)) continue;
-        seen.add(dt);
-        st.overlap[dt] = (st.overlap[dt] || 0) + 1;
-      }
-    }
+    if (phase === 2) runShoves(st, ctx, depth);
     flushDeaths(st, depth);
-    // 2 - pushes, in waves (see hex-box for the full commentary)
-    const shoves = [];
-    for (const o of ab.pushZone) {
-      const dt = addK(targetK, rotOff([o[0], o[1]], rk)); if (!tilePass(dt)) continue;
-      const rd = rotDir(o[2], rk);
-      const dist = (o[3] || 1) >= 2 ? 2 : 1;
-      // A downed body is shoved like anyone (it just takes no damage or status).
-      const u = sUnitAt(st, dt) || sBodyAt(st, dt);
-      if (u) { shoves.push({ ent: u, dir: rd, dist }); continue; }
-      const ob = sObjectAt(st, dt);
-      if (ob) { if (ob.pushable) shoves.push({ ent: ob, dir: rd, dist }); continue; }
-      // (A unit this very cast put down is a body now, and was shoved above.)
-      const t = st.tags[dt]; if (t && t.hp > 0 && t.pushable) shoves.push({ ent: t, dir: rd, dist });
-    }
+    st.atk = prevAtk; st.csr = prevCsr; st.cast = prevCast;
+  }
+  // The push phase: every shove the cast's push effects collected, resolved in
+  // waves so several of them in one cast do not walk through each other.
+  function runShoves(st, ctx, depth) {
+    const shoves = ctx.shoves;
+    ctx.shoves = [];
+    if (!shoves.length) return;
     const maxDist = shoves.reduce((m, s) => Math.max(m, s.dist), 0);
     const posOf = (e) => (e instanceof Entity ? e.pos : e.k);
-    // Still on the board to be shoved: alive, or a downed body.
     const shovable = (e) => e.hp > 0 || (e.isUnit && e.downed);
     const stepOne = (s) => {
       s.pending = false;
       if (!shovable(s.ent)) { s.stopped = true; return; }
       const from = posOf(s.ent);
+      st.cast.onCrash = s.onCrash;
       sPush(st, s.ent, s.dir, depth);
+      st.cast.onCrash = null;
       if (posOf(s.ent) === from) s.stopped = true;
     };
     for (let step = 0; step < maxDist; step++) {
@@ -888,43 +1239,6 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
         if (!moved || guard++ > wave.length + 2) for (const s of wave) if (s.pending) stepOne(s);
       }
     }
-    flushDeaths(st, depth);
-    // 3 - height changes (units on the tile are unaffected)
-    for (const o of ab.hZone) {
-      const dt = addK(targetK, rotOff([o[0], o[1]], rk)); if (!tilePass(dt)) continue;
-      const h0 = st.heights[dt] ?? 0;
-      st.heights[dt] = Math.max(0, Math.min(CFG.elevationLevels, ab.hMode === 'abs' ? o[2] : h0 + o[2]));
-    }
-    // 4 - tag placement
-    if (ab.tagId) {
-      const d = tagDefById(ab.tagId);
-      if (d) for (const off of ab.tagZone) {
-        const dt = addK(targetK, rotOff(off, rk)); if (!tilePass(dt)) continue;
-        if (d.hp > 0 && (sUnitAt(st, dt) || sObjectAt(st, dt) || sBarrier(st, dt) || sBodyAt(st, dt))) continue;
-        st.tags[dt] = tagInst(d, ab.tagId, dt);
-        if (d.collectible && d.hp <= 0) { const u = sUnitAt(st, dt); if (u) sArrive(st, u, depth); }
-      }
-    }
-    flushDeaths(st, depth);
-    // 5 - spawns: none in the starter content (spawnId is unused); the hook stays
-    //     for when summoning abilities come over from hex-box.
-    // 6 - caster dash: as far along the line to the aim point as it can get.
-    // This runs LAST on purpose. The shoves in step 2 have already resolved, so a
-    // charge aimed at an enemy lands on the enemy's tile when the ram cleared it,
-    // and pulls up short of it when it did not.
-    if (ab.moveToTarget && caster.isUnit && caster.hp > 0 && caster.pos !== targetK) {
-      const land = dashLanding(st, caster, targetK);
-      if (land !== caster.pos) {
-        sMoveTo(st, caster, land);
-        if (!st.sim) {
-          floater(land, '⤳', '#5fc7e0');
-          blog(caster.name + (land === targetK ? ' moves to the target' : ' charges in as far as it can'));
-        }
-        sArrive(st, caster, depth);
-        flushDeaths(st, depth);
-      }
-    }
-    st.atk = prevAtk; st.csr = prevCsr; st.shieldUsed = prevSU; st.cast = prevCast;
   }
 
   // ----- per-activation terrain tag tick ---------------------------------
@@ -941,19 +1255,24 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // `fromK` lets the player phase measure range from the tile a unit STARTED
   // the round on (free repositioning); enemies always measure from where they are.
   // `cap` overrides the budget (Infinity = every reachable tile, used by walked()).
+  // ROOTED: a status with agency 'rooted', or a rooting tile tag under the
+  // unit (a web). No walking at all this activation.
+  const rooted = (u) => !!agencyLost(u, 'rooted') || !!(sb.tags[u.pos] && sb.tags[u.pos].roots && !(sb.tags[u.pos].hp > 0));
   function reach(u, fromK = u.pos, cap) {
+    const fly = flies(u);
     const hard = new Set(), soft = new Set();
+    if (cap === undefined && rooted(u) && fromK === u.pos) return { d: { [fromK]: 0 }, prev: {}, occ: soft };
     for (const o of sb.units) {
       if (o === u) continue;
       // A downed body: a wall to a walker, a no-stopping tile to a flier.
-      if (o.downed) { (u.flying ? soft : hard).add(o.pos); continue; }
+      if (o.downed) { (fly ? soft : hard).add(o.pos); continue; }
       if (o.hp <= 0) continue;
-      ((!u.flying && o.isEnemy !== u.isEnemy) ? hard : soft).add(o.pos);
+      ((!fly && o.isEnemy !== u.isEnemy) ? hard : soft).add(o.pos);
     }
-    for (const k in sb.tags) { if (sb.tags[k].hp > 0) (u.flying ? soft : hard).add(k); }
+    for (const k in sb.tags) { if (sb.tags[k].hp > 0) (fly ? soft : hard).add(k); }
     // An object that blocks stands like a barrier: a wall to a walker, a
     // no-stopping tile to a flier.
-    for (const o of sb.objects) { if (o.blocks(u)) (u.flying ? soft : hard).add(o.pos); }
+    for (const o of sb.objects) { if (o.blocks(u)) (fly ? soft : hard).add(o.pos); }
     const spd = cap !== undefined ? cap : moveBudget(u);
     const d = { [fromK]: 0 }, prev = {};
     const pq = [[0, fromK]];
@@ -964,8 +1283,8 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
         const nk = addK(k, dir);
         if (!tilePass(nk) || hard.has(nk)) continue;
         const dh = sbH(nk) - sbH(k);
-        if (!u.flying && Math.abs(dh) > 1) continue;
-        const nd = dd + (u.flying ? 1 : (dh > 0 ? 2 : 1));
+        if (!fly && Math.abs(dh) > 1) continue;
+        const nd = dd + (fly ? 1 : (dh > 0 ? 2 : 1));
         if (nd > spd) continue;
         if (nd < (d[nk] ?? 1e9)) { d[nk] = nd; prev[nk] = k; pq.push([nd, nk]); }
       }
@@ -973,15 +1292,17 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     return { d, prev, occ: soft };
   }
   const canStop = (res, k) => res.d[k] !== undefined && !res.occ.has(k);
-  function approachField(u) {
+  function approachField(u, from = null) {
     const hard = new Set();
-    if (!u.flying) {
+    const fly = flies(u);
+    if (!fly) {
       for (const k in sb.tags) if (sb.tags[k].hp > 0) hard.add(k);
       for (const o of sb.objects) if (o.blocks(u)) hard.add(o.pos);
       for (const o of sb.units) if (o.downed) hard.add(o.pos);
     }
     const d = {}, pq = [];
-    for (const p of alive(false)) { d[p.pos] = 0; pq.push([0, p.pos]); }
+    // Towards the party - or, under a Taunt, towards whoever taunted it.
+    for (const p of (from ?? alive(!u.isEnemy))) { d[p.pos] = 0; pq.push([0, p.pos]); }
     while (pq.length) {
       pq.sort((a, b) => a[0] - b[0]); const [dd, k] = pq.shift();
       if (dd > d[k]) continue;
@@ -989,8 +1310,8 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
         const nk = addK(k, dir);
         if (!tilePass(nk) || hard.has(nk)) continue;
         const dh = sbH(k) - sbH(nk);
-        if (!u.flying && Math.abs(dh) > 1) continue;
-        const nd = dd + (u.flying ? 1 : (dh > 0 ? 2 : 1));
+        if (!fly && Math.abs(dh) > 1) continue;
+        const nd = dd + (fly ? 1 : (dh > 0 ? 2 : 1));
         if (nd < (d[nk] ?? 1e9)) { d[nk] = nd; pq.push([nd, nk]); }
       }
     }
@@ -1004,7 +1325,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // A collectible flagged "trigger on pass" fires the instant a walking unit enters.
   function passTrap(u, k) {
     if (!u || u.hp <= 0) return true;
-    if (u.flying) return false;
+    if (flies(u)) return false;
     const t = sb.tags[k];
     if (!t || !t.collectible || !t.passPickup || t.hp > 0) return false;
     const st = liveSt(); sArrive(st, u); flushDeaths(st);
@@ -1012,18 +1333,39 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     return u.hp <= 0 || !!agencyLost(u, 'stunned') || u.pos !== k;
   }
   // Hands the walk to the view: it animates and reports each tile entered.
+  // Tiles between where the unit started its activation and where it stands,
+  // along the cheapest route (a walk the player re-aims is measured from the
+  // start, like its price). The `tilesTravelled` fact.
+  function stepsFrom(u) {
+    if (!u || !u.startPos || u.pos === u.startPos) return 0;
+    const p = pathTo(reach(u, u.startPos, Infinity), u.startPos, u.pos);
+    return p ? p.length - 1 : hexDist(u.startPos, u.pos);
+  }
+  // The walk's tile count is the `tilesTravelled` fact and fires the 'moved'
+  // moment when the walk is over (a trap that stopped it short counts what
+  // was walked).
   function animateMove(u, path, done) {
     if (!path || path.length < 2) { if (path && path.length) u.pos = path[path.length - 1]; done && done(); return; }
     sb.busy = true;
+    const fly = flies(u);
+    const finish = () => {
+      if (u.isUnit) { u.steps = stepsFrom(u); fireMoment(liveSt(), u, 'moved'); }
+      done && done();
+    };
     const anim = {
-      u, path: u.flying ? [path[0], path[path.length - 1]] : path, fly: u.flying,
+      u, path: fly ? [path[0], path[path.length - 1]] : path, fly,
       enter: (k) => { u.pos = k; return passTrap(u, k); },   // true = stop the walk here
     };
-    if (onAnim) onAnim(anim, () => done && done());
-    else { u.pos = path[path.length - 1]; done && done(); }   // headless fallback (tests)
+    if (onAnim) onAnim(anim, finish);
+    else { u.pos = path[path.length - 1]; finish(); }   // headless fallback (tests)
   }
 
   // ----- aiming ----------------------------------------------------------
+  // What an ability's effects say about aiming: its dash (if any), the tiles
+  // its hits / heals / statuses cover (for the aim aliases and the preview).
+  const dashOf = (ab) => (ab && ab.effects ? ab.effects.find((e) => e.kind === 'dash') : null);
+  const hitEffects = (ab) => (ab && ab.effects ? ab.effects.filter((e) => ['damage', 'heal', 'status', 'push', 'throw', 'swap'].includes(e.kind) && e.anchor === 'aim' && e.targets !== 'self' && e.zone) : []);
+  const damageEffects = (ab) => (ab && ab.effects ? ab.effects.filter((e) => e.kind === 'damage') : []);
   // Is this tile something a dash can STAND on? Terrain only - a unit does not
   // disqualify it, because the whole point of a charging shove is to aim AT the
   // target and ram it out of the way. Whether that works is settled at
@@ -1032,26 +1374,24 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // Can a dash be AIMED here? The destination must be stand-on-able AND the way
   // to it must be CLEAR: a charge is a run across the floor, not a teleport.
   // Everything strictly between the caster and the aim point has to be empty
-  // ground; only the aim point itself may be occupied.
-  // Without this the ability was offered through a body and then half-happened -
-  // the far enemy took the hit and the shove while the caster, blocked by the one
-  // in front, never moved (reported 2026-09-11).
-  function dashAimOk(c, k) {
+  // ground; only the aim point itself may be occupied. A dash `through`
+  // allies lets friends stand in the way.
+  function dashAimOk(c, k, through = false) {
     if (!dashTileOk(k)) return false;
     const line = hexLine(c.pos, k);
     for (let i = 1; i < line.length - 1; i++) {
       const mid = line[i];
       if (!dashTileOk(mid)) return false;
       const o = unitAt(mid) || bodyAt(mid);
-      if (o && o.uid !== c.uid) return false;
+      if (o && o.uid !== c.uid && !(through && o.hp > 0 && o.isEnemy === c.isEnemy)) return false;
     }
     return true;
   }
   // Where a dash actually ENDS, given the board as it stands after the rest of
   // the cast. The caster walks the line towards the aim point and takes the
   // furthest tile it can stand on, stopping in front of the first thing in the
-  // way. Its own tile means it never left.
-  function dashLanding(st, caster, targetK) {
+  // way (passing allies when `through`). Its own tile means it never left.
+  function dashLanding(st, caster, targetK, through = false) {
     const line = hexLine(caster.pos, targetK);
     let last = caster.pos;
     for (let i = 1; i < line.length; i++) {
@@ -1062,7 +1402,10 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       if (sObjectAt(st, k)) break;                    // so does an object
       if (sBodyAt(st, k)) break;                      // and a downed body
       const o = sUnitAt(st, k);
-      if (o && o.uid !== caster.uid) break;           // someone is still standing there
+      if (o && o.uid !== caster.uid) {
+        if (through && o.isEnemy === caster.isEnemy) continue;   // an ally is run past, never landed on
+        break;                                                   // someone is still standing there
+      }
       last = k;
     }
     return last;
@@ -1070,7 +1413,8 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   function buildAim(c, ab) {
     const targets = new Set();
     const anchors = new Set();
-    const ok = (k) => !ab.moveToTarget || dashAimOk(c, k);
+    const dsh = dashOf(ab);
+    const ok = (k) => !dsh || dashAimOk(c, k, dsh.through === 'allies');
     if (ab.castAny) for (const t of activeTiles()) { if (!ok(t)) continue; targets.add(t); anchors.add(t); }
     else for (const off of ab.castZone) {
       const t = addK(c.pos, off);
@@ -1080,16 +1424,15 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     }
     const map = {};
     for (const t of targets) map[t] = t;
-    // The dmgZone ALIASES below let you click any tile a rotatable ability would
+    // The zone ALIASES below let you click any tile a rotatable ability would
     // cover and have it aim at the castZone tile that covers it - you point at the
     // enemy you mean to skewer, not at the empty tile in front of you.
     // A DASH is excluded: for a charge the aim point is also where the caster ends
-    // up, so an alias would light up a tile the unit is not going to, which is
-    // exactly the confusion this pass is fixing.
-    if (ab.rotatable && !ab.moveToTarget) {
+    // up, so an alias would light up a tile the unit is not going to.
+    if (ab.rotatable && !dsh) {
       for (const t of anchors) {
         const rk = abRotFor(ab, c.pos, t);
-        for (const off of ab.dmgZone) {
+        for (const e of hitEffects(ab)) for (const off of e.zone) {
           const dt = addK(t, rotOff(off, rk));
           if (!tilePass(dt) || targets.has(dt)) continue;
           const cur = map[dt];
@@ -1104,48 +1447,44 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // WHAT A CAST WOULD TOUCH, for the tile under the cursor. `sb.aimMap` says
   // where an ability MAY be aimed; this says what happens if it is aimed there,
   // so the player can see the extent of a blast before committing to it.
-  //
-  // Two halves, for two kinds of question:
-  //  * WHERE the zones fall (hit / tag / height) is read straight off the
-  //    ability, with the same anchor, rotation and tilePass filter resolveCast
-  //    uses. Exact by construction.
-  //  * WHAT MOVES (shoves, and where a charge ends up) cannot be read off a zone
-  //    at all: shoves resolve in waves against everything else the same cast
-  //    moves, and a charge only reaches the target's tile if the ram cleared it.
-  //    So the cast is played out on a COPY of the board - the same machinery the
-  //    enemy AI uses to judge its own moves - and the result read back. Nothing
-  //    here touches the real board.
+  //  * WHERE the zones fall is read straight off the effects, with the same
+  //    anchor, rotation and tilePass filter resolveCast uses.
+  //  * WHAT MOVES (shoves, throws, swaps, where a charge ends up) is read back
+  //    from playing the cast out on a COPY of the board - the same machinery
+  //    the enemy AI uses. Nothing here touches the real board.
   function aimPreview(k) {
     if (!sb.selAb || !sb.aimMap || sb.aimMap[k] === undefined) return null;
     const c = curP(); if (!c) return null;
     const ab = abFor(c, sb.selAb); if (!ab) return null;
     const anchor = sb.aimMap[k];
     const rk = abRotFor(ab, c.pos, anchor);
-    const zone = (offs) => {
+    const zone = (effs) => {
       const out = [];
-      for (const off of offs) {
+      for (const e of effs) for (const off of e.zone ?? []) {
         const dt = addK(anchor, rotOff([off[0], off[1]], rk));
         if (tilePass(dt) && !out.includes(dt)) out.push(dt);
       }
       return out;
     };
     const height = [];
-    for (const o of ab.hZone) {
-      const dt = addK(anchor, rotOff([o[0], o[1]], rk));
-      if (!tilePass(dt)) continue;
-      const h0 = sb.heights[dt] ?? 0;
-      const to = Math.max(0, Math.min(CFG.elevationLevels, ab.hMode === 'abs' ? o[2] : h0 + o[2]));
-      height.push({ k: dt, from: h0, to });
+    for (const e of ab.effects.filter((x) => x.kind === 'height' && x.anchor === 'aim')) {
+      const n = qty(e.amount, castCtx(liveSt(), c, ab, [anchor]));
+      for (const off of e.zone ?? [[0, 0]]) {
+        const dt = addK(anchor, rotOff([off[0], off[1]], rk));
+        if (!tilePass(dt)) continue;
+        const h0 = sb.heights[dt] ?? 0;
+        const to = Math.max(0, Math.min(CFG.elevationLevels, e.mode === 'abs' ? n : h0 + n));
+        height.push({ k: dt, from: h0, to });
+      }
     }
-    // Play it out on a copy. `blind: null` - the preview is for the PLAYER, who
-    // sees the whole board, not for a creature with an intellect class.
+    // Play it out on a copy. `blind: null` - the preview is for the PLAYER.
     const st = simSt(null);
     const se = st.units.find((u) => u.uid === c.uid);
     let push = [];
     let dash = null;
     if (se) {
       const before = new Map(st.units.map((u) => [u.uid, u.pos]));
-      resolveCast(st, se, ab, anchor);
+      resolveCast(st, se, ab, [anchor]);
       for (const u of st.units) {
         if (u.uid === c.uid) continue;
         const from = before.get(u.uid);
@@ -1153,17 +1492,17 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       }
       if (se.pos !== c.pos) dash = se.pos;
     }
-    // What the hit tiles MEAN, so the view can colour them by consequence rather
-    // than by which ability happens to be selected.
-    const kind = hasDamage(ab.damage) ? 'damage' : ab.heal > 0 ? 'heal' : ab.statusEffect ? 'buff' : 'none';
+    // What the hit tiles MEAN, so the view can colour them by consequence.
+    const kinds = ab.effects.map((e) => e.kind);
+    const kind = kinds.includes('damage') ? 'damage' : kinds.includes('heal') ? 'heal' : kinds.includes('status') ? 'buff' : 'none';
+    const dsh = dashOf(ab);
     return {
       anchor, kind,
-      hit: zone(ab.dmgZone),
-      tag: ab.tagId && tagDefById(ab.tagId) ? zone(ab.tagZone) : [],
+      hit: zone(hitEffects(ab)),
+      tag: zone(ab.effects.filter((e) => e.kind === 'tag' && e.anchor === 'aim' && tagDefById(e.tag))),
       push, height, dash,
-      // True when the charge stops short of what it was aimed at, because the
-      // ram did not clear the tile. Worth saying out loud in a hint.
-      dashShort: !!(dash && dash !== anchor),
+      // True when the charge stops short of what it was aimed at.
+      dashShort: !!(dsh && dash && dash !== anchor),
     };
   }
 
@@ -1180,22 +1519,27 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     sb.phase = 'player'; sb.selAb = null; sb.aimMap = null; sb.activeUid = null;
     sb.inspectUid = null; sb.inspectReach = null;   // a new round, a fresh board
     for (const u of sb.units) if (!u.isEnemy && u.hp > 0) {
-      u.done = false; u.moveLocked = false; u.startPos = u.pos; u.tagTicked = false; u.movePaid = 0; u.lock = null;
+      u.done = false; u.moveLocked = false; u.startPos = u.pos; u.tagTicked = false; u.movePaid = 0; u.lock = null; u.steps = 0; u.extraAttacks = 0;
     }
     for (const u of sb.units) if (!u.isEnemy && u.hp > 0) { u.tagTicked = true; tickStatuses(u); tagTick(u); }
     if (checkEnd()) return;
-    // Anything that makes a unit skip its turn spends itself doing exactly that.
+    // A STUNNED unit sits its turn out (its clock runs down at the end of the
+    // phase like any other). A CONFUSED one is out of the player's hands: the
+    // engine walks it and fires it at random when the volley goes (fireLocks).
     for (const u of sb.units) {
       if (u.isEnemy || u.hp <= 0) continue;
-      const id = agencyLost(u, 'stunned');
+      const id = agencyLost(u, 'stunned') || agencyLost(u, 'confused');
       if (!id) continue;
       const view = statusView(u, id);
-      spendStatus(liveSt(), u, 'activation', id);
       u.done = true;
       floater(u.pos, view.icon, view.color);
     }
     const first = sb.units.find((u) => !u.isEnemy && u.hp > 0 && !u.done);
-    if (first) select(first); else { emit(); startEnemyPhase(); }
+    if (first) select(first);
+    // Nobody left to play but a confused unit or two: the volley still goes,
+    // so the engine gets to play them (fireLocks) before the enemy moves.
+    else if (sb.units.some((u) => !u.isEnemy && u.hp > 0 && agencyLost(u, 'confused') && !agencyLost(u, 'stunned'))) { emit(); endTurn(); }
+    else { emit(); startEnemyPhase(); }
   }
   function refreshReach() {
     const c = curP();
@@ -1254,8 +1598,8 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   }
   // A unit that can no longer act (killed or stunned by a trap mid-walk).
   function retireUnit(u) {
-    const skipId = agencyLost(u, 'stunned');
-    if (skipId) dropStatus(liveSt(), u, skipId, false);
+    const skip = statusListed(u, 'agency', 'stunned');
+    if (skip) dropStatus(liveSt(), u, skip, false);
     u.done = true;
     if (sb.over) return;
     const next = sb.units.find((x) => !x.isEnemy && x.hp > 0 && !x.done);
@@ -1274,7 +1618,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     // measured from (walked / moveLeft), so it is reset here too - the enemy AI
     // walks and casts within one activation, and an ability's move cost has to
     // see the walk that just happened.
-    for (const u of sb.enemyQ) { u.movePaid = 0; u.startPos = u.pos; }
+    for (const u of sb.enemyQ) { u.movePaid = 0; u.startPos = u.pos; u.steps = 0; u.extraAttacks = 0; }
     sb.eqi = -1; emit();
     stepEnemy();
   }
@@ -1295,7 +1639,6 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     const skipId = agencyLost(e, 'stunned');
     if (skipId) {
       const view = statusView(e, skipId);
-      spendStatus(liveSt(), e, 'activation', skipId);
       floater(e.pos, view.icon, view.color);
       sb.busy = true; wait(() => { sb.busy = false; stepEnemy(); }, 650); return;
     }
@@ -1429,99 +1772,145 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   }
 
   // ----- enemy AI (scores full simulated outcomes) ------------------------
-  function aiTurn(e) {
+  // What an ability on a tile tag would do to whoever stands there, in damage
+  // units: its hits less its heals, plus the harm of the statuses it applies.
+  function abilityHarm(ab) {
+    let n = 0;
+    const ctx = { fact: () => 0 };
+    for (const e of ab.effects ?? []) {
+      if (e.kind === 'damage') n += qty(e.amount, ctx) * Math.max(1, qty(e.times, ctx));
+      else if (e.kind === 'heal') n -= qty(e.amount, ctx);
+      else if (e.kind === 'status') n += statusHarm(e.status) / 10;
+    }
+    return n;
+  }
+  // A random pick, through the fight's own rng so a seeded fight replays.
+  const pick = (list) => (list.length ? list[Math.min(list.length - 1, Math.floor(rng() * list.length))] : null);
+  // A CONFUSED unit's turn: any reachable tile, any affordable ability, any
+  // legal aim - friend or foe. Returns { tile, ab, anchor } (ab null = only walks).
+  function confusedPlan(u, res) {
+    const tiles = Object.keys(res.d).filter((k) => k === u.pos || canStop(res, k));
+    const tile = pick(tiles) || u.pos;
+    const options = [];
+    for (const abId of u.abilityIds) {
+      const ab = abFor(u, abId);
+      if (!ab || !canAfford(u, ab)) continue;
+      const from = { pos: tile, uid: u.uid, isEnemy: u.isEnemy };
+      const dsh = dashOf(ab);
+      const tl = ab.castAny ? activeTiles() : ab.castZone.map((off) => addK(tile, off));
+      for (const t of tl) {
+        if (!inMap(t) || !tilePass(t)) continue;
+        if (dsh && t !== tile && !dashAimOk(from, t, dsh.through === 'allies')) continue;
+        // Something to cast AT: a unit on the aim tile or on a hit tile.
+        const rk = abRotFor(ab, tile, t);
+        const covers = hitEffects(ab).some((e) => effectTiles(liveSt(), u, ab, e, t, rk).some((dt) => unitAt(dt) && unitAt(dt).uid !== u.uid));
+        if (covers) options.push({ ab, anchor: t });
+      }
+    }
+    const o = pick(options);
+    return { tile, ab: o ? o.ab : null, anchor: o ? o.anchor : null };
+  }
+  // `stay` = the unit has already walked this activation (an extra attack): it
+  // casts from where it stands.
+  function aiTurn(e, stay = false) {
     if (sb.over || e.hp <= 0) { sb.busy = false; if (!sb.over) stepEnemy(); return; }
     // Breaking off comes before any thought of attacking.
-    if (rollFlee(e)) { fleeTurn(e); return; }
-    const res = reach(e);
+    if (!stay && rollFlee(e)) { fleeTurn(e); return; }
+    const res = stay ? { d: { [e.pos]: 0 }, prev: {}, occ: new Set() } : reach(e);
     const mind = mindOf(e);              // what this creature is able to weigh
     const blind = blindfold(mind);
     const live = new Map(sb.units.map((u) => [u.uid, u]));
     const flat = CFG.blindStatusValue ?? 8;
+    // The DIRECTIVES its statuses put on its mind (config/statuses.js `ai`).
+    const must = directive(liveSt(), e, 'mustTarget');         // Taunt: only casts that reach this unit
+    const avoid = directive(liveSt(), e, 'avoidAdjacentTo');   // Fear: never ends next to this unit
+    const friend = directive(liveSt(), e, 'friend');           // Charm: this unit counts as an ally
+    const confused = !!agencyLost(e, 'confused');
+    const castDone = (ab) => {
+      commitCast(e, ab);
+      emit();
+      // An attack it is owed (a killing blow with Follow-through): once more,
+      // from where it stands.
+      if (e.extraAttacks > 0 && e.hp > 0 && !sb.over) { e.extraAttacks = 0; wait(() => aiTurn(e, true), 550); return; }
+      wait(() => { sb.busy = false; if (!checkEnd()) stepEnemy(); }, 550);
+    };
+    if (confused) {
+      const plan = confusedPlan(e, res);
+      const path = pathTo(res, e.pos, plan.tile) || [e.pos];
+      animateMove(e, path, () => {
+        sArrive(liveSt(), e); flushDeaths(liveSt());
+        emit();
+        wait(() => {
+          if (sb.over) { sb.busy = false; return; }
+          if (e.hp <= 0 || !plan.ab || e.pos !== plan.tile || !canAfford(e, plan.ab)) { wait(() => { sb.busy = false; if (!checkEnd()) stepEnemy(); }, 300); return; }
+          payCost(e, plan.ab);
+          resolveCast(liveSt(), e, plan.ab, [plan.anchor]);
+          castDone(plan.ab);
+        }, 300);
+      });
+      return;
+    }
     // What standing on this tile is worth, in DAMAGE units (the callers scale it).
-    // Only a mind that weighs tags ever asks.
-    // A tag hurts - or helps - in two ways, and until 2026-09-10 only the first
-    // was counted: the tick it does while you stand on it (`dmg` / `heal`), and
-    // whatever its four hooks CAST on whoever is there. A hook names an ordinary
-    // ability, so it can carry a status; a venom pool that only poisons scored a
-    // flat zero and every mind walked straight into it.
-    // A status's aiValue is in the AI's own units, where a point of damage is 10,
-    // so it is divided back into damage units to sit beside the tick.
+    // Only a mind that weighs tags ever asks: the tick it does while you stand
+    // on it (`dmg` / `heal`), and whatever its hooks CAST on whoever is there.
     const tagHarm = (k) => {
       const t = sb.tags[k];
       if (!t || t.hp > 0) return 0;
       let n = (t.dmg || 0) - (t.heal || 0);
       for (const hook of ['onPeriodic', 'onPickup', 'onExpire', 'onDestroy']) {
         const ab = t[hook] ? abById(t[hook]) : null;
-        if (!ab) continue;
-        n += damageTotal(ab.damage) - (ab.heal || 0);
-        // Harm (a status that is bad to carry) is one more reason to keep off this
-        // tile, the same sign the tick damage already has. A boon tile comes out
-        // negative and the minds that can read tiles will step onto it.
-        if (ab.statusEffect) n += statusHarm(ab.statusEffect) / 10;
+        if (ab) n += abilityHarm(ab);
       }
       return n;
     };
+    // Whose side a unit is on, in this creature's eyes.
+    const allyLike = (u) => u.isEnemy || (friend && u.uid === friend.uid);
     let best = null;
     for (const abId of e.abilityIds) {
       const ab = abFor(e, abId); if (!ab) continue;
-      // What counts as an ability worth thinking about. `ab.statusEffect` is on this list
-      // since 2026-09-05: without it a pure status ability (Guard, or anything a
-      // designer invents in the status table) was thrown away before it was ever
-      // scored, so enemies carrying Guard never once used it.
-      if (!(hasDamage(ab.damage) || ab.heal > 0 || ab.statusEffect || ab.pushZone.length || ab.tagId || ab.hZone.length)) continue;
-      // Nor one it cannot pay for - otherwise the enemy picks it, and the cast
-      // is refused at the last moment leaving the creature standing there.
+      // Nothing to think about without an effect; nor one it cannot pay for -
+      // otherwise the enemy picks it and the cast is refused at the last moment.
+      if (!(ab.effects && ab.effects.length)) continue;
       if (!canAfford(e, ab)) continue;
-      // A move cost is paid out of the same points the walk uses, so a tile that
-      // takes the whole budget to reach leaves nothing to cast with.
-      const moveCost = costOf(ab).move;
+      // A move cost is paid out of the same points the walk uses.
+      const moveCost = costOf(e, ab).move;
+      const dsh = dashOf(ab);
       for (const startK of Object.keys(res.d)) {
         if (startK !== e.pos && !canStop(res, startK)) continue;
         if (moveCost > 0 && (res.d[startK] || 0) + moveCost > moveBudget(e)) continue;
         if (ab.castAny && startK !== e.pos) continue;
         const tlist = ab.castAny ? activeTiles() : ab.castZone.map((off) => addK(startK, off));
+        const walk = pathTo(res, e.pos, startK);
+        const steps = walk ? walk.length - 1 : 0;
         for (const t of tlist) {
           if (!inMap(t)) continue;
-          if (ab.moveToTarget && t !== startK && !dashAimOk({ pos: startK, uid: e.uid }, t)) continue;
+          if (dsh && t !== startK && !dashAimOk({ pos: startK, uid: e.uid, isEnemy: true }, t, dsh.through === 'allies')) continue;
           const st = simSt(blind);
           const se = st.units.find((u) => u.uid === e.uid);
-          se.pos = startK;
-          resolveCast(st, se, ab, t);
-          // (The tile the caster CHOOSES TO STAND on is weighed too, but not here:
-          // the loop below walks every unit, the caster among them, and an enemy
-          // standing on harmful ground has that ground subtracted from the score
-          // like any other. Adding it here as well double-counted it.)
+          se.pos = startK; se.steps = steps;
+          resolveCast(st, se, ab, [t]);
           let score = 0;
+          let touchedMust = false;
           for (const u of st.units) {
             const d = st.rec.dmg[u.uid] || 0;
             const was = live.get(u.uid);
-            // ----- statuses -------------------------------------------------
-            // A mind that READS statuses uses the table's own aiValue (as harm) and weighs
-            // the target: a blessing is worth most on the ally that is about to
-            // need it, a curse is wasted on someone already carrying it or already
-            // nearly dead. A mind that cannot read them still knows friend from
-            // foe - it applies them at a flat worth, to whoever it can reach.
-            // `sv` ends up POSITIVE when the cast made this unit worse off. The
-            // score below then adds it for a party unit and subtracts it for an ally,
-            // so one number covers curses, blessings, friend and foe.
+            if (must && u.uid === must.uid && (d || st.rec.applied[u.uid] || st.rec.moved[u.uid])) touchedMust = true;
+            // ----- statuses: a mind that READS them uses the table's aiValue (as
+            // harm) and weighs the target; one that cannot still knows friend
+            // from foe and applies them at a flat worth.
             let sv = 0;
-            for (const [id, amt] of Object.entries(st.rec.applied[u.uid] || {})) {
+            for (const id of Object.keys(st.rec.applied[u.uid] || {})) {
               const v = statusHarm(id);           // <0 = a good thing to carry
               if (!mind.statuses) { sv += (v < 0 ? -1 : 1) * flat; continue; }
-              const already = was && was.status && was.status[id] ? 0.15 : 1;
+              const already = was && statusHas(was, id) ? 0.15 : 1;
               sv += v * already * statusNeed(u, was, v);
             }
-            // A blow that only pops a shield is still a blow worth landing, whether
-            // or not the creature understands what it broke. Without this, anything
-            // dimmer than S would refuse to attack a shielded unit at all - the very
-            // deadlock this AI was fixed for.
-            for (const [id, amt] of Object.entries(st.rec.stripped[u.uid] || {})) {
+            for (const id of Object.keys(st.rec.stripped[u.uid] || {})) {
               const v = statusHarm(id);
               sv += mind.statuses ? -v : (v < 0 ? 1 : -1) * flat;
             }
             // ----- injuries: finishing the wounded rather than spreading damage --
-            const killBonus = mind.injuries ? (u.isEnemy ? 40 : 45) : 0;
+            const killBonus = mind.injuries ? (allyLike(u) ? 40 : 45) : 0;
             const focus = mind.injuries && was && was.maxHp
               ? d * 5 * Math.max(0, 1 - Math.max(0, was.hp) / was.maxHp) : 0;
             // ----- tile tags: a fire is a place to shove someone into, and a place
@@ -1530,9 +1919,13 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
             // ----- DOWN BUT NOT OUT: getting a downed body back up is worth what
             // putting it down was (the heal it took already counts through d).
             const revive = st.rec.revived[u.uid] ? (killBonus || 20) : 0;
-            if (!u.isEnemy) score += d * 10 + (st.rec.killed[u.uid] ? killBonus : 0) + sv + focus + harm - revive;
+            if (!allyLike(u)) score += d * 10 + (st.rec.killed[u.uid] ? killBonus : 0) + sv + focus + harm - revive;
             else score -= d * 9 + (st.rec.killed[u.uid] ? killBonus : 0) + sv + harm - revive;
           }
+          // The directives: a Taunt makes any cast that misses its source
+          // worthless; a Fear makes standing next to its source a bad idea.
+          if (must && !touchedMust) score -= 1000;
+          if (avoid && hexDist(startK, avoid.pos) <= 1) score -= 60;
           if (score > 0 && (!best || score > best.score || (score === best.score && res.d[startK] < best.cost)))
             best = { ab, startK, t, score, cost: res.d[startK] };
         }
@@ -1561,31 +1954,28 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
             return;
           }
           payCost(e, best.ab);
-          resolveCast(liveSt(), e, best.ab, best.t);
-          emit();
-          wait(() => { sb.busy = false; if (!checkEnd()) stepEnemy(); }, 550);
+          resolveCast(liveSt(), e, best.ab, [best.t]);
+          castDone(best.ab);
         }, 300);
       });
       return;
     }
-    const players = alive(false);
+    if (stay) { wait(() => { sb.busy = false; if (!checkEnd()) stepEnemy(); }, 300); return; }
+    const players = alive(false).filter((p) => !(friend && p.uid === friend.uid));
     if (players.length) {
-      const fld = approachField(e);
+      const fld = approachField(e, must ? [must] : players);
       let bestK = e.pos, bs = 1e9;
       for (const k of Object.keys(res.d)) {
         if (k !== e.pos && !canStop(res, k)) continue;
         const td = fld[k] !== undefined ? fld[k] : 1000 + Math.min(...players.map((p) => hexDist(k, p.pos)));
-        // Nothing worth casting, so it walks. Closing the distance comes first for
-        // every creature; what it does with the tiles that are equally close is
-        // where the mind shows. One that weighs HEIGHT takes the higher of them, so
-        // it arrives with the high ground already won; one that weighs TAGS will not
-        // stop in a fire to save a step. A dim one takes the first tile it finds.
-        // Fire is counted as EXTRA DISTANCE - a tile that burns for 2 is worth
-        // walking two tiles further to avoid - while height only breaks ties
-        // between tiles that are equally close, so nobody climbs away from the fight.
+        // Nothing worth casting, so it walks. Closing the distance comes first;
+        // what it does with the tiles that are equally close is where the mind
+        // shows (height, tags). A feared unit counts a tile next to its
+        // tormentor as three tiles further.
         const burn = mind.tags ? tagHarm(k) : 0;
         const climb = mind.elevation ? -sbH(k) : 0;
-        const sc = (td + burn) * 100 + climb * 10 + res.d[k];
+        const dread = avoid && hexDist(k, avoid.pos) <= 1 ? 3 : 0;
+        const sc = (td + burn + dread) * 100 + climb * 10 + res.d[k];
         if (sc < bs) { bs = sc; bestK = k; }
       }
       const path = pathTo(res, e.pos, bestK) || [e.pos];
@@ -1629,7 +2019,8 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
         sb.busy = true;
         sb.selAb = null; sb.aimMap = null;
         payCost(c, ab);
-        resolveCast(liveSt(), c, ab, target);
+        resolveCast(liveSt(), c, ab, [target]);
+        commitCast(c, ab);
         emit();
         wait(() => {
           sb.busy = false;
@@ -1645,12 +2036,8 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       const res = sb.reach ?? reach(c, c.startPos);
       if (k !== c.pos && canStop(res, k)) {
         // RANGE is measured from the round's starting tile (res), but the walk
-        // itself goes from where the unit stands NOW: a second move no longer
-        // snaps the unit back to its start and replays the whole route from
-        // there (until 2026-09-26 it did). Any route will do for the animation
-        // - the price is still read off startPos by walked() - so the shortest
-        // one from here is taken, falling back to the start's route only if
-        // nothing connects (it always should: both reach the same tile).
+        // itself goes from where the unit stands NOW: the shortest route from
+        // here, falling back to the start's route only if nothing connects.
         if (!pathTo(res, c.startPos, k)) return;
         const here = reach(c, c.pos, Infinity);
         const path = pathTo(here, c.pos, k) || pathTo(res, c.startPos, k);
@@ -1684,7 +2071,8 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     emit();
   }
   // Ends the WHOLE party's turn at once. With aim locks on, this is also the
-  // moment every locked ability fires.
+  // moment every locked ability fires - and, when a killing blow earned
+  // someone another attack, the moment the phase re-opens for them alone.
   function endTurn() {
     if (sb.phase !== 'player' || sb.busy || sb.over) return;
     sb.activeUid = null; sb.selAb = null; sb.aimMap = null; sb.reach = null;
@@ -1696,6 +2084,16 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       emit();
       fireLocks((fired) => {
         for (const u of sb.units) if (!u.isEnemy && u.hp > 0) u.done = true;
+        // EXTRA ATTACKS: the units owed one get their turn back - no walking,
+        // just an aim - and the phase waits for the next End turn.
+        const owed = sb.units.filter((u) => !u.isEnemy && u.hp > 0 && u.extraAttacks > 0 && !agencyLost(u, 'stunned') && !agencyLost(u, 'confused'));
+        if (owed.length && !sb.over) {
+          for (const u of owed) { u.extraAttacks = 0; u.done = false; u.moveLocked = true; u.lock = null; }
+          sb.busy = false; sb.firing = false;
+          blog(owed.map((u) => u.name).join(', ') + ' may attack again');
+          select(owed[0]);
+          return;
+        }
         emit();
         // A beat so the last blow is seen landing before the enemy moves.
         wait(() => { sb.busy = false; sb.firing = false; if (checkEnd()) return; startEnemyPhase(); }, fired ? 500 : 0);
@@ -1708,47 +2106,55 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   }
 
   // ----- AIM LOCKS (config.combat.lockedAim) ---------------------------------
-  // OVERLAP BONUS (config.combat.stack.bonusPerOverlap, since 2026-09-22 -
-  // replaces the old x2 / x3 multipliers; ORDERED since 2026-09-22 too): an
-  // ability adds bonus x (the number of damaging abilities that hit the hex
-  // BEFORE it in the volley) to its BASE damage there. The first blow on a hex
-  // gets nothing, the second +1, the third +2. The volley's `st.overlap` ledger
-  // ({ tile -> hits so far }) is what resolveCast reads and writes.
+  // OVERLAP BONUS (config.combat.stack.bonusPerOverlap): an ability adds
+  // bonus x (what the damaging abilities that hit the hex BEFORE it in the
+  // volley granted - 1 each, more with Synergy / overlapGrant) to its BASE
+  // damage there. The volley's `st.overlap` ledger ({ tile -> grants so far })
+  // is what the damage effect reads and writes.
   const overlapBonus = (prior) => Math.max(0, prior) * (CFG.stack?.bonusPerOverlap ?? 1);
-  // The tiles a cast from `fromK` aimed at `anchor` would cover with its dmgZone.
-  function zoneTiles(ab, fromK, anchor) {
-    const rk = abRotFor(ab, fromK, anchor);
+  // The tiles a cast from `fromK` aimed at `anchors` would cover with its hits.
+  function zoneTiles(ab, fromK, anchors) {
+    const list = Array.isArray(anchors) ? anchors : [anchors];
     const out = [];
-    for (const off of ab.dmgZone) {
-      const dt = addK(anchor, rotOff([off[0], off[1]], rk));
-      if (tilePass(dt) && !out.includes(dt)) out.push(dt);
+    let rk = 0;
+    for (const anchor of list) {
+      rk = abRotFor(ab, fromK, anchor);
+      for (const e of hitEffects(ab)) for (const off of e.zone) {
+        const dt = addK(anchor, rotOff([off[0], off[1]], rk));
+        if (tilePass(dt) && !out.includes(dt)) out.push(dt);
+      }
     }
     return { rk, tiles: out };
   }
-  // Lock a unit's aim. Re-aiming replaces the lock. The unit STAYS selected:
-  // the player picks the next one themselves (until 2026-09-26 selection jumped
-  // on to the next unit that had not aimed yet).
+  // Lock a unit's aim. An ability with several AIMS collects one anchor per
+  // click until it has them all (clicking a tile twice takes it back out);
+  // re-aiming a complete lock starts a fresh one. The unit STAYS selected.
   function lockAim(c, ab, anchor) {
-    const { rk, tiles } = zoneTiles(ab, c.pos, anchor);
-    c.lock = { abId: sb.selAb, abName: ab.name, icon: ab.icon, anchor, rk, tiles, damage: damageTotal(ab.damage) };
-    sb.selAb = null; sb.aimMap = null;
-    floater(anchor, '🔒 ' + ab.name, '#ffd166');
-    blog(c.name + ' locks ' + ab.name);
+    const aims = Math.max(1, ab.aims || 1);
+    let anchors;
+    if (c.lock && c.lock.abId === sb.selAb && c.lock.anchors.length < aims) {
+      anchors = c.lock.anchors.includes(anchor) ? c.lock.anchors.filter((a) => a !== anchor) : [...c.lock.anchors, anchor];
+      if (!anchors.length) { c.lock = null; refreshReach(); emit(); return; }
+    } else anchors = [anchor];
+    const { rk, tiles } = zoneTiles(ab, c.pos, anchors);
+    c.lock = { abId: sb.selAb, abName: ab.name, icon: ab.icon, anchors, anchor: anchors[0], rk, tiles, aims };
+    const complete = anchors.length >= aims;
+    if (complete) { sb.selAb = null; sb.aimMap = null; }
+    floater(anchor, '🔒 ' + ab.name + (aims > 1 ? ` ${anchors.length}/${aims}` : ''), '#ffd166');
+    blog(c.name + ' locks ' + ab.name + (aims > 1 ? ` (${anchors.length} of ${aims} aims)` : ''));
     refreshReach(); emit();
   }
   // RESET PARTY (the party panel's button): every aim lock taken back and every
   // unit put back on the tile it started the round on - the whole player phase
-  // laid out so far, undone in one go. Only what the phase can take back:
-  // nothing has fired and nothing has been paid yet (costs are paid when the
-  // volley fires), so a reset is exact. (Something a walk set off on the way -
-  // a trap that bit, a pickup - stays done, as it does when a walk is re-aimed.)
+  // laid out so far, undone in one go. Nothing has fired and nothing has been
+  // paid yet, so a reset is exact.
   function resetParty() {
     if (sb.over || sb.busy || sb.phase !== 'player') return false;
     sb.selAb = null; sb.aimMap = null;
     for (const u of sb.units) {
       if (u.isEnemy || u.hp <= 0) continue;
       u.lock = null;
-      if (!u.done && !u.moveLocked && u.startPos && u.pos !== u.startPos) u.pos = u.startPos;
+      if (!u.done && !u.moveLocked && u.startPos && u.pos !== u.startPos) { u.pos = u.startPos; u.steps = 0; }
     }
     blog('The party resets its turn');
     refreshReach();
@@ -1756,8 +2162,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     return true;
   }
   // The party panel's card pressed: select that unit, as a click on its body
-  // in the arena would. Any ability being aimed is put down first (on the
-  // board, a click with an ability up would aim it instead).
+  // in the arena would. Any ability being aimed is put down first.
   function selectUnit(uid) {
     if (sb.over || sb.busy || sb.phase !== 'player') return false;
     const u = sb.units.find((x) => x.uid === uid && !x.isEnemy && x.hp > 0 && !x.done);
@@ -1778,7 +2183,6 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     return out;
   }
   // The panel's drag-and-drop lands here: a new firing order (party uids).
-  // Only during the player phase, only for the party; unknown uids are dropped.
   function setFireOrder(uids) {
     if (sb.over || sb.phase !== 'player' || sb.busy) return false;
     const valid = new Set(sb.units.filter((u) => !u.isEnemy).map((u) => u.uid));
@@ -1790,10 +2194,28 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     return true;
   }
   sb.fireOrder = orderedParty().map((u) => u.uid);
+  // A CONFUSED party unit is played by the engine the moment the volley goes:
+  // it walks somewhere at random and locks a random ability at a random unit,
+  // and then fires in its place in the order like everyone else.
+  function confuseParty() {
+    for (const u of sb.units) {
+      if (u.isEnemy || u.hp <= 0 || !agencyLost(u, 'confused') || agencyLost(u, 'stunned')) continue;
+      const plan = confusedPlan(u, reach(u, u.startPos));
+      if (plan.tile !== u.pos) { u.pos = plan.tile; u.steps = stepsFrom(u); sArrive(liveSt(), u); flushDeaths(liveSt()); fireMoment(liveSt(), u, 'moved'); }
+      u.lock = null;
+      if (plan.ab && u.hp > 0) {
+        const { rk, tiles } = zoneTiles(plan.ab, u.pos, [plan.anchor]);
+        u.lock = { abId: plan.ab.id, abName: plan.ab.name, icon: plan.ab.icon, anchors: [plan.anchor], anchor: plan.anchor, rk, tiles, aims: 1 };
+        floater(u.pos, '❓ ' + plan.ab.name, '#c9a8ff');
+        blog(u.name + ' is confused and lashes out at random');
+      }
+    }
+  }
   // End turn: every lock fires, one after another in sb.fireOrder with
   // combat.volleyStepMs between them; a later blow on a hex an earlier one hit
   // gets the overlap bonus (st.overlap). `done(fired)` runs after the last one.
   function fireLocks(done) {
+    confuseParty();
     const locks = orderedParty().filter((u) => u.hp > 0 && u.lock);
     const st = liveSt();
     st.overlap = {};
@@ -1805,8 +2227,9 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       done && done(fired);
     };
     const step = () => {
-      // Only an OUTSIDE event ends a fight mid-volley now (a debug win/loss,
-      // say): this volley's own kills never do, on purpose - see below.
+      // Only an OUTSIDE event ends a fight mid-volley (a debug win/loss, say):
+      // this volley's own kills never do - every unit that locked an ability
+      // this turn still gets to fire, in fireOrder, before checkEnd() is asked.
       if (sb.over) { finish(); return; }
       let cast = false;
       while (i < locks.length && !cast) {
@@ -1817,62 +2240,41 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
         if (!canAfford(u, ab)) { floater(u.pos, '✕ ' + ab.name, '#9aa7bd'); blog(u.name + ' cannot pay for ' + ab.name); continue; }
         sb.activeUid = u.uid;   // the HUD and the arena show whose blow this is
         payCost(u, ab);
-        resolveCast(st, u, ab, lock.anchor);
+        resolveCast(st, u, ab, lock.anchors);
+        commitCast(u, ab);
         flushDeaths(st);
         fired++; cast = true;
       }
       if (!cast) { sb.activeUid = null; finish(); return; }
       emit();
-      // The fight may already be decided (the last enemy down mid-volley), but
-      // we do NOT check for it here and stop: every unit that locked an
-      // ability this turn still gets to fire, in fireOrder, before checkEnd()
-      // is asked - see fireLocks's caller (endTurn), which asks it once the
-      // whole volley (and its `done` callback) has finished. Checking here
-      // used to cut the volley short the instant the last enemy died,
-      // silently swallowing any ally's still-queued heal or buff that was due
-      // to fire later in the same volley.
       wait(step, i < locks.length ? (CFG.volleyStepMs ?? 450) : 0);
     };
     step();
   }
-  // How hard `u`'s ability would hit tile `dt` right now, before stacking: the
-  // same base + height + crit arithmetic resolveCast applies. For the preview.
-  // (Per HIT - the ability's `times` and the overlap bonus come on top.)
-  function nominalDamage(u, ab, dt) {
-    const d = parseDamage(ab.damage);
-    if (!(d.base > 0)) return 0;
-    let dmg = Math.max(0, d.base + dmgMod(u));
+  // How hard `u`'s main hit would land on tile `dt` right now, before
+  // stacking: the same base + height + Strong/Weak arithmetic the damage
+  // effect applies. For the preview. (Per HIT - `times` and the overlap bonus
+  // come on top.) Returns { dmg, times }.
+  function nominalDamage(u, ab, dt, anchor = dt) {
+    const e = damageEffects(ab)[0];
+    if (!e) return { dmg: 0, times: 0 };
+    const ctx = castCtx(liveSt(), u, ab, [anchor]);
     const v = unitAt(dt);
+    const tctx = v ? ctx.withTarget(v) : ctx;
+    let dmg = qty(e.amount, tctx) + dmgMod(u) + statusSum(u, 'damageDealt') + qty(e.lifesteal, tctx) + statusSum(u, 'lifesteal');
     if (v) {
       const hd = sbH(u.pos) - sbH(dt);
       if (hd >= 2 && CFG.highBonus > 0) dmg += CFG.highBonus;
       else if (hd <= -2 && CFG.lowPenalty > 0) dmg = Math.max(0, dmg - CFG.lowPenalty);
-      const mul = statusMul(u, 'damageDealt');
-      if (mul !== 1) dmg = Math.max(0, Math.round(dmg * mul));
     }
-    return dmg;
+    const mul = qty(e.multiplier, tctx);
+    if (mul !== 1) dmg = Math.round(dmg * mul);
+    return { dmg: Math.max(0, dmg), times: Math.max(1, Math.round(qty(e.times, tctx))) };
   }
-  // THE DAMAGE PRE-CALCULATION. For every tile the standing locks cover -
-  // plus the aim under the cursor (hoverKey), which stands in for the hovering
-  // unit's own lock - what would happen when End turn fires:
-  //   { n, covers, bonus, parts: [{ uid, name, abName, dmg, times, bonus, total }],
-  //     raw, total, dealt, over,
-  //     target: { kind: 'party'|'enemy'|'barrier'|'hazard', name, hp, maxHp, ... } | null,
-  //     kind, pending, note? }
-  // `parts` and `total` are the arithmetic (2x4+(5+1) = 14: a part's `bonus`
-  // is the ordered overlap bonus, from the damaging parts BEFORE it on the
-  // tile); `dealt` is what the target actually loses, read back from playing
-  // every cast out on a copy of the board (shields, shoves and crashes
-  // included); `over` is the part of the total past the target's hp. The rules
-  // may decorate an entry (`note`). Since 2026-09-22 nothing in the arena draws
-  // these (the overhead cards carry the result, see previewState); the tests
-  // and the rules still read them.
   // The volley as it would go NOW - the standing locks plus the aim under the
   // cursor (which stands in for the hovering unit's own lock) - played out on
   // a copy of the board in firing order. Shared by previewTotals / previewMoves
-  // / previewState. `before` is the board as the SELECTED unit finds it: the
-  // sim's units the moment its own cast (or, without one, the first cast after
-  // its place in the order) is about to resolve.
+  // / previewState. `before` is the board as the SELECTED unit finds it.
   function simulateVolley(hoverKey = null) {
     if (!CFG.lockedAim) return null;
     const c = curP();
@@ -1884,24 +2286,28 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       if (u.hp <= 0) continue;
       if (hovering && u.uid === c.uid) {
         const ab = abFor(c, sb.selAb);
-        if (ab) casts.push({ u: c, ab, anchor: sb.aimMap[hoverKey], pending: true });
+        // A partial multi-aim lock plus the hovered tile.
+        const prior = c.lock && c.lock.abId === sb.selAb && c.lock.anchors.length < (ab?.aims || 1) ? c.lock.anchors : [];
+        if (ab) casts.push({ u: c, ab, anchors: [...prior.filter((a) => a !== sb.aimMap[hoverKey]), sb.aimMap[hoverKey]], pending: true });
         continue;
       }
       if (!u.lock) continue;
       const ab = abFor(u, u.lock.abId);
-      if (ab) casts.push({ u, ab, anchor: u.lock.anchor, pending: false });
+      if (ab) casts.push({ u, ab, anchors: u.lock.anchors, pending: false });
     }
     if (!casts.length) return null;
     const per = CFG.stack?.bonusPerOverlap ?? 1;
     const tiles = new Map();
     for (const cst of casts) {
-      const { tiles: zone } = zoneTiles(cst.ab, cst.u.pos, cst.anchor);
+      const { tiles: zone } = zoneTiles(cst.ab, cst.u.pos, cst.anchors);
+      const damaging = damageEffects(cst.ab).length > 0;
       for (const dt of zone) {
         const e = tiles.get(dt) ?? { parts: [], n: 0, covers: 0, pending: false };
         e.covers++;   // every ability covering the tile, damaging or not
-        if (hasDamage(cst.ab.damage)) {
+        if (damaging) {
           // In cast order, so e.n is how many damaging abilities hit the hex before this one.
-          e.parts.push({ uid: cst.u.uid, name: cst.u.name, abName: cst.ab.name, dmg: nominalDamage(cst.u, cst.ab, dt), times: parseDamage(cst.ab.damage).times, bonus: e.n * per });
+          const nd = nominalDamage(cst.u, cst.ab, dt, cst.anchors[0]);
+          e.parts.push({ uid: cst.u.uid, name: cst.u.name, abName: cst.ab.name, dmg: nd.dmg, times: nd.times, bonus: e.n * per });
           e.n++;
         }
         e.pending = e.pending || cst.pending;
@@ -1917,19 +2323,15 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       if (!before && cIdx >= 0 && order.indexOf(cst.u) >= cIdx) before = snapshot();
       const se = st.units.find((x) => x.uid === cst.u.uid);
       if (!se || se.hp <= 0) continue;
-      resolveCast(st, se, cst.ab, cst.anchor);
+      resolveCast(st, se, cst.ab, cst.anchors);
       flushDeaths(st);
     }
     if (!before) before = snapshot();   // the selected unit fires last, or nobody is selected
     return { casts, tiles, st, before };
   }
   // THE BOARD AS THE SELECTED UNIT SEES IT, and as the volley leaves it - what
-  // the overhead cards show while the player aims (config.combat.lockedAim):
-  //   { before: { uid -> { pos, hp } },            after the casts before the selected unit's
-  //     after:  { uid -> { pos, hp, dead } } }     after the whole volley
-  // or null when nothing is locked or hovered. A card hangs over its unit's
-  // `before` tile (where the unit will be when the selected unit acts) and
-  // reads the unit's hp now -> `after`; a unit dead after the volley greys out.
+  // the overhead cards show while the player aims:
+  //   { before: { uid -> { pos, hp } }, after: { uid -> { pos, hp, dead } } }
   function previewState(hoverKey = null) {
     const sim = simulateVolley(hoverKey);
     if (!sim) return null;
@@ -1937,14 +2339,15 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     for (const x of [...sim.st.units, ...sim.st.objects]) after[x.uid] = { pos: x.pos, hp: x.hp, dead: x.hp <= 0 };
     return { before: sim.before, after };
   }
+  // THE DAMAGE PRE-CALCULATION, per tile the standing locks cover (plus the
+  // aim under the cursor): { n, covers, bonus, parts, raw, total, dealt,
+  // over, target, kind, pending, note? }. The tests and the rules read it.
   function previewTotals(hoverKey = null) {
     const out = new Map();
     const sim = simulateVolley(hoverKey);
     if (!sim) return out;
     const { tiles, st } = sim;
     for (const [k, e] of tiles) {
-      // Each damaging part's total, (base + its ordered bonus) x times, and the
-      // tile's: `bonus` is the extra damage the overlap adds on this tile in all.
       for (const p of e.parts) p.total = (p.dmg + p.bonus) * p.times;
       const bonus = e.parts.reduce((s, p) => s + p.bonus * p.times, 0);
       const raw = e.parts.reduce((s, p) => s + p.dmg * p.times, 0);
@@ -1957,7 +2360,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
         const su = st.units.find((x) => x.uid === unit.uid);
         dealt = Math.max(0, unit.hp - (su ? su.hp : 0));
         over = Math.max(0, total - unit.hp);
-        target = { kind: unit.isEnemy ? 'enemy' : 'party', name: unit.name, uid: unit.uid, hp: unit.hp, maxHp: unit.maxHp, blocked: !!statusWith(unit, 'blocks') };
+        target = { kind: unit.isEnemy ? 'enemy' : 'party', name: unit.name, uid: unit.uid, hp: unit.hp, maxHp: unit.maxHp, blocked: statusSum(unit, 'damageTaken') < 0 };
       } else if (obj) {
         const so = st.objects.find((x) => x.uid === obj.uid);
         dealt = Math.max(0, obj.hp - (so ? so.hp : 0));
@@ -1976,12 +2379,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     return out;
   }
   // EVERYTHING THAT ENDS UP SOMEWHERE ELSE when the volley fires: every unit
-  // and every barrier whose tile changes, or that dies, in the play-out - a
-  // shove, a crash, a fall, a crush chain, a charge, a corpse pushed along, a
-  // drop into the void: whatever the rules do, this reads the RESULT, so it
-  // is right for any way an ability can move something.
-  //   [{ kind: 'unit', uid, name, icon, isEnemy, from, to, dead, voided },
-  //    { kind: 'barrier', tid, name, icon, from, to, destroyed }]
+  // and every barrier whose tile changes, or that dies, in the play-out.
   function previewMoves(hoverKey = null) {
     const sim = simulateVolley(hoverKey);
     if (!sim) return [];
@@ -1995,10 +2393,6 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
       if (su.pos === u.pos && !dead) continue;
       out.push({ kind: 'unit', uid: u.uid, name: u.name, icon: u.icon ?? null, isEnemy: !!u.isEnemy, from: u.pos, to: su.pos, dead, voided: !!(st.rec && st.rec.voided[u.uid]) });
     }
-    // Objects that MOVE too (a shoved barrel): the arena draws them as it
-    // draws a moved barrier - an icon ghost, a burst where it breaks. An
-    // object that only dies where it stands is not listed: what it loses is
-    // its own drawing's to show (the Hack's discs go dark), see previewState.
     for (const o of sb.objects) {
       if (!o.alive) continue;
       const so = st.objects.find((x) => x.uid === o.uid);
@@ -2064,11 +2458,16 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     abilityById: abById,
     aimPreview,
     abilityFor: abFor,   // (unit, id) - the unit's UPGRADED def where it has one
-    // What an ability costs, and whether this unit can pay right now. The HUD
-    // uses both: the cost badge on the button, and '' / 'hp' / 'move' /
-    // 'supplies' to grey it out and say which resource is short.
+    // What an ability costs THIS unit right now (its cost quantities read
+    // against the unit), and whether it can pay. The HUD uses both: the cost
+    // badge on the button, and '' / 'hp' / 'move' / 'supplies' / 'disarmed' /
+    // 'forbidden' to grey it out and say why.
     costOf,
     shortOf,
+    // A quantity of this unit's ability, as it stands right now (the HUD's
+    // numbers move with the facts: stacks, tiles walked, the target hovered).
+    evalFor: (u, ab, q, anchor = null) => qty(q, castCtx(liveSt(), u, ab, anchor ? [anchor] : null)),
+    stacksOf: (u) => ({ stacks: u.stacks || 0, max: stackMaxOf(u), gen: stackGenOf(u) }),
     moveBudget,
     moveLeft,            // movement points still unspent this activation (walk included)
     supplies: () => (supplies ? supplies.get() : null),   // the run's supplies, for the battle bar
@@ -2081,7 +2480,6 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     previewState,
     lockedUnits: () => sb.units.filter((u) => !u.isEnemy && u.hp > 0 && u.lock),
     overlapBonus,        // (priorHits) -> the extra base damage on a hex hit that many times already
-    damageOf: (ab) => parseDamage(ab && ab.damage),   // { base, times } of an ability's damage
     // The firing order (party uids) and the party in that order.
     setFireOrder,
     fireOrder: () => sb.fireOrder.slice(),

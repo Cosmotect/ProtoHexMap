@@ -9,7 +9,8 @@
 
 import { t, LANGUAGES, getLanguage, setLanguage } from './i18n.js';
 import { SHAPE_NAMES } from './local/localview.js';
-import { ABILITIES, statusKnobs } from './config/abilities.js';
+import { ABILITIES } from './config/abilities.js';
+import { STATUS_VERBS } from './config/statuses.js';
 // The intellect classes moved next to the bestiary that hands one to every row
 // (config/entities.js, 2026-09-10; that file itself renamed from units.js on
 // 2026-09-12).
@@ -43,9 +44,9 @@ const BESTIARY_COLS = [
   // The creature's INTELLECT CLASS: which facts it can weigh on its turn.
   { key: 'intellect', kind: 'select', w: 56, options: () => Object.keys(INTELLECT) },
   { key: 'abilities', kind: 'idlist', w: 130, valid: () => Object.keys(ABILITIES) },
-  // No `triggers` column: a trigger is an object ({ statusEffect, when, ... }, see
-  // TRIGGERS in config/abilities.js) and this table only edits plain lists of
-  // ids. A bestiary row's triggers are written in the file.
+  // No `triggers` column: a trigger is an effect with a `when` (see
+  // src/local/battle/rules.js) and this table only edits plain lists of ids.
+  // A bestiary row's triggers are written in the file.
 ];
 // A brand new creature: deliberately weak and plain, so an unfinished row that
 // finds its way into a fight cannot wreck a run.
@@ -677,15 +678,17 @@ export function createSettings({ config, defaults, onChange, getUiScale, getUiSc
   function renderMatrix(title, obj, def, path) {
     const rowNames = Object.keys(obj);
     const cols = [];
+    // Lists and nested objects (a status row's agency, immune, ai, triggers)
+    // are not editable in a cell: they stay in the config file.
+    const scalar = (v) => v === null || v === undefined || typeof v !== 'object';
     for (const rn of rowNames) {
-      for (const k of Object.keys(obj[rn])) if (!SKIP_KEYS.has(k) && !cols.includes(k)) cols.push(k);
+      for (const k of Object.keys(obj[rn])) if (!SKIP_KEYS.has(k) && !cols.includes(k) && scalar(obj[rn][k])) cols.push(k);
     }
     const head = `<tr><th></th>${cols.map((c) => `<th>${c}</th>`).join('')}</tr>`;
-    // Hovering a status names the numeric fields it uses - the ones a statusEffectOverride
-    // lines up with (config/abilities.js). Editing the row can change that list,
-    // so it is worked out here rather than written down anywhere.
+    // Hovering a status names the verbs it uses (config/statuses.js). Editing
+    // the row can change that list, so it is worked out here.
     const rowTip = (rn) => (path === 'statuses'
-      ? `${path}.${rn}  |  statusEffectOverride fields: ${statusKnobs(obj[rn]).join(', ') || 'none in use'}`
+      ? `${path}.${rn}  |  verbs in use: ${STATUS_VERBS.filter((k) => obj[rn][k]).join(', ') || 'none'}`
       : `${path}.${rn}`);
     const body = rowNames.map((rn) => {
       const cells = cols.map((c) => {

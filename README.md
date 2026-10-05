@@ -100,6 +100,7 @@ hex-world-map/
     worldmap-test.mjs   npm run test:worldmap - the world-map rules (forcing, supplies, the end-of-run verdict), headless
     encounter-distribution.mjs  npm run test:encounters - generates hundreds of seeds and checks the encounter distribution
     dbno-test.mjs       npm run test:dbno - down-but-not-out, Reset party and the other turn-flow rules, headless
+    upgrades-test.mjs   npm run test:upgrades - the upgrade / status / stacks vocabulary played out headlessly
     hack-layouts-sheet.mjs  draws ten generated hack boards as an SVG sheet, to eyeball the node islands and mine spread
     make-artifact.mjs   converts the single-file build into a self-contained shareable page
   DESIGN.md    rules, decisions, open questions, roadmap. Read this first.

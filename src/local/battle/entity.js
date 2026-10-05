@@ -44,8 +44,9 @@
 //                              cannot be used; nothing wires this to input
 //                              yet - the hook is the promise.
 // =====================================================================
-import { checkTrigger } from '../../config/abilities.js';
-import { combatStatsFor } from '../../config/entities.js';
+import { checkTrigger } from './rules.js';
+import { STATUSES } from '../../config/statuses.js';
+import { COMBAT_TAGS, combatStatsFor } from '../../config/entities.js';
 
 let nextUid = 0;
 
@@ -101,9 +102,15 @@ export class Unit extends Entity {
     this.init = def.init ?? cs.init ?? 0;
     this.speed = def.speed ?? cs.speed;
     this.flying = !!(def.flying ?? cs.flying);
+    // STACKS: a pool the unit builds each activation (stackGen, capped at
+    // stackMax) and spends through `consume` effects. A party unit's numbers
+    // arrive with its upgrades folded in (resolveUnitStats, src/upgrades.js).
+    this.stackMax = def.stackMax ?? cs.stackMax ?? 0;
+    this.stackGen = def.stackGen ?? cs.stackGen ?? 0;
+    this.stacks = def.stacks ?? 0;
     this.abilityIds = [...(def.abilityIds?.length ? def.abilityIds : cs.abilities)];
     this.abilityDefs = def.abilityDefs ?? null;
-    // TRIGGERS the unit walked in with, as [{ statusEffect, when, statusEffectOverride }]: a party
+    // TRIGGERS the unit walked in with (effects with a `when`, rules.js): a party
     // unit's from triggersFor in src/upgrades.js (already parsed), an enemy's
     // straight off its bestiary row (still as written - parsed here, so the
     // two arrive in one shape). Fixed for this fight: none of the sources can
@@ -111,7 +118,7 @@ export class Unit extends Entity {
     // starts. Each fires at its moment (the engine's fireMoment) and from then
     // on the status sits in `status` below like any other - nothing reads this
     // list for a rule, only for the moments.
-    this.triggers = (def.triggers ?? []).map((e) => checkTrigger(e)).filter(Boolean);
+    this.triggers = (def.triggers ?? []).map((e, i) => checkTrigger(e, `${def.name}.triggers[${i}]`, { statuses: STATUSES, tags: COMBAT_TAGS })).filter(Boolean);
     // The LOCKED aim (the lockedAim flow): { abId, anchor, rk, tiles } or null.
     this.lock = null;
     // The turn's bookkeeping (see the engine's startPlayerPhase / clickTile).
@@ -121,7 +128,16 @@ export class Unit extends Entity {
     // be taken back, so it has no running total to keep. This is the part that
     // cannot be taken back, and it comes off the budget (see moveBudget).
     this.movePaid = 0;
-    this.status = {};
+    // The STATUS INSTANCES it carries: [{ id, amount, turns, source, seen }]
+    // (src/config/statuses.js). The engine's applyStatus / dropStatus write it.
+    this.statuses = [];
+    // Casts of each ability this battle ({ abilityId: n }) - the
+    // `castsThisBattle` fact; and attacks it is still owed this turn
+    // (the extraAttack effect).
+    this.casts = {};
+    this.extraAttacks = 0;
+    // Tiles walked this activation (the `tilesTravelled` fact).
+    this.steps = 0;
     this.summoned = false;
     this.fled = false;
     // DOWN BUT NOT OUT (since 2026-09-26): a unit brought to 0 hp stays on
@@ -155,7 +171,8 @@ export class Unit extends Entity {
   // 'hit' moment fires in the simulation exactly as it would on the real board.
   clone() {
     const c = super.clone();
-    c.status = Object.fromEntries(Object.entries(this.status || {}).map(([id, v]) => [id, { ...v }]));
+    c.statuses = (this.statuses || []).map((v) => ({ ...v }));
+    c.casts = { ...(this.casts || {}) };
     return c;
   }
 }

@@ -6,9 +6,11 @@
 //    config/world.js       map shape, tile types, biomes, generation noise
 //    config/encounters.js  encounter placement, the Stasis, rest / shop / treasure / events, fatigue
 //    config/entities.js    the party, the bestiary, intellect classes, and tile tags
-//    config/abilities.js   the ABILITIES / ABILITY_UPGRADES / STATUSES tables
+//    config/abilities.js   the ABILITIES table (what a cast does, as a list of effects)
+//    config/upgrades.js    the ABILITY_UPGRADES trees (how the party grows)
+//    config/statuses.js    the STATUSES table (what a unit can carry)
 //    config/localmap.js    the arena: combat rules, the local map and its backdrop
-//                           (also wires ABILITY_UPGRADES and STATUSES onto COMBAT_CONFIG)
+//                           (also wires the three tables above onto COMBAT_CONFIG)
 //    config.js (this one)  run rules, world camera, animation, colours, and the glue
 //  The rest of the code always reads CONFIG.<section>, so moving a section between
 //  files never changes any other code.

@@ -1,11 +1,10 @@
 // The HUD: plain HTML elements layered over the 3D canvas.
 // (In Godot terms: a CanvasLayer with Labels and Buttons.)
 import { describeHex, lerpTable } from './game.js';
-import { hasDamage, damageLabel, parseDamage } from './damage.js';
 import { terrainInfo, terrainName, encounterLabel, encounterInfo, tc, tFatigue } from './text.js';
 import { t, tn, hasKey } from './i18n.js';
 import { playFatigueStep, playFatigueClear, clearStaggerMs } from './audio.js';
-import { unitAbilityIds, upgradeInfo, abilityDesc, unlockUpgrade } from './upgrades.js';
+import { unitAbilityIds, upgradeInfo, abilityDesc, unlockUpgrade, abilitySummary } from './upgrades.js';
 import { abilityTreeHtml } from './upgradetree.js';
 import { ABILITIES } from './config/abilities.js';
 import { statusesFor, badgeNumber, statusInfo } from './status.js';
@@ -24,16 +23,24 @@ function statusTipText(hs) {
 // An ability's hover text: its name, what it does, and the numbers that matter.
 // Same source as the party panel and the roster window (the locale tables), so
 // an ability reads the same wherever it is met.
-function abilityTip(id, ab) {
+function abilityTip(id, ab, evalQ) {
   const parts = [abilityName(id)];
   const desc = t(`ability.${id}.desc`);
   if (desc && desc !== `ability.${id}.desc`) parts.push(desc);
-  const nums = [];
-  if (hasDamage(ab.damage)) nums.push(damageText(ab.damage));
-  if (ab.heal > 0) nums.push(t('battle.ui.heal', { n: ab.heal }));
-  if (ab.statusEffect) nums.push(statusInfo(ab.statusEffect).name);
+  const nums = abilityNums(ab, evalQ);
   if (nums.length) parts.push(nums.join(', '));
   return parts.join(' - ');
+}
+// The headline numbers of an ability, as text: "3 damage", "2 damage 2 times",
+// "heals 2", the statuses it applies. `evalQ` reads the quantities - outside a
+// fight only their constant part, in one the live value for this unit.
+function abilityNums(ab, evalQ) {
+  const sm = abilitySummary(ab, evalQ);
+  const out = [];
+  if (sm.damage && sm.damage.amount > 0) out.push(damageText(sm.damage));
+  if (sm.heal > 0) out.push(t('battle.ui.heal', { n: sm.heal }));
+  for (const id of sm.statuses) out.push(statusInfo(id).name);
+  return out;
 }
 
 function abilityName(id) {
@@ -191,8 +198,8 @@ export function createUI(config, handlers) {
   // One chip per resource the cast moves. A NEGATIVE cost grants that resource,
   // so it reads with a + and in the healthy green rather than as a price.
   const COST_ICON = { hp: '❤️', supplies: '📦', move: '👣' };
-  function costChips(ab) {
-    const cost = battleRef?.costOf ? battleRef.costOf(ab) : (ab.cost ?? {});
+  function costChips(ab, unit = null) {
+    const cost = battleRef?.costOf && unit ? battleRef.costOf(unit, ab) : abilitySummary(ab).cost;
     const out = [];
     for (const res of ['hp', 'supplies', 'move']) {
       const n = cost[res] || 0;
@@ -201,8 +208,8 @@ export function createUI(config, handlers) {
     }
     return out.length ? `<span class="ab-costs">${out.join('')}</span>` : '';
   }
-  function costText(ab) {
-    const cost = battleRef?.costOf ? battleRef.costOf(ab) : (ab.cost ?? {});
+  function costText(ab, unit = null) {
+    const cost = battleRef?.costOf && unit ? battleRef.costOf(unit, ab) : abilitySummary(ab).cost;
     const parts = [];
     for (const res of ['hp', 'supplies', 'move']) {
       const n = cost[res] || 0;
@@ -1028,8 +1035,10 @@ export function createUI(config, handlers) {
       // is how a Mend that did cost a supply looked as if it had not.
       const moveLeft = battleRef.moveLeft ? battleRef.moveLeft(c) : null;
       const supplies = battleRef.supplies ? battleRef.supplies() : null;
+      const stk = battleRef.stacksOf ? battleRef.stacksOf(c) : null;
       const pools = [
         moveLeft == null ? '' : `<span class="pool" title="${escapeAttr(t('battle.ui.moveLeft.title'))}">${COST_ICON.move} ${moveLeft}/${battleRef.moveBudget(c)}</span>`,
+        !stk || !(stk.max > 0) ? '' : `<span class="pool" title="${escapeAttr(t('battle.ui.stacks.title', { gen: stk.gen }))}">🔶 ${stk.stacks}/${stk.max}</span>`,
         supplies == null ? '' : `<span class="pool" title="${escapeAttr(t('battle.ui.supplies.title'))}">${COST_ICON.supplies} ${supplies}</span>`,
       ].filter(Boolean).join(' ');
       els.battleActive.innerHTML = `<b>${c.icon ?? ''} ${escapeHtml(tn(c.name))}</b> <span class="hp">${t('battle.ui.hp', { hp: c.hp, max: c.maxHp })}</span> ${pools} <span class="muted">${escapeHtml(hint)}</span>`;
@@ -1039,19 +1048,22 @@ export function createUI(config, handlers) {
         const ab = battleRef.abilityFor(c, id);   // the unit's UPGRADED def
         if (!ab) return '';
         const sel = sb.selAb === id ? 'selected' : c.lock && c.lock.abId === id ? 'locked' : '';
-        const num = hasDamage(ab.damage) ? `⚔${damageLabel(ab.damage)}` : ab.heal > 0 ? `+${ab.heal}` : '';
+        // The numbers as they stand for THIS unit right now (its stacks, its
+        // walk, its statuses all count), so the button moves with the facts.
+        const evalQ = (q) => battleRef.evalFor(c, ab, q);
+        const sm = abilitySummary(ab, evalQ);
+        const num = sm.damage && sm.damage.amount > 0 ? `⚔${sm.damage.amount}${sm.damage.times > 1 ? 'x' + sm.damage.times : ''}` : sm.heal > 0 ? `+${sm.heal}` : '';
         const slot = slots.indexOf(id);
         const key = slot >= 0 && slot < 3 ? ` [${slot + 1}]` : '';
         // What it costs, and whether this unit can pay for it right now. `short`
         // is '' or the id of the resource that falls short, which both greys the
         // button out and tells the player WHICH one is missing.
         const short = battleRef.shortOf ? battleRef.shortOf(c, ab) : '';
-        const costs = costChips(ab);
+        const costs = costChips(ab, c);
         const tip = [
-          `${ab.name}${key}`,
-          hasDamage(ab.damage) ? damageText(ab.damage) : '',
-          ab.heal > 0 ? t('battle.ui.heal', { n: ab.heal }) : '',
-          costText(ab),
+          `${ab.name}${key}${(ab.aims || 1) > 1 ? ` (${ab.aims} aims)` : ''}`,
+          ...abilityNums(ab, evalQ),
+          costText(ab, c),
           short ? t(`battle.cost.short.${short}`) : '',
         ].filter(Boolean).join(' - ');
         const off = sb.busy || !!short;
@@ -1421,10 +1433,9 @@ function hex(n) {
 function escapeHtml(s) {
   return s.replace(/[&<>]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[ch]));
 }
-// "X damage" or "X damage Y times" (src/damage.js notation), for tooltips.
-function damageText(v) {
-  const d = parseDamage(v);
-  return d.times > 1 ? t('battle.ui.dmgTimes', { n: d.base, t: d.times }) : t('battle.ui.dmg', { n: d.base });
+// "X damage" or "X damage Y times", for tooltips.
+function damageText(d) {
+  return d.times > 1 ? t('battle.ui.dmgTimes', { n: d.amount, t: d.times }) : t('battle.ui.dmg', { n: d.amount });
 }
 function escapeAttr(s) {
   return String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));

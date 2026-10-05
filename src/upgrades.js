@@ -1,19 +1,24 @@
 // =====================================================================
-//  ABILITY UPGRADES - the rules layer over the trees in config/abilities.js.
+//  ABILITY UPGRADES - the rules layer over the trees in config/upgrades.js.
 //
 //  A party unit carries `upgrades`: an array of unlocked node refs, each the
 //  string "<abilityId>:<nodeId>". Everything else is derived on demand:
-//    resolveAbility(id, unlocked)  base def + every unlocked node, folded in
+//    ownedNodes(unit, abilityId)   picked nodes + the auto milestones they earned
+//    resolveAbility(id, unlocked)  base def + every owned node, folded in
 //    resolvedAbilitiesFor(unit)    { abilityId: resolved def } for the fight
-//    availableUpgrades(unit)       the unlockable pool (all parents unlocked)
-//    unlockUpgrade(unit, ref)      adds the node (validated)
+//    resolveUnitStats(unit)        speed / flying / stacks with node deltas folded in
+//    triggersFor(unit)             the triggers (passives) the unit is under
+//    availableUpgrades(unit)       the unlockable pool (prerequisites met)
+//    unlockUpgrade(unit, ref)      adds the node (validated); maxHp applies at once
 //
 //  No game state lives here - pure functions over the config tables, so the
 //  same code serves the world map, the combat engine and the UI.
 // =====================================================================
-import { ABILITIES, ABILITY_UPGRADES, STATUSES, checkTrigger } from './config/abilities.js';
-import { addDamage } from './damage.js';
-import { combatStatsFor } from './config/entities.js';
+import { ABILITIES } from './config/abilities.js';
+import { ABILITY_UPGRADES } from './config/upgrades.js';
+import { STATUSES } from './config/statuses.js';
+import { COMBAT_TAGS, combatStatsFor } from './config/entities.js';
+import { checkEffect, checkTrigger, resolveZones, qtyStatic } from './local/battle/rules.js';
 import { t, hasKey } from './i18n.js';
 import { tc } from './text.js';
 
@@ -22,6 +27,7 @@ export const parseRef = (ref) => {
   const i = ref.indexOf(':');
   return { abilityId: ref.slice(0, i), nodeId: ref.slice(i + 1) };
 };
+const KNOWN = { statuses: STATUSES, tags: COMBAT_TAGS };
 
 // The ability ids a unit fights with (by unit name; enemies resolve too).
 export function unitAbilityIds(name) {
@@ -33,25 +39,15 @@ export function upgradeTree(abilityId) {
 }
 
 // What an ability DOES, ready to show: the locale's `ability.<id>.desc` when a
-// translation defines one, otherwise the definition's own `desc`, otherwise
-// nothing. (Never the raw key - printing "ability.clawSwipe.desc" at the player
-// is what happens when a lookup has no fallback.)
+// translation defines one, otherwise the definition's own `desc`.
 export function abilityDesc(abilityId, config = null) {
   const key = `ability.${abilityId}.desc`;
   if (hasKey(key)) return config ? tc(key, config) : t(key);
   return ABILITIES[abilityId]?.desc ?? '';
 }
 
-// What a node is CALLED and what it DOES, ready to show.
-//
-// The node's own definition is the source (config/abilities.js). A locale may
-// override it - `upgrade.<ability>.<node>.name` / `.desc` / `.lore` - which is
-// how the Russian table still translates them; English simply has no such
-// keys any more, so the definition speaks for itself.
-//
-// `desc` is the mechanical one-liner ("+1 damage") a reward card leads with;
-// `lore` (optional) is the fuller flavor sentence shown smaller underneath,
-// in quotes. Empty `lore` = the card just shows `desc` alone.
+// What a node is CALLED and what it DOES, ready to show. The node's own
+// definition is the source; a locale may override it (upgrade.<ability>.<node>.*).
 export function upgradeInfo(abilityId, nodeId) {
   const node = ABILITY_UPGRADES[abilityId]?.[nodeId];
   const key = `upgrade.${abilityId}.${nodeId}`;
@@ -60,149 +56,110 @@ export function upgradeInfo(abilityId, nodeId) {
     desc: hasKey(`${key}.desc`) ? t(`${key}.desc`) : (node?.desc || ''),
     lore: hasKey(`${key}.lore`) ? t(`${key}.lore`) : (node?.lore || ''),
     icon: node?.icon || '⭐',
+    auto: !!node?.auto,
   };
 }
 
-// Base def + every unlocked node of this ability, applied in the order the
-// tree lists them (so the result never depends on unlock order). Zone offsets
-// are deduplicated; flags merge (any node can flip one on).
+// ----- which nodes a unit owns ----------------------------------------------
+// The picked nodes of one tree, from the unit's refs.
+function pickedNodes(unlocked, abilityId) {
+  const have = new Set();
+  for (const r of unlocked ?? []) {
+    const p = r.includes(':') ? parseRef(r) : { abilityId, nodeId: r };
+    if (p.abilityId === abilityId) have.add(p.nodeId);
+  }
+  return have;
+}
+// Picked nodes plus the AUTO milestones they have earned: a node with
+// `auto: { count: n }` is owned once n picked nodes of the tree are.
+export function ownedNodes(unlocked, abilityId) {
+  const tree = ABILITY_UPGRADES[abilityId];
+  const have = pickedNodes(unlocked, abilityId);
+  if (!tree) return have;
+  const picked = [...have].filter((n) => tree[n] && !tree[n].auto).length;
+  for (const [nodeId, node] of Object.entries(tree)) {
+    if (node.auto && picked >= (node.auto.count ?? Infinity)) have.add(nodeId);
+  }
+  return have;
+}
+
+// ----- folding nodes over an ability ----------------------------------------
+const isOffsetList = (v) => Array.isArray(v) && v.every((o) => Array.isArray(o) && o.length >= 2 && typeof o[0] === 'number');
+const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+function unionOffsets(zone, offs) {
+  const out = zone.map((o) => [...o]);
+  const seen = new Set(out.map((o) => `${o[0]},${o[1]}`));
+  for (const o of offs) { const k = `${o[0]},${o[1]}`; if (!seen.has(k)) { seen.add(k); out.push([...o]); } }
+  return out;
+}
+// A quantity plus a delta: constants stay a plain number, anything else
+// becomes a list of terms (local/battle/rules.js).
+export function addQty(q, delta) {
+  if (typeof q === 'number' && typeof delta === 'number') return q + delta;
+  const terms = (v) => (v === undefined || v === null ? [] : typeof v === 'number' ? [{ n: v }] : Array.isArray(v) ? v.map(clone) : [clone(v)]);
+  return [...terms(q), ...terms(delta)];
+}
+function tuneFields(target, fields, where) {
+  for (const [f, v] of Object.entries(fields ?? {})) {
+    if (isOffsetList(v) && (target[f] === undefined || isOffsetList(target[f]))) target[f] = unionOffsets(target[f] ?? [], v);
+    else if (Array.isArray(v) && Array.isArray(target[f]) && !isOffsetList(target[f])) { for (const x of v) if (!target[f].includes(x)) target[f].push(x); }   // tags
+    else if (v && typeof v === 'object' && !Array.isArray(v) && v.n === undefined && v.per === undefined) { target[f] = target[f] ?? {}; tuneFields(target[f], v, where); }   // cost: { hp: 1 }
+    else target[f] = addQty(target[f], v);
+  }
+}
+function setFields(target, fields) {
+  for (const [f, v] of Object.entries(fields ?? {})) target[f] = clone(v);
+}
+
+// Base def + every owned node of this ability, applied in the order the tree
+// lists them (so the result never depends on unlock order).
 export function resolveAbility(abilityId, unlocked = []) {
   const base = ABILITIES[abilityId];
   if (!base) return null;
   const tree = ABILITY_UPGRADES[abilityId];
-  const have = new Set(unlocked.map((r) => (r.includes(':') ? parseRef(r) : { abilityId, nodeId: r }))
-    .filter((p) => p.abilityId === abilityId).map((p) => p.nodeId));
-  if (!tree || !have.size) return base;
-
-  const def = { ...base,
-    castZone: [...base.castZone], dmgZone: [...base.dmgZone], tagZone: [...base.tagZone],
-    pushZone: base.pushZone.map((p) => [...p]), flags: { ...(base.flags ?? {}) },
-    // `cost` is an OBJECT, so it needs its own copy for the same reason the
-    // zones do - without one, an upgraded ability would write its cost into the
-    // config table that every other unit reads.
-    cost: { ...(base.cost ?? {}) },
-    // ...and so does statusEffectOverride, the numbers of the status the ability applies.
-    statusEffectOverride: base.statusEffectOverride ? { ...base.statusEffectOverride } : null,
-  };
-  const addZone = (zone, offs) => {
-    const seen = new Set(zone.map((o) => `${o[0]},${o[1]}`));
-    for (const o of offs) { const k = `${o[0]},${o[1]}`; if (!seen.has(k)) { seen.add(k); zone.push(o); } }
-  };
-  for (const [nodeId, node] of Object.entries(tree)) {
+  const have = ownedNodes(unlocked, abilityId);
+  const def = clone(base);
+  def.effects = def.effects.map((e, i) => checkEffect(e, `${abilityId}.effects[${i}]`, KNOWN)).filter(Boolean);
+  if (!tree || !have.size) return def;
+  const byId = (id) => def.effects.find((e) => e.id === id);
+  // The auto milestones fold FIRST, whatever their place in the file: they
+  // are the baseline a picked shape node is allowed to overrule.
+  const order = Object.entries(tree).sort((a, b) => (b[1].auto ? 1 : 0) - (a[1].auto ? 1 : 0));
+  for (const [nodeId, node] of order) {
     if (!have.has(nodeId)) continue;
-    // `add: { damage, heal }` - plain numbers summed onto the ability's own.
-    // `damage` speaks the "X damage Y times" notation (src/damage.js): 4 or
-    // "4x" is +4 base, "x4" is +4 times, "4x4" both.
-    for (const [k, v] of Object.entries(node.add ?? {})) {
-      if (k === 'damage') def.damage = addDamage(def.damage, v);
-      else def[k] = (Number(def[k]) || 0) + v;
-    }
-    // `statusEffectAdd: { statusEffect, ...field: n }` - `statusEffect` (a
-    // STATUSES row id) says which status this node touches; it is required,
-    // and never itself summed. If the ability does not already apply that
-    // status, it now does - the ability GAINS the status fresh off the
-    // table's own numbers. If it already applies that same status, this only
-    // tunes it further: every other field is summed onto its current numbers
-    // (its own override where it has one, otherwise the table's value).
-    if (node.statusEffectAdd?.statusEffect) {
-      const { statusEffect: wantId, ...deltas } = node.statusEffectAdd;
-      if (!STATUSES[wantId]) {
-        console.warn(`[upgrades] "${abilityId}:${nodeId}" statusEffectAdd names an unknown status "${wantId}"`);
-      } else {
-        const row = STATUSES[wantId];
-        if (def.statusEffect !== wantId) { def.statusEffect = wantId; def.statusEffectOverride = {}; }
-        else def.statusEffectOverride = def.statusEffectOverride ?? {};
-        for (const [k, v] of Object.entries(deltas)) {
-          const cur = def.statusEffectOverride[k] !== undefined ? def.statusEffectOverride[k] : (Number(row[k]) || 0);
-          def.statusEffectOverride[k] = cur + v;
-        }
+    const where = `${abilityId}:${nodeId}`;
+    // 1. set - replacements
+    for (const [id, fields] of Object.entries(node.set ?? {})) {
+      if (id === 'cast') { setFields(def, fields); continue; }
+      const i = def.effects.findIndex((e) => e.id === id);
+      if (fields === null) { if (i >= 0) def.effects.splice(i, 1); continue; }
+      if (fields && fields.kind) {
+        const e = checkEffect({ id, ...fields }, `${where}.set.${id}`, KNOWN);
+        if (!e) continue;
+        if (i >= 0) def.effects[i] = e; else def.effects.push(e);
+        continue;
       }
+      if (i < 0) { console.warn(`[upgrades] ${where} sets fields of an effect "${id}" the ability does not have`); continue; }
+      setFields(def.effects[i], fields);
     }
-    // `costAdd: { hp, supplies, move }` - each entry is SUMMED onto the base
-    // cost, so a node can make an ability cheaper (negative) or dearer, and two
-    // nodes touching the same resource stack. It is its own field rather than
-    // part of `add` because `add` works on plain numbers and a cost is a record.
-    for (const [k, v] of Object.entries(node.costAdd ?? {})) def.cost[k] = (def.cost[k] ?? 0) + v;
-    if (node.castZoneAdd?.length) addZone(def.castZone, node.castZoneAdd);
-    if (node.dmgZoneAdd?.length) addZone(def.dmgZone, node.dmgZoneAdd);
-    if (node.tagZoneAdd?.length) addZone(def.tagZone, node.tagZoneAdd);
-    if (node.pushDistAdd) for (const p of def.pushZone) p[3] = (p[3] ?? 1) + node.pushDistAdd;
-    Object.assign(def.flags, node.flags ?? {});
+    // 2. tune - additions
+    for (const [id, fields] of Object.entries(node.tune ?? {})) {
+      if (id === 'cast') { tuneFields(def, fields, where); continue; }
+      const e = byId(id);
+      if (!e) { console.warn(`[upgrades] ${where} tunes an effect "${id}" the ability does not have`); continue; }
+      tuneFields(e, fields, where);
+    }
+    // 3. new effects
+    (node.effects ?? []).forEach((e, i) => {
+      const ok = checkEffect(e, `${where}.effects[${i}]`, KNOWN);
+      if (ok) def.effects.push(ok);
+    });
   }
+  // Every effect re-checked after the folding (a set may have changed a kind's
+  // fields), then the zones that follow the main hit are read off it as it
+  // stands now - after every shape node.
+  def.effects = resolveZones(def.effects.map((e, i) => checkEffect(e, `${abilityId}.effects[${i}] (resolved)`, KNOWN)).filter(Boolean), abilityId);
   return def;
-}
-
-// ----- a guard against upgrades that silently do nothing --------------------
-// `addZone` deduplicates, so an upgrade that adds tiles the ability ALREADY
-// covers is a no-op - it unlocks, it shows in the tree, and it changes nothing.
-// That is exactly how clawSwipe's Cleave sat broken: it added two tiles to a
-// cast zone that was already the whole ring. Nothing in the data says a node is
-// meant to matter, so the only way to catch it is to resolve every node and
-// compare. This runs once, in dev only, and just complains to the console.
-function auditUpgrades() {
-  const same = (a, b) => ['damage', 'heal'].every((k) => a[k] === b[k])
-    && ['castZone', 'dmgZone', 'tagZone'].every((k) => a[k].length === b[k].length)
-    && JSON.stringify(a.pushZone) === JSON.stringify(b.pushZone)
-    && JSON.stringify(a.cost) === JSON.stringify(b.cost)
-    && a.statusEffect === b.statusEffect
-    && JSON.stringify(a.statusEffectOverride) === JSON.stringify(b.statusEffectOverride)
-    && JSON.stringify(a.flags) === JSON.stringify(b.flags);
-  const dead = [];
-  for (const [abilityId, tree] of Object.entries(ABILITY_UPGRADES)) {
-    if (!ABILITIES[abilityId]) { dead.push(`${abilityId}:* (no such ability)`); continue; }
-    for (const nodeId of Object.keys(tree)) {
-      // Judge the node on top of the state it actually arrives in: its own
-      // prerequisites unlocked, itself not.
-      const chain = [];
-      const pull = (n) => { for (const r of tree[n]?.requires ?? []) pull(r); if (!chain.includes(n)) chain.push(n); };
-      pull(nodeId);
-      const refs = chain.map((n) => upgradeRef(abilityId, n));
-      if (same(resolveAbility(abilityId, refs.slice(0, -1)), resolveAbility(abilityId, refs))) {
-        dead.push(upgradeRef(abilityId, nodeId));
-      }
-    }
-  }
-  if (dead.length) console.warn('[upgrades] these nodes change nothing when unlocked:', dead.join(', '));
-}
-try { if (import.meta.env?.DEV) auditUpgrades(); } catch { /* not a Vite build */ }
-
-// The TRIGGERS a unit is under, as [{ statusEffect, when, statusEffectOverride }] (see TRIGGERS in
-// config/abilities.js). Derived, never stored: recomputed from what the unit is
-// right now, so nothing has to remember to take one away. Today that is the
-// `triggers` of its unlocked upgrade nodes; a relic it carries and a world-map
-// aura it stands in are the next two sources and slot in here, with no change to
-// anything downstream. (An ENEMY's triggers come straight off its bestiary row -
-// see makeEnemyOfType in src/battle.js - and the engine parses them the same way.)
-//
-// Worked out when a FIGHT STARTS (main.js hands the list to createBattle) and
-// fixed for its duration - none of the three sources can change mid-fight, and
-// recomputing per fight is exactly what makes walking out of an aura's radius
-// drop the trigger by itself.
-export function triggersFor(unit) {
-  const out = [];
-  const add = (e) => {
-    const p = checkTrigger(e);
-    if (!p) return;
-    // The same row at the same moment twice is one trigger: a second copy would
-    // only re-apply what the first already did.
-    if (out.some((q) => q.statusEffect === p.statusEffect && q.when === p.when)) return;
-    out.push(p);
-  };
-  const unlocked = new Set(unit?.upgrades ?? []);
-  for (const abilityId of unitAbilityIds(unit?.name)) {
-    const tree = ABILITY_UPGRADES[abilityId];
-    if (!tree) continue;
-    for (const [nodeId, node] of Object.entries(tree)) {
-      if (!unlocked.has(upgradeRef(abilityId, nodeId))) continue;
-      for (const e of node.triggers ?? []) add(e);
-    }
-  }
-  // A carried relic brings its own while it is carried (relics are not items yet;
-  // when they are, this is the whole hook).
-  for (const e of unit?.relic?.triggers ?? []) add(e);
-  // Standing inside a world-map aura, decided by the world map before the fight.
-  for (const e of unit?.auraTriggers ?? []) add(e);
-  return out;
 }
 
 export function resolvedAbilitiesFor(unit) {
@@ -211,20 +168,59 @@ export function resolvedAbilitiesFor(unit) {
   return out;
 }
 
-// The unlockable pool: every node (across all the unit's ability trees) whose
-// parents are ALL unlocked and which is not unlocked itself.
+// The unit's own numbers with every owned node's `unit` deltas folded in.
+// maxHp is NOT here: it is applied to the unit the moment the node is unlocked
+// (it is part of the run's state, with the unit's wounds).
+export function resolveUnitStats(unit) {
+  const cs = combatStatsFor(unit?.name);
+  const out = { speed: cs.speed, flying: !!cs.flying, stackMax: cs.stackMax ?? 0, stackGen: cs.stackGen ?? 0 };
+  for (const abilityId of unitAbilityIds(unit?.name)) {
+    const tree = ABILITY_UPGRADES[abilityId];
+    if (!tree) continue;
+    const have = ownedNodes(unit?.upgrades ?? [], abilityId);
+    for (const nodeId of have) {
+      const u = tree[nodeId]?.unit ?? {};
+      for (const k of ['speed', 'stackMax', 'stackGen']) if (typeof u[k] === 'number') out[k] += u[k];
+    }
+  }
+  return out;
+}
+
+// The TRIGGERS a unit is under (see rules.js). Derived, never stored:
+// recomputed from what the unit is right now, so nothing has to remember to
+// take one away. Sources: owned upgrade nodes, a carried relic, a world-map
+// aura. (An ENEMY's come straight off its bestiary row - see makeEnemyOfType
+// in src/battle.js - and the engine parses them the same way.)
+export function triggersFor(unit) {
+  const out = [];
+  const add = (e, where) => { const p = checkTrigger(e, where, KNOWN); if (p) out.push(p); };
+  for (const abilityId of unitAbilityIds(unit?.name)) {
+    const tree = ABILITY_UPGRADES[abilityId];
+    if (!tree) continue;
+    const have = ownedNodes(unit?.upgrades ?? [], abilityId);
+    for (const [nodeId, node] of Object.entries(tree)) {
+      if (!have.has(nodeId)) continue;
+      (node.triggers ?? []).forEach((e, i) => add(e, `${abilityId}:${nodeId}.triggers[${i}]`));
+    }
+  }
+  (unit?.relic?.triggers ?? []).forEach((e, i) => add(e, `relic.triggers[${i}]`));
+  (unit?.auraTriggers ?? []).forEach((e, i) => add(e, `aura.triggers[${i}]`));
+  return out;
+}
+
+// The unlockable pool: every node whose prerequisites are met and which is
+// not owned and not automatic.
 export function availableUpgrades(unit) {
-  const unlocked = new Set(unit.upgrades ?? []);
   const out = [];
   for (const abilityId of unitAbilityIds(unit.name)) {
     const tree = ABILITY_UPGRADES[abilityId];
     if (!tree) continue;
+    const have = ownedNodes(unit.upgrades ?? [], abilityId);
     for (const [nodeId, node] of Object.entries(tree)) {
-      const ref = upgradeRef(abilityId, nodeId);
-      if (unlocked.has(ref)) continue;
-      if ((node.requires ?? []).every((p) => unlocked.has(upgradeRef(abilityId, p)))) {
-        out.push({ ref, abilityId, nodeId });
-      }
+      if (have.has(nodeId) || node.auto) continue;
+      if (!(node.requires ?? []).every((p) => have.has(p))) continue;
+      if ((node.requiresAny ?? []).length && !node.requiresAny.some((p) => have.has(p))) continue;
+      out.push({ ref: upgradeRef(abilityId, nodeId), abilityId, nodeId });
     }
   }
   return out;
@@ -236,6 +232,12 @@ export function unlockUpgrade(unit, ref) {
   if (unit.upgrades.includes(ref)) return false;
   if (!availableUpgrades(unit).some((u) => u.ref === ref)) return false;
   unit.upgrades.push(ref);
+  const { abilityId, nodeId } = parseRef(ref);
+  const hp = ABILITY_UPGRADES[abilityId]?.[nodeId]?.unit?.maxHp;
+  if (typeof hp === 'number' && hp) {
+    unit.maxHp = Math.max(1, (unit.maxHp ?? unit.hp ?? 1) + hp);
+    if (unit.alive !== false) unit.hp = Math.max(0, Math.min(unit.maxHp, (unit.hp ?? 0) + hp));
+  }
   return true;
 }
 
@@ -243,9 +245,66 @@ export function upgradeCount(unit) {
   return (unit.upgrades ?? []).length;
 }
 
+// ----- what an ability amounts to, for a button or a card --------------------
+// The headline numbers of a resolved ability: { damage: { amount, times } | null,
+// heal, statuses: [ids], tags: [ids], push, dash, cost: { hp, supplies, move } }.
+// `evalQ` turns a quantity into a number - qtyStatic (constants only) outside
+// a fight, the engine's live evaluation inside one.
+export function abilitySummary(ab, evalQ = qtyStatic) {
+  const out = { damage: null, heal: 0, statuses: [], tags: [], push: 0, dash: false, throw: false, swap: false, cost: { hp: 0, supplies: 0, move: 0 } };
+  if (!ab) return out;
+  for (const e of ab.effects ?? []) {
+    if (e.kind === 'damage') {
+      const amount = evalQ(e.amount), times = Math.max(1, evalQ(e.times));
+      if (!out.damage) out.damage = { amount, times, pierce: !!e.pierce };
+      else { out.damage.amount += amount; }
+    } else if (e.kind === 'heal') out.heal += evalQ(e.amount);
+    else if (e.kind === 'status') { if (!out.statuses.includes(e.status)) out.statuses.push(e.status); }
+    else if (e.kind === 'tag') { if (!out.tags.includes(e.tag)) out.tags.push(e.tag); }
+    else if (e.kind === 'push') out.push = Math.max(out.push, evalQ(e.dist));
+    else if (e.kind === 'dash') out.dash = true;
+    else if (e.kind === 'throw') out.throw = true;
+    else if (e.kind === 'swap') out.swap = true;
+  }
+  for (const r of ['hp', 'supplies', 'move']) out.cost[r] = evalQ(ab.cost?.[r]);
+  return out;
+}
+
+// ----- a guard against upgrades that silently do nothing --------------------
+// Resolve every node on top of its prerequisites and compare: a node that
+// changes neither the ability, nor the unit, nor its triggers is dead. Runs
+// once, in dev only, and just complains to the console.
+function auditUpgrades() {
+  const dead = [];
+  for (const [abilityId, tree] of Object.entries(ABILITY_UPGRADES)) {
+    if (!ABILITIES[abilityId]) { dead.push(`${abilityId}:* (no such ability)`); continue; }
+    for (const [nodeId, node] of Object.entries(tree)) {
+      if (node.auto) continue;
+      const chain = [];
+      const pull = (n) => {
+        for (const r of tree[n]?.requires ?? []) pull(r);
+        const any = tree[n]?.requiresAny ?? [];
+        if (any.length) pull(any[0]);
+        if (!chain.includes(n)) chain.push(n);
+      };
+      pull(nodeId);
+      for (const r of [...(node.requires ?? []), ...(node.requiresAny ?? [])]) if (!tree[r]) dead.push(`${upgradeRef(abilityId, nodeId)} requires unknown node "${r}"`);
+      const refs = chain.map((n) => upgradeRef(abilityId, n));
+      const before = JSON.stringify(resolveAbility(abilityId, refs.slice(0, -1)));
+      const after = JSON.stringify(resolveAbility(abilityId, refs));
+      const unitDelta = Object.values(node.unit ?? {}).some((v) => v);
+      if (before === after && !unitDelta && !(node.triggers ?? []).length) dead.push(upgradeRef(abilityId, nodeId));
+    }
+  }
+  if (dead.length) console.warn('[upgrades] these nodes change nothing when unlocked:', dead.join(', '));
+}
+try { if (import.meta.env?.DEV) auditUpgrades(); } catch { /* not a Vite build */ }
+export { auditUpgrades };
+
 // Layered layout for drawing a tree: nodes grouped by depth (the longest
-// requires-chain below them), edges as [parentId, childId]. Small trees only -
-// this walks the whole graph per node.
+// prerequisite chain below them), edges as [parentId, childId, kind] where
+// kind is 'all' (requires) or 'any' (requiresAny). Auto milestones sit at
+// depth 0 with no edges - the drawing marks them.
 const warnedRequires = new Set();
 function warnUnknownRequire(abilityId, nodeId, req) {
   const key = `${abilityId}:${nodeId}:${req}`;
@@ -255,10 +314,11 @@ function warnUnknownRequire(abilityId, nodeId, req) {
 }
 export function treeLayout(abilityId) {
   const tree = ABILITY_UPGRADES[abilityId] ?? {};
+  const parents = (n) => [...(tree[n]?.requires ?? []), ...(tree[n]?.requiresAny ?? [])].filter((r) => tree[r]);
   const depth = (nodeId, guard = 0) => {
-    if (guard > 12) return 0;
-    const reqs = tree[nodeId]?.requires ?? [];
-    return reqs.length ? 1 + Math.max(...reqs.map((r) => depth(r, guard + 1))) : 0;
+    if (guard > 16) return 0;
+    const ps = parents(nodeId);
+    return ps.length ? 1 + Math.max(...ps.map((r) => depth(r, guard + 1))) : 0;
   };
   const layers = [];
   const edges = [];
@@ -266,13 +326,12 @@ export function treeLayout(abilityId) {
     const d = depth(nodeId);
     (layers[d] ??= []).push(nodeId);
     for (const r of node.requires ?? []) {
-      // A prerequisite that names no node of this tree (a typo, or a display
-      // NAME where the node's id belongs) has nothing to draw an edge from:
-      // skipped, with a warning, instead of breaking every window that draws
-      // the tree (it blanked the party view on 2026-09-26). The node itself
-      // stays locked - its prerequisite can never be met.
       if (!tree[r]) { warnUnknownRequire(abilityId, nodeId, r); continue; }
-      edges.push([r, nodeId]);
+      edges.push([r, nodeId, 'all']);
+    }
+    for (const r of node.requiresAny ?? []) {
+      if (!tree[r]) { warnUnknownRequire(abilityId, nodeId, r); continue; }
+      edges.push([r, nodeId, 'any']);
     }
   }
   return { layers, edges };

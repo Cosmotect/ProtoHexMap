@@ -93,8 +93,13 @@ without touching world meshes or `Game` state.
   fatigue rules, shop/treasure/event/rest tuning.
 * `entities.js` - party roster, bestiary, intellect classes, tile tags; exports
   `combatStatsFor(name)` and `tagDefById(id)`.
-* `abilities.js` - `ABILITIES`, `ABILITY_UPGRADES`, `STATUSES`; abilities are pure
-  data read by one executor (`resolveCast` in `battle/engine.js`).
+* `abilities.js` - `ABILITIES`: an ability is a cast zone, a cost and a LIST OF
+  EFFECTS, pure data read by one executor (`resolveCast` in `battle/engine.js`).
+* `upgrades.js` - `ABILITY_UPGRADES`, the trees (how the party grows).
+* `statuses.js` - `STATUSES`, every status as "<Name> X for Y turns" plus its verbs.
+* `local/battle/rules.js` - the VOCABULARY the three tables are written in
+  (quantities, conditions, effects, triggers, the facts they may read) and its
+  checkers. Since 2026-10-05 - see "The rules vocabulary" below.
 * `localmap.js` - arena rules, camera, colours, backdrop (`COMBAT_CONFIG`).
 
 **`src/locales/`** - `en.js` is the reference table (every key the game uses); `ru.js`
@@ -109,10 +114,10 @@ downstream special-cases it), and the three tutorial maps themselves.
 threaded through `Game` as `this.rng`, so the same seed reproduces the same map and
 fights (`?seed=` links are shareable); all UI text goes through `t(key, params)` /
 `tn(name)` (`i18n.js`) against flat locale tables with `{name}` placeholders and
-`{n:one|other}` plural forms, falling back to English then the raw key; damage
-numbers are a small notation - `parseDamage`/`formatDamage`/`addDamage` in
-`damage.js` read/write `"5x4"` (5 damage, 4 hits) - the one place "x" notation is
-interpreted; and `text.js` plus the Settings window generate their copy and editable
+`{n:one|other}` plural forms, falling back to English then the raw key; every
+number an ability, upgrade or status writes is a QUANTITY read by one evaluator
+(`local/battle/rules.js`, see "The rules vocabulary"); and `text.js` plus the
+Settings window generate their copy and editable
 forms directly from `CONFIG`'s shape, so no gameplay number should live hardcoded
 outside `src/config/*`.
 
@@ -453,15 +458,68 @@ INTELLECT`, one of `C`/`B`/`A`/`S`, dumbest to smartest) that turns on progressi
 more of: reading elevation, reading tags/hazards, valuing ether/void danger, and
 weighing which ally is closest to death.
 
-**Statuses.** A config-driven table (`config.statuses`), each row carrying
-multipliers (`tickHP`, `speed`, `damageDealt`, `damageTaken`), agency effects
-(`stunned`, `disarmed`), what it ignores (`crash`/`fall`/`crush`), a lifetime
-(turns, charges, or "spent on" a trigger) and an `aiValue` the enemy AI reads.
-Current rows: `shield`, `crit`, `stun`, `disarm`, `haste`, `slow`, `nerveAgent`,
-`regen`, `weaken`, `vulnerable`, `enraged`, `collisionImmune`. An ability or upgrade
-overrides a status's numbers via `statusEffectOverride` / `statusEffectAdd` rather
-than a flat multiplier field, so a status applied without an explicit value always
-falls back to the table's own default instead of landing as a no-op.
+**Statuses.** A config-driven table (`config.statuses`, `src/config/statuses.js`).
+Every row reads "<Name> X for Y turns": `amount` (X) and `turns` (Y) are the two
+universal knobs, and the row's VERBS are coefficients per point of X - `tickHP`,
+`speed`, `damageDealt` / `damageTaken` (FLAT, signed: Shielded and Impervious are
+-1 per X, Vulnerable +1), `maxStacks`, `stackGen`, `maxHp`, `lifesteal`,
+`overlapGrant`, `healOnOverlap`, `extraTicks`, `flight` - plus switches: `agency`
+(`stunned` / `disarmed` / `rooted` / `confused`), `forbids` (ability tags),
+`immune` (status ids), `ignoresImpact`, `impactTaken` / `impactDealt` multipliers,
+an `ai` directive for the enemy's mind (`mustTarget` / `avoidAdjacentTo` /
+`friend`, all pointing at the instance's `source`), and `triggers` of its own
+(Lifelink heals its source whenever the carrier is hit; Marked rewards the
+killer). `stacking` says how a second application combines: `refresh`, `add`
+(X and Y add - the "additive" statuses) or `separate` (every application is its
+own instance - Wither, Lifelink). `decay` / `decayOnHit` wear X down
+(Regeneration, Bleed, Shielded) instead of a clock. A unit carries
+`statuses: [{ id, amount, turns, source, seen, aged }]`; a verb's value is the
+sum over instances of amount x coefficient. There are no multipliers and no
+charges any more: a stun is `turns: 1`, a shield is Shielded X.
+
+**The rules vocabulary** (`src/local/battle/rules.js`, since 2026-10-05). Anywhere
+a number is wanted - damage, a status's X or Y, a push distance, a cost, stacks -
+a QUANTITY may be written: a number, or terms `{ n: 2 }` / `{ per: 'fact',
+every: 2, mul: 1, min, max }` summed, each optionally gated by an `if`
+CONDITION (`{ didNotMove: true, targetHpFrac: { min: 0.8 } }`, with `any` /
+`not`). The FACTS they read are worked out by the engine for the cast
+(`castCtx`): the caster's walk this activation (`tilesTravelled`, `moveSpent`,
+`moveLeft`, `didNotMove`), its health and `stacks`, what this cast `consumed`,
+`castsThisBattle`, adjacency, `onTag:<id>`; the aim's `distance` / `atMaxRange` /
+`elevationDiff` (and climb / drop); the target's hp fraction, `targetHas:<status>`;
+board counts (`unitsWith:<status>`) and an earlier effect's `amount:<id>`. An
+EFFECT is `{ kind, zone, anchor ('aim' | 'caster' | 'landing'), targets ('any' /
+'enemies' / 'allies' / 'party' / 'self' / 'source' / 'killer'), if, ... }` of a
+kind: `damage` (amount, times, multiplier, pierce, lifesteal, overlapGrant),
+`heal`, `status` (status, amount, turns, repeat), `push` (dir, dist, onCrash),
+`throw` (over the caster), `swap`, `height`, `tag` (tag, life), `dash` (through
+allies or not), `consume` / `gain` (stacks), `extraAttack`. `resolveCast` runs an
+ability's effects by a fixed PHASE order (consume -> hits/heals/statuses/gains ->
+pushes/throws/swaps -> heights -> tags -> dash -> 'landing'-anchored), so an
+upgrade adding an effect never has to say where it goes. A TRIGGER is an effect
+with a `when` (`battleStart`, `activationStart`, `activationEnd`, `hit`, `kill`,
+`death`, `moved`), carried by a unit (upgrade node, bestiary row, relic, aura) or
+by a status row; `fireMoment` runs them through the same executors. Everything is
+checked once when loaded (`checkEffect` / `checkTrigger`), and the enemy AI needs
+no teaching: it still scores by replaying `resolveCast` on a copy of the board.
+Only the `ai` directives (Taunt / Fear / Charm) and Confused touch the planner.
+
+**Stacks.** A per-unit resource: `stackGen` arrive at the start of each
+activation, capped at `stackMax` (roster / bestiary rows; upgrade nodes raise both
+through `unit`; Enriched / Amplified and their opposites move them while they
+last). Abilities spend them with a `consume` effect, and the amount consumed is
+the `consumed` fact every later term of the cast may read ("+1 damage per 2
+stacks consumed"). The HUD shows the pool beside the move points.
+
+**Multi-aim, extra attacks, Confused.** An ability with `aims: n` collects one
+anchor per click before its lock is complete (clicking a chosen tile again drops
+it); its damage hits are dealt round-robin over the aims, every other effect lands
+at each. The `extraAttack` effect (Follow-through: a killing blow) re-opens the
+player phase after the volley for the units it was granted to, who aim again
+without walking; an enemy owed one casts again from where it stands. A CONFUSED
+unit is played by the engine: an enemy walks and casts at random; a party unit is
+marked done at the start of the phase and, when the volley fires, walks to a
+random tile and fires a random ability at a random unit, friend or foe.
 
 **Shared rules.** A shove into a void tile (an ether hole, or an edge the arena
 marks as lethal) kills instantly. A shove into a wall, or across a height jump of 2
@@ -470,25 +528,17 @@ units; a large enough drop crushes and can chain into further pushes. Walls and
 ether holes are both authored terrain, equally unwalkable - they differ only in what
 happens when something is shoved into them.
 
-**Damage notation.** `damage.js` parses a plain number (one hit) or `"BxT"` (T hits
-of B each) into `{ base, times }`, and an upgrade's delta form (`"4"`, `"4x"`,
-`"x4"`, `"4x4"`) into the base and/or hit-count it adds. Every damage-modifying
-effect - elevation, statuses, the overlap bonus, a Stasis debuff - changes the base,
-applied identically to every hit.
-
 **Retreat.** From round 8 on, while the enemy side's total HP is below 30% of what
 it started the fight with, each surviving enemy rolls a chance to flee toward the
 nearest arena edge on its own turn instead of acting; a fled enemy is still a normal
 target while it runs and grants no loot on escape. Stasis fights (Seed and Colony)
 are exempt from this rule entirely.
 
-**Ability zones.** An ability is defined by `castZone`/`castAny` (where it may be
-aimed), `dmgZone` (damage/heal/status offsets from the aim point), `pushZone`,
-`hZone`/`hMode` (terrain height changes), `tagZone`/`tagId` (tile tags it places),
-`rotatable` (whether its zones turn to face the aim direction), and `moveToTarget`
-(a caster dash, resolved last). Upgrade nodes extend these via `dmgZoneAdd` /
-`castZoneAdd` / `tagZoneAdd` / `pushDistAdd` / `costAdd` / `statusEffectAdd` /
-`add: { damage, heal }`.
+**Ability format.** `castZone` / `castAny` (where it may be aimed), `rotatable`
+(its zones turn to face the aim), `aims`, `tags` (`melee` / `ranged`, what a
+status may forbid), `cost` (quantities), and `effects` - the list above. The
+common effects carry ids (`hit`, `heal`, `status`, `push`, `tag`, `dash`) so
+upgrade nodes can `tune` or `set` them.
 
 **Deployment.** A fight the player walked into and chose to enter offers click-to-
 deploy when the map allows it: the cursor carries the next unit's icon, left-click
@@ -722,51 +772,50 @@ on a shop rolls/marks the stock and emits `shop` (`{ hex, lore }`) instead of a
 dialog; with no arena on screen (a headless run) the bridge opens the window
 directly, as it always did. `tools/shop-test.cjs` is the headless playtest.
 
-## Ability upgrades - how the party grows (src/upgrades.js + src/config/abilities.js)
+## Ability upgrades - how the party grows (src/upgrades.js + src/config/upgrades.js)
 
-Party units have no power stat; every reward unlocks one node of an ability's
-UPGRADE TREE, and the ability itself gets stronger.
+Party units grow through the trees: every reward unlocks one node, and a node
+changes the UNIT, the ABILITY, or gives the unit TRIGGERS - nothing else.
 
-* **Trees** live in `config/abilities.js`, `ABILITY_UPGRADES[abilityId][nodeId]`. A
-  node lists `requires` (all parents must be unlocked; multiple parents merge
-  branches into a capstone; none = a root) and its effects: `add` (`damage`,
-  `heal`), `costAdd`, `statusEffectAdd`, `castZoneAdd` / `dmgZoneAdd` / `tagZoneAdd`
-  offset lists, `pushDistAdd`, and `flags` for upgrade-specific logic the engine can
-  branch on. A node also carries its own `name`, `icon` and `desc` directly in the
-  definition; `upgradeInfo()` looks up a locale override first (`upgrade.<ability>.
-  <node>.name/.desc`, used by the Russian locale) and falls back to the definition.
-  The same locale-first, definition-second rule applies to an ability's own `desc`
-  and a character's `story`.
-* **A node that only adds tiles the ability already covers does nothing**, silently:
-  zone-add lists are deduplicated, so the node unlocks and shows as taken but
-  changes no rule. `auditUpgrades()` runs in dev builds and warns in the console
-  about any node that resolves to no change from its parent state - the only check
-  against this class of bug, since nothing in the data declares a node is supposed
-  to matter.
+* **Trees** live in `config/upgrades.js`, `ABILITY_UPGRADES[abilityId][nodeId]`. A
+  node lists its prerequisites - `requires` (all of them) and / or `requiresAny` (one
+  of them; the design board's merged arrows), none = a root - and what it does:
+  `unit: { maxHp, speed, stackMax, stackGen }` (the green stat stickers; maxHp is
+  applied to the run's unit the moment it is unlocked), `tune: { <effectId>: {
+  field: delta } }` (ADDS: a number or terms onto a quantity, offsets onto a zone;
+  the id `cast` is the ability itself - its castZone, cost, aims), `set` (REPLACES
+  a field, or a whole effect when the value has a `kind`, or removes one with
+  null - the purple "shape" stickers), `effects` (appended) and `triggers` (the
+  unit's passives). Two more flags: `auto: { count: n }` marks a milestone that is
+  owned by itself once n nodes of the tree are picked (never offered; folded in
+  first so a picked shape overrules it). Nodes fold in tree order, so the result never depends on
+  the order they were unlocked in. The trees for the six party abilities follow
+  the design board sticker by sticker; the older kits (Strike, Shove, Lance,
+  Burst, Bolt, Guard) keep small linear trees in the same format.
 * **Resolution** (`src/upgrades.js`, pure functions): a unit carries
-  `upgrades: ["ability:node", ...]`. `resolveAbility(id, unlocked)` folds the
-  unlocked nodes over the base definition (order-independent);
-  `resolvedAbilitiesFor(unit)` feeds the combat engine; `availableUpgrades(unit)` is
-  the unlockable pool (every parent unlocked, not yet taken); `treeLayout(abilityId)`
-  gives the UI its node columns and edges.
-* **Rewards.** After a won battle the game drafts one random available upgrade per
-  living unit (`game.upgradeOffers()`); a Stasis Colony clear grants `rewardPicks`
-  (2) such choices instead of one, offers redrawn before each so newly opened
-  children can appear. The same chooser serves the shop's Training and Relic options
-  (pay, then pick); the wandering-scholar event unlocks one random available upgrade
-  for free; the black market drafts two random upgrades for one chosen unit and the
-  player picks which to learn (as cards), paying a fraction of that unit's max HP.
-  The unit-pick step says how many lessons each unit has open; a unit whose trees
-  have only ONE node left open (Feren after one glaive upgrade: `glaive` has two
-  nodes and `plasmaBolt` no tree at all) gets one card and a line saying so - a
-  content gap in the trees, not a fault of the market.
-* **UI.** The roster's detail window (start screen) shows portrait and backstory in
-  a narrow left column and the abilities stacked in a wide one, each with its
-  description and upgrade tree. The tree is one card per node - icon, name, what it
-  does - laid out by depth with requires-edges drawn behind them (a lit edge means
-  the node it leads from is unlocked). States: owned (green), open (gold, every
-  prerequisite met), locked (dimmed). The party panel shows two ability chips per
-  unit (icon, name, "+n" unlocked count) in place of a power rating.
+  `upgrades: ["ability:node", ...]`. `ownedNodes` adds the earned milestones;
+  `resolveAbility(id, unlocked)` folds the owned nodes over the base definition
+  and re-checks every effect; `resolveUnitStats(unit)` folds the `unit` deltas
+  over the roster row (main.js hands both to the engine per fight, with
+  `triggersFor(unit)`); `availableUpgrades(unit)` is the unlockable pool;
+  `abilitySummary(ab, evalQ)` gives the HUD and the party view their headline
+  numbers (constants only outside a fight, live facts inside one through the
+  engine's `evalFor`).
+* **The audit.** `auditUpgrades()` (dev only) resolves every node on top of its
+  prerequisites and warns about any that changes neither the ability, the unit nor
+  the triggers, and about prerequisites naming unknown nodes.
+* **Rewards.** Unchanged: after a won battle the game drafts one random available
+  upgrade per living unit (`game.upgradeOffers()`), the shop's Training, the
+  wandering scholar and the black market draw from the same pool.
+* **UI.** The roster's detail window and the party view draw the tree with
+  `requires` edges solid and `requiresAny` edges dashed; auto milestones sit at
+  the root column with a dashed border and a note of their count. States: owned
+  (green), open (gold), locked (dimmed).
+* **Tests.** `node tools/upgrades-test.mjs` plays the stickers out headlessly
+  (quantities, conditions, every stacking policy, stacks, throw / swap / dash
+  through allies, multi-aim, extra attacks, Confused, Taunt / Fear / Charm, the
+  web and the wither cloud, milestones, overlap grants). `tools/dbno-test.mjs`
+  still covers the turn flow.
 
 ## Scenarios - hand-authored maps (the tutorial series, src/scenarios/)
 

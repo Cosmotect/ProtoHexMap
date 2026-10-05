@@ -182,28 +182,27 @@ fs.mkdirSync(OUT, { recursive: true });
   if (!engineState.flat) problems.push('a recipe-less arena is not flat - some random terrain generator is still alive: ' + JSON.stringify(engineState));
   if (!engineState.abilities) problems.push('some combat units have no abilities');
   // ----- the status table (config.statuses) ---------------------------------
-  // Statuses are data now: the engine, the badges and the Settings window all read
-  // the same table. Check it arrived, that it still describes the four originals,
-  // and that a status put on a unit reaches the panel as a badge.
+  // Statuses are data: the engine, the badges and the Settings window all read
+  // the same table (src/config/statuses.js). Check it arrived, that it still
+  // describes its rows, and that a status put on a unit reaches the panel as a badge.
   const statusWiring = await page.evaluate(() => {
     const table = window.game.config.statuses || {};
     const b = window.__battle;
     const u = b.state.units.find((x) => !x.isEnemy && x.hp > 0);
-    // A slot is { turns, charges, over } - `over` holds only what the ability
-    // changed through statusEffectOverride; everything else is read from the table.
-    u.status.shield = { turns: 0, charges: 1, over: {} };
-    u.status.poison = { turns: 3, charges: 0, over: {} };
+    // A unit carries INSTANCES: { id, amount, turns, source, seen }.
+    u.statuses.push({ id: 'shielded', amount: 2, turns: 0, source: null, seen: false });
+    u.statuses.push({ id: 'bleed', amount: 3, turns: 0, source: null, seen: false });
     return {
       ids: Object.keys(table),
-      shieldBlocks: table.shield && table.shield.blocks === true,
+      shieldSoftens: table.shielded && table.shielded.damageTaken < 0,
       stunSkips: table.stun && Array.isArray(table.stun.agency) && table.stun.agency.includes('stunned'),
-      poisonTicks: table.poison && table.poison.tickHP < 0,
+      bleedTicks: table.bleed && table.bleed.tickHP < 0 && table.bleed.decay > 0,
     };
   });
-  for (const id of ['shield', 'crit', 'stun', 'haste']) {
+  for (const id of ['shielded', 'stun', 'haste', 'wither', 'enraged']) {
     if (!statusWiring.ids.includes(id)) problems.push(`the status table lost "${id}": ${statusWiring.ids.join(', ')}`);
   }
-  if (!statusWiring.shieldBlocks || !statusWiring.stunSkips || !statusWiring.poisonTicks) {
+  if (!statusWiring.shieldSoftens || !statusWiring.stunSkips || !statusWiring.bleedTicks) {
     problems.push('the status table does not describe its own statuses: ' + JSON.stringify(statusWiring));
   }
   // Force the panel to redraw (inspect/cancel both emit) and count the chips.
@@ -218,14 +217,13 @@ fs.mkdirSync(OUT, { recursive: true });
   if (badges !== 2) problems.push(`a unit carrying two statuses shows ${badges} badges in the party panel`);
   await page.evaluate(() => {
     const u = window.__battle.state.units.find((x) => !x.isEnemy && x.hp > 0);
-    delete u.status.shield; delete u.status.poison;
+    u.statuses = [];
   });
-  // ----- statusEffectOverride reaches the engine's own arithmetic ------------
-  // An ability's statusEffectOverride names the status fields it changes, and what it
-  // sets is stored in the slot's `over`. The proof that `over` is really read (and
-  // not just displayed) is that a bigger slow shrinks how far the unit can walk:
-  // the reachable set is computed from effSpeed, which sums the speed field of
-  // every carried status through the same lookup an ability's number lands in.
+  // ----- a status's AMOUNT reaches the engine's own arithmetic ----------------
+  // The proof that an instance's amount is really read (and not just displayed)
+  // is that a bigger Slug shrinks how far the unit can walk: the reachable set
+  // is computed from effSpeed, which sums amount x the row's speed over every
+  // carried instance.
   const slowReach = await page.evaluate(async () => {
     const b = window.__battle;
     const u = b.state.units.find((x) => !x.isEnemy && x.hp > 0 && !x.done);
@@ -235,27 +233,27 @@ fs.mkdirSync(OUT, { recursive: true });
     // same slow, and the check would be measuring the floor instead of the amount.
     const speed0 = u.speed;
     u.speed = Math.max(u.speed, (window.game.config.combat.minSpeed || 2) + 4);
-    delete u.status.slow;
+    u.statuses = [];
     const free = count();
-    u.status.slow = { turns: 2, charges: 0, over: {} };          // the table's -1
+    u.statuses = [{ id: 'slug', amount: 1, turns: 2, source: null, seen: false }];   // Slug 1
     const table = count();
-    u.status.slow = { turns: 2, charges: 0, over: { speed: -3 } }; // statusEffectOverride: { speed: -3 }
+    u.statuses = [{ id: 'slug', amount: 3, turns: 2, source: null, seen: false }];   // Slug 3
     const harder = count();
-    delete u.status.slow;
+    u.statuses = [];
     const speed = u.speed;
     u.speed = speed0;
     b.cancel();
     return { free, table, harder, speed };
   });
   if (!(slowReach.free > slowReach.table && slowReach.table > slowReach.harder)) {
-    problems.push('a status amount set through statusEffectOverride did not reach the engine: ' + JSON.stringify(slowReach));
+    problems.push('a status instance\'s amount did not reach the engine: ' + JSON.stringify(slowReach));
   }
   // And the table itself must no longer carry the two fields this replaced.
   const knobShape = await page.evaluate(() => {
     const t = window.game.config.statuses || {};
     return {
       legacy: Object.entries(t).filter(([, d]) => d.amountIs !== undefined || d.amountSign !== undefined).map(([k]) => k),
-      slowSpeed: t.slow ? t.slow.speed : null,
+      slowSpeed: t.slug ? t.slug.speed : null,
       hasteSpeed: t.haste ? t.haste.speed : null,
     };
   });
@@ -308,13 +306,13 @@ fs.mkdirSync(OUT, { recursive: true });
     const count = () => card().querySelectorAll('.u-st:not(.empty)').length;
     await redraw();
     const before = count();
-    u.status = { ...(u.status || {}), collisionImmune: { turns: 0, charges: 0, over: {} }, regen: { turns: 0, charges: 0, over: { turns: 0 } } };
+    u.statuses.push({ id: 'padded', amount: 1, turns: 0, source: null, seen: false }, { id: 'impervious', amount: 1, turns: 0, source: null, seen: false });
     await redraw();
     const withPermanent = count();
-    u.status.haste = { turns: 2, charges: 0, over: {} };
+    u.statuses.push({ id: 'haste', amount: 1, turns: 2, source: null, seen: false });
     await redraw();
     const withClock = count();
-    delete u.status.collisionImmune; delete u.status.regen; delete u.status.haste;
+    u.statuses = u.statuses.filter((i) => !['padded', 'impervious', 'haste'].includes(i.id));
     await redraw();
     const cleared = count();
     return { before, withPermanent, withClock, cleared };
@@ -1088,7 +1086,7 @@ fs.mkdirSync(OUT, { recursive: true });
     const box = [...document.querySelectorAll('.settings-matrix')].find((d) => /statuses/i.test(d.querySelector('.settings-group-title')?.textContent || ''));
     if (!box) return { found: false };
     const heads = [...box.querySelectorAll('thead th')].map((th) => th.textContent.trim());
-    const slow = [...box.querySelectorAll('tbody th')].find((th) => th.textContent.trim() === 'slow');
+    const slow = [...box.querySelectorAll('tbody th')].find((th) => th.textContent.trim() === 'slug');
     return { found: true, heads, rows: box.querySelectorAll('tbody tr').length, slowTip: slow ? slow.getAttribute('title') : null };
   });
   if (!statusTable.found || statusTable.rows < 4) problems.push('the statuses table did not render: ' + JSON.stringify(statusTable));
@@ -1096,7 +1094,7 @@ fs.mkdirSync(OUT, { recursive: true });
     for (const gone of ['amountIs', 'amountSign']) {
       if (statusTable.heads.includes(gone)) problems.push(`the statuses table still shows a "${gone}" column`);
     }
-    if (!/statusEffectOverride fields:.*speed/.test(statusTable.slowTip || '')) problems.push('hovering a status does not name its statusEffectOverride fields: ' + statusTable.slowTip);
+    if (!/verbs in use:.*speed/.test(statusTable.slowTip || '')) problems.push('hovering a status does not name its verbs: ' + statusTable.slowTip);
   }
   await page.evaluate(() => document.querySelector('[data-tab="general"]').click());
   await page.waitForTimeout(100);
@@ -1172,7 +1170,7 @@ fs.mkdirSync(OUT, { recursive: true });
     for (const id of ids) {
       const tree = (g.config.abilityUpgrades || {})[id] || {};
       wantNodes += Object.keys(tree).length;
-      for (const n of Object.values(tree)) wantEdges += (n.requires || []).length;
+      for (const n of Object.values(tree)) wantEdges += (n.requires || []).length + (n.requiresAny || []).length;
     }
     return {
     wantNodes, wantEdges,

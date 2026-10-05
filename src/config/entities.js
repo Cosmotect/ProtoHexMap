@@ -99,13 +99,15 @@ export const ENTITIES = {
     //             translation wins where one exists.
     //   speed     move points per turn (an uphill step costs 2)
     //   flying    ignores height and glides over anything
+    //   stackMax / stackGen  the character's STACKS (see defaultCombat below);
+    //             the trees' "Smax +1 (3)" stickers count from these
     //   abilities ids from config/abilities.js - exactly TWO per character: each
     //             drives its own upgrade tree (config/upgrades.js), and the roster
     //             window and the party panel are laid out for the pair.
     roster: [
-      { name: 'Gorm', icon: '🪲', hp: 8, speed: 3, flying: false, abilities: ['clawSwipe', 'ram'], story: 'Gorm is as tough as he is not patient. His clawed swipes can be lethal close up, and he knows how to get close up.' },
-      { name: 'Feren', icon: '🦋', hp: 5, speed: 5, flying: true, abilities: ['glaive', 'bowBone'], story: 'Disappointed by the conduct of her brethren, she intends to use all of the help her new family can provide, to learn the truth about their world.' },
-      { name: 'Viridi', icon: '🦗', hp: 6, speed: 4, flying: false, abilities: ['spikeShot', 'mendingTouch'], story: 'Viridi is the closest thing among his species to a natural philosopher. His immense curiosity more than anything else, drives his engagement with the seekers.' },
+      { name: 'Gorm', icon: '🪲', hp: 8, speed: 3, flying: false, stackMax: 2, stackGen: 1, abilities: ['clawSwipe', 'ram'], story: 'Gorm is as tough as he is not patient. His clawed swipes can be lethal close up, and he knows how to get close up.' },
+      { name: 'Feren', icon: '🦋', hp: 5, speed: 5, flying: true, stackMax: 2, stackGen: 1, abilities: ['glaive', 'bowBone'], story: 'Disappointed by the conduct of her brethren, she intends to use all of the help her new family can provide, to learn the truth about their world.' },
+      { name: 'Viridi', icon: '🦗', hp: 6, speed: 4, flying: false, stackMax: 2, stackGen: 1, abilities: ['spikeShot', 'mendingTouch'], story: 'Viridi is the closest thing among his species to a natural philosopher. His immense curiosity more than anything else, drives his engagement with the seekers.' },
 
       { name: 'Archer', icon: '🏹', hp: 28, speed: 4, flying: false, abilities: ['volley', 'lance'], story: 'Counts distance the way merchants count coin. Keeps one arrow set aside for an old debt and never says whose name is on it.' },
       { name: 'Mystic', icon: '🔮', hp: 22, speed: 3, flying: false, abilities: ['burst', 'mend'], story: 'Talks to the ember at the heart of things. What the fire answers is rarely comforting and has never yet been wrong.' },
@@ -119,7 +121,10 @@ export const ENTITIES = {
     ],
     // The last resort for a unit that is in neither the roster nor the bestiary
     // (a hand-authored scenario def that names something unknown).
-    defaultCombat: { speed: 4, flying: false, abilities: ['strike'] },
+    // stackMax / stackGen: the unit's STACKS - a pool it builds each activation
+    // (stackGen, capped at stackMax) and spends through its abilities' `consume`
+    // effects. Upgrade nodes raise both (config/upgrades.js `unit`).
+    defaultCombat: { speed: 4, flying: false, abilities: ['strike'], stackMax: 0, stackGen: 0 },
   },
 
   // ----- Battle -------------------------------------------------------
@@ -152,9 +157,9 @@ export const ENTITIES = {
     //    speed      move points per turn (an uphill step costs 2)
     //    flying     ignores height and glides over anything
     //    abilities  ids from config/abilities.js ABILITIES
-    //    triggers   optional - statuses the creature puts on ITSELF at a moment,
-    //               written exactly as on an upgrade node (see TRIGGERS in
-    //               config/abilities.js): [{ statusEffect: 'regen', when: 'battleStart', statusEffectOverride: { turns: 0 } }].
+    //    triggers   optional - effects the creature runs at a moment, written
+    //               exactly as on an upgrade node (see TRIGGERS in
+    //               src/local/battle/rules.js): [{ when: 'battleStart', kind: 'status', status: 'padded' }].
     //               File-only: the Settings bestiary table does not show them.
     //  (An object on the board that is NOT a creature - the Hack's nodes and
     //  mines, a door, a barrel - is not a row here at all: it is an Entity
@@ -356,6 +361,9 @@ export function combatStatsFor(name) {
 const T = (o) => Object.assign({
   name: 'Tag', icon: '⭐', color: '#ff9950', desc: '',
   dmg: 0, heal: 0, life: 0, hp: 0,
+  // roots: true = a unit standing on this hazard cannot walk off it while it
+  // lasts (a web). Fliers are held too - the strands are what they are.
+  roots: false,
   pushable: false, collectible: false, passPickup: false,
   onDestroy: null, onExpire: null, onPickup: null, onPeriodic: null,
   everyX: 0, everyOff: 0,
@@ -364,6 +372,11 @@ const T = (o) => Object.assign({
 export const COMBAT_TAGS = {
   fire: T({ name: 'Fire', icon: '🔥', color: '#ff9950', desc: 'Burns anything standing here.', dmg: 1, life: 2 }),
   nerveAgentCloud: T({ name: 'Nerve Agent', icon: '🦠', color: '#33bd78', desc: 'Applies a stacking damage over time effect.', life: 3, onPeriodic: 'nerveAgentCloud', everyX: 1, everyOff: 2 }),
+  witherCloud: T({ name: 'Wither Cloud', icon: '🥀', color: '#6f7d4a', desc: 'Withers whoever stands in it at the end of every round.', life: 3, onPeriodic: 'witherCloud', everyX: 1 }),
+  // The web: whoever stands in it is rooted while it lasts, and it snaps for
+  // 2 damage when its life runs out (webSnap, config/abilities.js). Its life
+  // is written by the ability that lays it (the tag effect's `life`).
+  web: T({ name: 'Web', icon: '🕸️', color: '#d9cfe8', desc: 'Roots whoever stands in it; snaps for 2 when it gives way.', life: 1, roots: true, onExpire: 'webSnap' }),
 };
 export const tagDefById = (id) => COMBAT_TAGS[id] ?? null;
 // The bestiary's tile tags, as part of the config object (see the note in
