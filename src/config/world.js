@@ -58,7 +58,7 @@ export const WORLD = {
   // down into the void - and the wither never spreads into it. It stays in the map
   // data (impassable for now) so later mechanics can make it navigable.
   tileTypes: {
-    ether: { passable: false, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 0, color: 0x0d1020, height: 0, biomeTint: false },
+    ether: { passable: false, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 1, color: 0x0d1020, height: 0, biomeTint: false },
     water: { passable: false, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 1, color: 0x23479c, height: 0.1, biomeTint: false },
     ground: { passable: true, supplyCost: 0, hpCost: 0, revealBonus: 0, terrainHeight: 0, color: 0x4d4f46, height: 0.25, biomeTint: true },
     hill: { passable: true, supplyCost: 2, hpCost: 0, revealBonus: 1, terrainHeight: 1, color: 0x8f8d74, height: 0.55, biomeTint: true },
@@ -96,7 +96,7 @@ export const WORLD = {
     // Deliberately the SAME on every layer, so the rot always reads as the rot: it is
     // the ONLY biome that still carries a flat `color` instead of color0..color6,
     // and map.js biomeColorFor falls back to it when no layer colour exists.
-    wither: { color: 0x3b2a6e, generated: false, hpCost: 1, terrainHeight: 1, tintAmount: 0.5, tintAllTypes: true },
+    wither: { color: 0x3b2a6e, generated: false, hpCost: 0, terrainHeight: 1, tintAmount: 0.5, tintAllTypes: true },
   },
 
   // ----- Generation noise ------------------------------------------------

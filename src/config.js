@@ -70,7 +70,7 @@ export const CONFIG = {
     starvationBands: null,
     revealRadius: 0,          // how many rings around the player get uncovered (0 = only the tile you stand on)
     seedAlwaysVisible: false, // false = the Stasis Seed hides under the fog like everything else
-    revealStartRadius: 1,     // rings uncovered around the start tile at the beginning
+    revealStartRadius: 0,     // rings uncovered around the start tile at the beginning
     // Win condition: destroy the Stasis Seed (see config/encounters.js, "stasis").
   },
 
@@ -150,7 +150,7 @@ export const CONFIG = {
   // localBackground in config/localmap.js.)
   colors: {
     fogTile: 0x1f2536,        // colour of tiles still hidden under the fog of war
-    fogTileHeight: 1,
+    fogTileHeight: 0.3,
     startTile: 0x1f1e28,
     biomeTintAmount: 0.34,    // how far a tile's type colour is shifted towards its biome colour (0..1)
     seedTile: 0x4a1a2a,       // tile under the Stasis Seed

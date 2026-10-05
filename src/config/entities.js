@@ -104,8 +104,8 @@ export const ENTITIES = {
     //             window and the party panel are laid out for the pair.
     roster: [
       { name: 'Gorm', icon: '🪲', hp: 8, speed: 3, flying: false, abilities: ['clawSwipe', 'ram'], story: 'Gorm is as tough as he is not patient. His clawed swipes can be lethal close up, and he knows how to get close up.' },
-      { name: 'Feren', icon: '🦋', hp: 5, speed: 5, flying: true, abilities: ['glaive', 'plasmaBolt'], story: 'Disappointed by the conduct of her brethren, she intends to use all of the help her new family can provide, to learn the truth about their world.' },
-      { name: 'Viridi', icon: '🦗', hp: 6, speed: 4, flying: false, abilities: ['spikeShot', 'mendingTouch'], story: 'Disappointed by the conduct of her brethren, she intends to use all of the help her new family can provide, to learn the truth about their world.' },
+      { name: 'Feren', icon: '🦋', hp: 5, speed: 5, flying: true, abilities: ['glaive', 'bowBone'], story: 'Disappointed by the conduct of her brethren, she intends to use all of the help her new family can provide, to learn the truth about their world.' },
+      { name: 'Viridi', icon: '🦗', hp: 6, speed: 4, flying: false, abilities: ['spikeShot', 'mendingTouch'], story: 'Viridi is the closest thing among his species to a natural philosopher. His immense curiosity more than anything else, drives his engagement with the seekers.' },
 
       { name: 'Archer', icon: '🏹', hp: 28, speed: 4, flying: false, abilities: ['volley', 'lance'], story: 'Counts distance the way merchants count coin. Keeps one arrow set aside for an old debt and never says whose name is on it.' },
       { name: 'Mystic', icon: '🔮', hp: 22, speed: 3, flying: false, abilities: ['burst', 'mend'], story: 'Talks to the ember at the heart of things. What the fire answers is rarely comforting and has never yet been wrong.' },
@@ -176,8 +176,8 @@ export const ENTITIES = {
       rageTick: { name: 'Rage Tick', shape: 'spike', color: '#c0455f', hp: 4, init: 4, speed: 3, flying: false, intellect: 'C', abilities: ['rageBite'] },
       rushTick: { name: 'Rusher Tick', shape: 'spike', color: '#e2474b', hp: 4, init: 4, speed: 3, flying: false, intellect: 'C', abilities: ['headbutt'] },
 
-      hammerhead: { name: 'Hammerhead', shape: 'box', color: '#b0714a', hp: 12, init: 6, speed: 2, flying: false, intellect: 'B', abilities: ['chargeHeadbutt'] },
-      stag: { name: 'Stag', shape: 'tetrahedron', color: '#b0714a', hp: 10, init: 4, speed: 4, flying: false, intellect: 'B', abilities: ['chargeHeadbutt'] },
+      hammerhead: { name: 'Hammerhead', shape: 'box', color: '#b0714a', hp: 12, init: 6, speed: 2, flying: false, intellect: 'B', abilities: ['ram'] },
+      stag: { name: 'Stag', shape: 'tetrahedron', color: '#b0714a', hp: 10, init: 4, speed: 4, flying: false, intellect: 'B', abilities: ['ram'] },
       bombardier: { name: 'Bombardier', shape: 'diamond', color: '#b0714a', hp: 9, init: 9, speed: 3, flying: false, intellect: 'B', abilities: ['lobbedShrapnelBurst'] },
       stripedBombardier: { name: 'Striped Bombardier', shape: 'diamond', color: '#33bd78', hp: 7, init: 7, speed: 4, flying: false, intellect: 'B', abilities: ['lobbedNerveAgentBurst'] },
 

@@ -139,7 +139,7 @@ export const ABILITIES = {
   ram: A({ name: 'Charge Headbutt', icon: '🐏💨', color: '#e0b25f', damage: 2, castZone: lineOffsets(1, 3), dmgZone: [[0, 0]], pushZone: [[0, 0, 0]], rotatable: true, moveToTarget: true }),
 
   glaive: A({ name: 'Glaive Strike', icon: '⚔️', color: '#e0b25f', desc: 'Downward jab with a sleek glaive.', damage: 4, castZone: ringOffsets(1, 1), dmgZone: [[0, 0]], rotatable: true }),
-  shardProjectile: A({ name: 'Volley', icon: '🎯', color: '#a8e05f', desc: 'Bone shard projectile fired out .', damage: 2, castZone: ringOffsets(2, 4), dmgZone: [[0, 0]] }),
+  bowBone: A({ name: 'Volley', icon: '🎯', color: '#a8e05f', desc: 'Bone shard projectile fired out .', damage: 2, castZone: ringOffsets(2, 4), dmgZone: [[0, 0]] }),
 
   spikeShot: A({ name: 'Spike Shot', icon: '🖊', color: '#e0b25f', desc: 'A sparce cloud of toxin tipped spikes.', damage: "1x2", castZone: ringOffsets(1, 1), dmgZone: [[0, 0]] }),
   mendingTouch: A({ name: 'Mend', icon: '🏥', color: '#a8e05f', desc: 'Heals one ally standing on or next to the caster.', heal: 2, castZone: ringOffsets(0, 1), dmgZone: [[0, 0]], cost: { supplies: 1 } }),
