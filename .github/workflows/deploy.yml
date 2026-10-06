@@ -2,7 +2,7 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [dev-prototype, dev-prototype-0.2]
+    branches: [dev, dev-prototype]
   workflow_dispatch:
 
 permissions:
@@ -15,15 +15,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Builds the "dev-prototype" branch. This becomes the site root:
+  # Builds the "dev" branch. This becomes the site root:
   # https://cosmotect.github.io/ProtoHexMap/
   build-root:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout dev-prototype
+      - name: Checkout dev
         uses: actions/checkout@v6
         with:
-          ref: dev-prototype
+          ref: dev
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -44,15 +44,15 @@ jobs:
           path: ./dist
           retention-days: 1
 
-  # Builds the "dev-prototype-0.2" branch. This becomes the /0.2/ subfolder:
-  # https://cosmotect.github.io/ProtoHexMap/0.2/
-  build-0-2:
+  # Builds the "dev-prototype" branch. This becomes the /Unstable/ subfolder:
+  # https://cosmotect.github.io/ProtoHexMap/Unstable/
+  build-unstable:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout dev-prototype-0.2
+      - name: Checkout dev-prototype
         uses: actions/checkout@v6
         with:
-          ref: dev-prototype-0.2
+          ref: dev-prototype
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -66,17 +66,17 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Upload 0.2 build (temporary, workflow-internal)
+      - name: Upload Unstable build (temporary, workflow-internal)
         uses: actions/upload-artifact@v4
         with:
-          name: build-0-2
+          name: build-unstable
           path: ./dist
           retention-days: 1
 
   # Combines both builds into one folder structure and publishes it as the
   # single live GitHub Pages site.
   combine-and-deploy:
-    needs: [build-root, build-0-2]
+    needs: [build-root, build-unstable]
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -88,11 +88,11 @@ jobs:
           name: build-root
           path: combined
 
-      - name: Download 0.2 build into combined/0.2/
+      - name: Download Unstable build into combined/Unstable/
         uses: actions/download-artifact@v4
         with:
-          name: build-0-2
-          path: combined/0.2
+          name: build-unstable
+          path: combined/Unstable
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
