@@ -271,20 +271,40 @@ export const ABILITY_UPGRADES = {
   // =========================== SPIKE SHOT (Viridi) ==========================
   spikeShot: {
     // ----- Spread path -----
+    //level 0
     sp0: MV(1),
-    sp1a: U({ name: 'Scatter', icon: '🎯', desc: 'each hit can be aimed at its own tile', requires: ['sp0'], tune: { cast: { aims: 1 } } }),
-    sp1b: SHAPE([[0, 0], [1, 0]], { name: 'Long Volley', desc: 'the quills reach a tile further', requires: ['sp0'] }),
+    //level 1
+    sp1a: U({
+      requires: ['sp0'],
+      name: 'Leg shot', icon: '🩼', desc: 'Target has 1 less movement point next turn.', lore: 'Viridi aims his quills at the appendages of the enemy, reducing their mobility.',
+      effects: [{ kind: 'status', status: 'slug', amount: 1, turns: 1 }]
+    }),
+    sp1b: U({
+      requires: ['sp0'],
+      name: 'Gut shot', icon: '🩼', desc: 'Target receives 1 more damage for 1 turn.', lore: 'Viridi aims his quills at the weak spot of the enemy, reducing their defensive capability.',
+      effects: [{ kind: 'status', status: 'vulnerble', amount: 1, turns: 1 }]
+    }),
+    //level 2
     sp2a: DMG(1, { requiresAny: ['sp1a', 'sp1b'] }),
     sp2b: SMAX(1, { requiresAny: ['sp1a', 'sp1b'] }),
     sp2c: MV(1, { requiresAny: ['sp1a', 'sp1b'] }),
     sp2d: HP(2, { requiresAny: ['sp1a', 'sp1b'] }),
+    //level 3
+    sp3a: U({
+      name: 'Scatter', icon: '🎯', desc: 'Each quill can be aimed at an individual tile.', requiresAny: ['sp2a', 'sp2b', 'sp2c', 'sp2d'],
+      tune: { cast: { aims: 1 } }
+    }),
     sp3b: U({
-      name: 'Weak Toxin', icon: '🧪', desc: 'the quills are tipped with a weak toxin: Weak 1', requires: ['sp2a', 'sp2b'],
+      requires: ['sp2a', 'sp2b'],
+      name: 'Weak Toxin', icon: '🧪', desc: 'the quills are tipped with a weak toxin: Weak 1', lore: 'Viridi aims his quills at the appendages of the enemy, reducing their offensive capability.',
       effects: [{ kind: 'status', status: 'weak', amount: 1, turns: 1 }]
     }),
+    //level 4
     sp4a: HP(3, { requiresAny: ['sp3b'] }),
     sp4b: SMAX(1, { requiresAny: ['sp3b'] }),
     sp4c: MV(1, { requiresAny: ['sp3b'] }),
+    //level 5
+    //level 6
     sp6a: HP(4, { requiresAny: ['sp4a', 'sp4b', 'sp4c'] }),
     sp6b: SGEN(1, { requiresAny: ['sp4a', 'sp4b', 'sp4c'] }),
     sp6c: MV(1, { requiresAny: ['sp4a', 'sp4b', 'sp4c'] }),
