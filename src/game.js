@@ -957,7 +957,9 @@ export class Game {
     // local/battle/engine.js).
     const debuffs = this.activeDebuffsFor(hex);
     const cfgDebuffs = this.config.stasis.debuffs;
-    const saved = s.party.map((u) => ({ maxHp: u.maxHp }));
+    // Tied to the unit itself, NOT its slot: the party can be re-listed during the fight
+    // (the firing order, applyPartyOrder), so an index would restore the wrong unit.
+    const saved = s.party.map((u) => ({ unit: u, maxHp: u.maxHp }));
     let damageMod = 0;
     for (const id of debuffs) {
       if (id === 'maxHp') {
@@ -996,9 +998,8 @@ export class Game {
     const s = this.state;
     const { hex, forced, opts, enemies, debuffs, saved } = ctx;
     // Undo the temporary debuffs (wounds and deaths remain).
-    for (let i = 0; i < s.party.length; i++) {
-      const u = s.party[i];
-      u.maxHp = saved[i].maxHp;
+    for (const { unit: u, maxHp } of saved) {
+      u.maxHp = maxHp;
       u.hp = Math.min(u.hp, u.maxHp);
     }
 
@@ -1012,8 +1013,8 @@ export class Game {
       // carry them, and they fall as before.
       if (result.won) {
         const frac = this.config.combat?.downed?.reviveFraction ?? 0.25;
-        for (const i of result.downed ?? []) {
-          const u = s.party[i];
+        // result.downed lists party UNITS (not slots - see `saved` in prepareCombat).
+        for (const u of result.downed ?? []) {
           if (!u || !u.alive || u.hp > 0) continue;
           u.hp = Math.min(u.maxHp, Math.max(1, Math.ceil(u.maxHp * frac)));
           this.addLog('log.unitRevived', { name: { name: u.name }, hp: u.hp });
@@ -1124,7 +1125,7 @@ export class Game {
   startHack(hex) {
     const ctx = {
       hex, forced: false, opts: {}, enemies: [], debuffs: [],
-      saved: this.state.party.map((u) => ({ maxHp: u.maxHp })),
+      saved: this.state.party.map((u) => ({ unit: u, maxHp: u.maxHp })),
       damageMod: 0, stasis: false, title: null, lore: null, hack: true,
     };
     if (this.hackDelegate && this.hackDelegate(ctx)) return true;
