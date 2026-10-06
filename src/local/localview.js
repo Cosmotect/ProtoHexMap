@@ -2053,6 +2053,69 @@ export class LocalMapView {
     this.battleTokens = new Map();
   }
 
+  // ----- tile index decals (the map code preview) ----------------------------
+  // Every tile wears its own "q,r" as a flat plate on its top, so a code can be
+  // read against the arena it builds and edited on the spot (Settings >
+  // Encounters > Preview, and the floating editor during a preview). The plates
+  // turn with the camera each frame so the text always reads upright. One
+  // small canvas texture per key, cached for the session (the same key is the
+  // same text on every arena); the meshes themselves go with the arena.
+  setTileLabels(on) {
+    this.clearTileLabels();
+    if (!on || !this.map || !this.scene) return;
+    const cfg = this.config.local;
+    const r = cfg.hexSize - cfg.gap / SQRT3;
+    const geo = new THREE.PlaneGeometry(r * 1.1, r * 0.55);
+    geo.rotateX(-Math.PI / 2);
+    this.tileLabelCache = this.tileLabelCache ?? new Map();
+    const labels = [];
+    for (const tile of this.map.hexes.values()) {
+      let tex = this.tileLabelCache.get(tile.key);
+      if (!tex) {
+        const cv = document.createElement('canvas');
+        cv.width = 192; cv.height = 96;
+        const ctx = cv.getContext('2d');
+        ctx.clearRect(0, 0, cv.width, cv.height);
+        ctx.font = 'bold 44px ui-monospace, Consolas, monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.lineWidth = 8;
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)';
+        ctx.strokeText(tile.key, cv.width / 2, cv.height / 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(tile.key, cv.width / 2, cv.height / 2);
+        tex = new THREE.CanvasTexture(cv);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        this.tileLabelCache.set(tile.key, tex);
+      }
+      const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+        map: tex, transparent: true, depthWrite: false, side: THREE.DoubleSide,
+        opacity: tile.type === 'ether' ? 0.75 : 0.92,
+      }));
+      mesh.position.set(tile.x, tile.top + 0.015, -tile.y);
+      mesh.renderOrder = 5;   // over the tile, under the deploy decal (6)
+      mesh.raycast = () => {};   // never between the cursor and the tile
+      this.scene.add(mesh);
+      labels.push(mesh);
+    }
+    this.tileLabels = labels;
+    this.tileLabelGeo = geo;
+    this.stepTileLabels();
+  }
+  clearTileLabels() {
+    if (!this.tileLabels) return;
+    for (const m of this.tileLabels) { this.scene?.remove(m); m.material.dispose(); }
+    this.tileLabelGeo?.dispose();
+    this.tileLabels = null;
+    this.tileLabelGeo = null;
+  }
+  // Turn every plate so its text is upright from where the camera stands now.
+  stepTileLabels() {
+    if (!this.tileLabels || !this.camera) return;
+    const az = Math.atan2(this.camera.position.x, this.camera.position.z);
+    for (const m of this.tileLabels) m.rotation.y = az;
+  }
+
   buildCamera() {
     const pose = this.finalCameraPose();
     const w = this.domElement.clientWidth || window.innerWidth;
@@ -2356,6 +2419,7 @@ export class LocalMapView {
     this.elapsed += dt;
     this.stepLayerRoll();
     if (this.controls) this.controls.update();
+    if (this.tileLabels) this.stepTileLabels();
     if (this.walk) this.stepWalk(performance.now());
     if (this.vanishing && this.vanishing.length) this.stepVanishes(dt);
     for (const m of this.tokens) {
@@ -2439,6 +2503,7 @@ export class LocalMapView {
       this.domElement.removeEventListener('contextmenu', this.noContextMenu);
       this.noContextMenu = null;
     }
+    this.clearTileLabels();
     this.deactivate();
     this.disablePicking();
     this.cancelDeployment();

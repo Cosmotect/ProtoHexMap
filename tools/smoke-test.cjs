@@ -1348,27 +1348,59 @@ fs.mkdirSync(OUT, { recursive: true });
   if (!craftedGen.mapFromOwnBand) problems.push('a battle tile rolled a map outside its ring band\'s row: ' + JSON.stringify(craftedGen));
   if (!craftedGen.seedFromSeedRow) problems.push('the Stasis Seed did not get a seed-row map: ' + JSON.stringify(craftedGen));
   if (craftedGen.distinctMaps < 5) problems.push('the battle tiles all rolled the same few maps: ' + JSON.stringify(craftedGen));
-  // The debug preview: Menu -> Preview map code, paste a code with a wall, an
-  // ether hole, fire and one enemy; the camera dives into that arena.
+  // The debug preview: Settings > Encounters > Preview (since 2026-10-06; it
+  // was a Menu window before). The dropdown lists every map in the config and
+  // fills the box with its code; the box is checked as you type; Preview dives
+  // into the arena the box describes.
   await page.click('#btn-menu');
   await page.waitForTimeout(150);
-  await page.click('#btn-mapcode');
-  await page.waitForTimeout(200);
-  const dlgOpen = await page.evaluate(() => !document.getElementById('dialog').classList.contains('hidden') && !!document.getElementById('mapcode-input'));
-  if (!dlgOpen) problems.push('the map code dialog did not open');
+  await page.click('#btn-settings');
+  await page.waitForTimeout(250);
+  await page.evaluate(() => document.querySelector('[data-tab="encounters"]').click());
+  await page.waitForTimeout(250);
+  const previewUi = await page.evaluate(() => {
+    const sel = document.getElementById('settings-preview-map');
+    const codes = window.game.config.craftedMaps.combat.maps.length + window.game.config.craftedMaps.shop.maps.length;
+    return { box: !!document.getElementById('mapcode-input'), options: sel ? sel.options.length - 1 : -1, codes,
+      groups: sel ? sel.querySelectorAll('optgroup').length : 0, menuButton: !!document.getElementById('btn-mapcode') };
+  });
+  if (!previewUi.box) problems.push('the Preview section has no paste box');
+  if (previewUi.options !== previewUi.codes) problems.push('the Preview dropdown does not list every map in the config: ' + JSON.stringify(previewUi));
+  if (previewUi.groups < 2) problems.push('the Preview dropdown is not grouped: ' + JSON.stringify(previewUi));
+  if (previewUi.menuButton) problems.push('the old Menu -> Preview map code button is still there');
+  // Picking a map fills the box with the config's own code for it, and the
+  // status line says it is clean. Pick the shop map: it has an @shopkeeper line,
+  // which the current format allows and the preview has to show.
+  await page.selectOption('#settings-preview-map', 'wayside-hollow');
+  await page.waitForTimeout(250);
+  const picked = await page.evaluate(() => ({
+    text: document.getElementById('mapcode-input').value,
+    status: document.getElementById('settings-preview-status').textContent,
+    bad: document.getElementById('settings-preview-status').classList.contains('mapcode-errors'),
+    same: document.getElementById('mapcode-input').value === window.game.config.craftedMaps.shop.maps[0],
+  }));
+  if (!picked.same || !picked.text.includes('@shopkeeper')) problems.push('picking a map did not fill the box with its config code: ' + JSON.stringify(picked).slice(0, 300));
+  if (picked.bad || !picked.status.includes('wayside-hollow')) problems.push('a clean config map was not reported clean: ' + JSON.stringify(picked).slice(0, 300));
   // No `danger:` header any more - a battle tile's chevrons come from its ring
   // band now (config.battle.danger.ringBands), and the parser rejects the line.
   const TEST_CODE = ['id: smoke-test-arena', 'radius: 3',
     '0,0: ground 4', '1,0: wall', '2,0: ether', '1,-1: ground 2 fire', '0,1: ground 3 !Husk'].join('\n');
-  // A broken code must stay in the dialog and list its problems.
-  await page.evaluate((code) => { document.getElementById('mapcode-input').value = code + '\n9,9: lava'; }, TEST_CODE);
-  await page.click('#dialog-actions button:first-child');
-  await page.waitForTimeout(200);
-  const errShown = await page.evaluate(() => !!document.querySelector('.mapcode-errors'));
-  if (!errShown) problems.push('a broken map code did not show its errors');
-  await page.evaluate((code) => { document.getElementById('mapcode-input').value = code; }, TEST_CODE);
-  await page.click('#dialog-actions button:first-child');
-  await page.waitForTimeout(2200);   // the fly-in
+  // A broken code lists its problems under the box as you type, and Preview
+  // refuses it (the settings window stays open).
+  await page.fill('#mapcode-input', TEST_CODE + '\n9,9: lava');
+  await page.waitForTimeout(400);
+  const errShown = await page.evaluate(() => !!document.querySelector('.mapcode-errors') && document.querySelector('.mapcode-errors').textContent.includes('line 8'));
+  if (!errShown) problems.push('a broken map code did not show its errors while typing');
+  await page.click('#settings-preview-go');
+  await page.waitForTimeout(300);
+  const refused = await page.evaluate(() => ({ settingsOpen: !document.getElementById('settings').classList.contains('hidden'), mode: window.__cinematic.mode() }));
+  if (!refused.settingsOpen || refused.mode !== 'idle') problems.push('Preview accepted a broken code: ' + JSON.stringify(refused));
+  await page.fill('#mapcode-input', TEST_CODE);
+  await page.waitForTimeout(400);
+  await page.click('#settings-preview-go');
+  await page.waitForTimeout(2200);   // the fly-in (the settings window closes on its own)
+  const settingsGone = await page.evaluate(() => document.getElementById('settings').classList.contains('hidden'));
+  if (!settingsGone) problems.push('the settings window stayed open over the preview');
   const preview = await page.evaluate(() => {
     const v = window.__localView;
     if (!v || !v.map) return { loaded: false };   // the code never parsed - say so, do not throw
@@ -1391,6 +1423,38 @@ fs.mkdirSync(OUT, { recursive: true });
   if (!preview.fireSprite) problems.push('an authored fire tag has no sprite in the preview');
   if (!preview.exitShown) problems.push('the preview exit button is hidden during a preview');
   if (!(preview.hi > preview.mid)) problems.push('elevation shading: a level-4 tile is not brighter than level-2: ' + JSON.stringify(preview));
+  // During a preview (since 2026-10-06): the floating editor holds the code the
+  // arena was built from, every tile wears its "q,r" decal, and Apply rebuilds
+  // the arena in place from the edited code with the camera left alone.
+  const editor = await page.evaluate(() => {
+    const v = window.__localView;
+    return {
+      shown: !document.getElementById('preview-editor').classList.contains('hidden'),
+      text: document.getElementById('preview-editor-input').value,
+      labels: v.tileLabels ? v.tileLabels.length : 0, tiles: v.map.hexes.size,
+      status: document.getElementById('preview-editor-status').textContent,
+    };
+  });
+  if (!editor.shown) problems.push('the floating editor is not shown during a preview');
+  if (editor.text !== TEST_CODE) problems.push('the floating editor does not hold the previewed code');
+  if (editor.labels !== editor.tiles) problems.push('tiles are missing their index decals in the preview: ' + JSON.stringify(editor));
+  if (!editor.status.includes('smoke-test-arena')) problems.push('the floating editor did not report the code clean: ' + JSON.stringify(editor));
+  await page.evaluate(() => { const v = window.__localView; v.camera.position.x += 3; v.controls && v.controls.update(); });
+  const camBefore = await page.evaluate(() => window.__localView.camera.position.toArray());
+  await page.fill('#preview-editor-input', TEST_CODE.replace('radius: 3', 'radius: 4') + '\n-2,0: wall');
+  await page.waitForTimeout(400);
+  await page.click('#preview-editor-apply');
+  await page.waitForTimeout(400);
+  const reapplied = await page.evaluate(() => {
+    const v = window.__localView;
+    return { radius: v.map.radius, wall: v.map.hexes.get('-2,0')?.type, labels: v.tileLabels ? v.tileLabels.length : 0, tiles: v.map.hexes.size,
+      cam: v.camera.position.toArray(), mode: window.__cinematic.mode(), exitShown: !document.getElementById('preview-exit').classList.contains('hidden'),
+      settingsBox: window.__settingsPreviewCode ? window.__settingsPreviewCode() : null };
+  });
+  if (reapplied.radius !== 4 || reapplied.wall !== 'wall') problems.push('Apply did not rebuild the arena from the edited code: ' + JSON.stringify(reapplied));
+  if (reapplied.labels !== reapplied.tiles) problems.push('the rebuilt arena lost its index decals: ' + JSON.stringify(reapplied));
+  if (reapplied.mode !== 'local' || !reapplied.exitShown) problems.push('Apply left the preview state: ' + JSON.stringify(reapplied));
+  if (reapplied.cam.some((x, i) => Math.abs(x - camBefore[i]) > 0.01)) problems.push('Apply moved the camera: ' + JSON.stringify({ before: camBefore, after: reapplied.cam }));
   await page.screenshot({ path: path.join(OUT, '68-mapcode-preview.png') });
   await page.click('#preview-exit');
   await page.waitForTimeout(1800);   // the fly-out
@@ -1400,7 +1464,38 @@ fs.mkdirSync(OUT, { recursive: true });
   }));
   if (!backHome.exitHidden) problems.push('the preview exit button survived leaving the preview');
   if (backHome.turn !== 0) problems.push('the preview touched game state: ' + JSON.stringify(backHome));
+  const editorGone = await page.evaluate(() => document.getElementById('preview-editor').classList.contains('hidden'));
+  if (!editorGone) problems.push('the floating editor survived leaving the preview');
   await page.screenshot({ path: path.join(OUT, '69-mapcode-back.png') });
+  // Reopening the window keeps the box; previewing the shop map stands its
+  // keeper on the pinned tile as a mannequin, and leaving takes it down.
+  await page.click('#btn-menu');
+  await page.waitForTimeout(150);
+  await page.click('#btn-settings');
+  await page.waitForTimeout(250);
+  await page.evaluate(() => document.querySelector('[data-tab="encounters"]').click());
+  await page.waitForTimeout(250);
+  // The settings box shows what was typed in the floating editor, not the
+  // code the preview started from.
+  const kept = await page.evaluate(() => document.getElementById('mapcode-input').value);
+  if (kept !== TEST_CODE.replace('radius: 3', 'radius: 4') + '\n-2,0: wall') problems.push('the Preview box did not pick up the edit made in the floating editor');
+  await page.selectOption('#settings-preview-map', 'wayside-hollow');
+  await page.waitForTimeout(250);
+  await page.click('#settings-preview-go');
+  await page.waitForTimeout(2200);
+  const shopPreview = await page.evaluate(() => {
+    const v = window.__localView;
+    const keeperMesh = (v.pickables ?? []).find((m) => m.userData && m.userData.key === '0,0');
+    return { radius: v.map?.radius, keeper: !!keeperMesh, shopOpen: !!window.__shop, dialog: !document.getElementById('dialog').classList.contains('hidden') };
+  });
+  if (shopPreview.radius !== 3) problems.push('the shop map preview did not build the shop arena: ' + JSON.stringify(shopPreview));
+  if (!shopPreview.keeper) problems.push('the shop map preview has no keeper mannequin on the @shopkeeper tile: ' + JSON.stringify(shopPreview));
+  if (shopPreview.shopOpen || shopPreview.dialog) problems.push('the shop map preview opened the real shop: ' + JSON.stringify(shopPreview));
+  await page.screenshot({ path: path.join(OUT, '70-mapcode-shop-preview.png') });
+  await page.click('#preview-exit');
+  await page.waitForTimeout(1800);
+  const keeperGone = await page.evaluate(() => !(window.__localView.pickables ?? []).some((m) => m.userData && m.userData.key === '0,0'));
+  if (!keeperGone) problems.push('the keeper mannequin survived leaving the preview');
 
   // ----- settings saved by an OLDER build -----------------------------------
   // Saved settings are a snapshot of the config as it was that day, so one made

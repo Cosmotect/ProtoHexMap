@@ -16,7 +16,7 @@ import { STATUS_VERBS } from './config/statuses.js';
 // 2026-09-12).
 import { INTELLECT } from './config/entities.js';
 import { craftedMapIndex } from './battle.js';
-import { mapCodeTitle } from './local/mapcode.js';
+import { mapCodeTitle, mapCodeId, recipeFromCode } from './local/mapcode.js';
 
 const STORAGE_KEY = 'hexmap-settings-v1';
 
@@ -109,7 +109,11 @@ const MATRIX_SECTIONS = new Set(['tileTypes', 'biomes', 'statuses', 'intellect',
 // turn a hook off (config/entities.js, COMBAT_TAGS).
 const TAG_HOOKS = new Set(['onPeriodic', 'onPickup', 'onExpire', 'onDestroy']);
 
-export function createSettings({ config, defaults, onChange, getUiScale, getUiScaleOptions, onSetUiScale, getShowLog, onSetShowLog, onClose }) {
+// `onPreviewMap(recipe, code)` is the Preview section's hook (Settings >
+// Encounters > Preview): main.js dives into the recipe's arena (and opens its
+// floating editor on `code`, the text the recipe came from) and returns null,
+// or returns the reason it cannot right now (shown under the box).
+export function createSettings({ config, defaults, onChange, getUiScale, getUiScaleOptions, onSetUiScale, getShowLog, onSetShowLog, onClose, onPreviewMap }) {
   const $ = (id) => document.getElementById(id);
   const win = $('settings');
   const tabsEl = $('settings-tabs');
@@ -253,6 +257,7 @@ export function createSettings({ config, defaults, onChange, getUiScale, getUiSc
         // belong here, beside the table that says which fight spawns where.
         flow.push(renderGroup('battle', battleScalars(), defaults.battle, 'battle'));
         wide.push(battlesBlock());
+        wide.push(previewBlock());
       }
     }
     if (flow.length) parts.push(`<div class="settings-flow">${flow.join('')}</div>`);
@@ -260,7 +265,7 @@ export function createSettings({ config, defaults, onChange, getUiScale, getUiSc
     bodyEl.innerHTML = parts.join('');
     bodyEl.classList.toggle('has-matrix', wide.length > 0);
     if (tab.id === 'units') wireUnitsTab();
-    if (tab.id === 'encounters') wireBattlesBlock();
+    if (tab.id === 'encounters') { wireBattlesBlock(); wirePreviewBlock(); }
     bodyEl.querySelector('#settings-language')?.addEventListener('change', (e) => { setLanguage(e.target.value); render(); });
     bodyEl.querySelector('#settings-uiscale')?.addEventListener('change', (e) => { if (onSetUiScale) onSetUiScale(Number(e.target.value)); });
     bodyEl.querySelector('#settings-showlog')?.addEventListener('change', (e) => { if (onSetShowLog) onSetShowLog(e.target.checked); });
@@ -524,6 +529,130 @@ export function createSettings({ config, defaults, onChange, getUiScale, getUiSc
       const [row, layer, gid] = btn.dataset.drop.split('|');
       dropFromSlot(row, Number(layer), gid);
     }));
+  }
+
+  // ----- Settings > Encounters > Preview -------------------------------------
+  // The map code preview (since 2026-10-06; Menu -> Preview map code before):
+  // a dropdown of every map the config holds (the combat maps grouped by the
+  // battle-map row that lists them, then the shop maps) fills the paste box
+  // with that map's code; the box is checked by the real parser on every
+  // keystroke (src/local/mapcode.js recipeFromCode, the same call the game
+  // makes), its problems listed underneath and a one-line summary when it is
+  // clean; Preview dives the camera into the arena the box describes
+  // (onPreviewMap, main.js), Copy puts the box on the clipboard for pasting
+  // back into config/encounters.js. The box and the pick survive a re-render
+  // of the tab (every table edit redraws it) and the window being closed and
+  // reopened: editing a map and previewing it a few times is the whole point.
+  let previewCode = '';
+  let previewPick = '';
+  let previewTimer = 0;
+
+  // Every map the config holds, in dropdown order: [{ id, title, group, code }].
+  function previewMaps() {
+    const out = [];
+    const combat = craftedMapIndex(config);
+    const rows = config.battle.maps ?? {};
+    const rowOf = (id) => Object.keys(rows).find((row) => Object.values(rows[row] ?? {}).some((ids) => (ids ?? []).includes(id))) ?? null;
+    const seen = new Set();
+    const push = (id, code, group) => { if (seen.has(id)) return; seen.add(id); out.push({ id, title: mapCodeTitle(code), group, code }); };
+    // Combat maps in table order: row by row, as the Battles table lists them,
+    // then whatever combat code no row names.
+    for (const row of Object.keys(rows)) {
+      for (const ids of Object.values(rows[row] ?? {})) for (const id of ids ?? []) if (combat[id]) push(id, combat[id], row);
+    }
+    for (const [id, code] of Object.entries(combat)) if (!rowOf(id)) push(id, code, 'unlisted');
+    for (const code of config.craftedMaps?.shop?.maps ?? []) {
+      const id = mapCodeId(code);
+      if (id) push(id, code, 'shop');
+    }
+    return out;
+  }
+  function previewBlock() {
+    const maps = previewMaps();
+    const groups = [];
+    for (const m of maps) {
+      let g = groups.find((x) => x.group === m.group);
+      if (!g) { g = { group: m.group, maps: [] }; groups.push(g); }
+      g.maps.push(m);
+    }
+    const groupLabel = (g) => (t(`settings.preview.group.${g}`) === `settings.preview.group.${g}` ? g : t(`settings.preview.group.${g}`));
+    const options = groups.map((g) => `<optgroup label="${escapeAttr(groupLabel(g.group))}">${g.maps.map((m) =>
+      `<option value="${escapeAttr(m.id)}" ${m.id === previewPick ? 'selected' : ''}>${escapeAttr(m.title)} (${escapeAttr(m.id)})</option>`).join('')}</optgroup>`).join('');
+    return `<div class="settings-group settings-preview wide">
+      <div class="settings-group-title">${t('settings.preview')}</div>
+      <p class="muted rt-note">${escapeAttr(t('settings.preview.note'))}</p>
+      <div class="settings-row settings-preview-pick"><span class="settings-label">${t('settings.preview.map')}</span>
+        <select id="settings-preview-map"><option value="" ${previewPick ? '' : 'selected'}>${escapeAttr(t('settings.preview.map.none'))}</option>${options}</select>
+        <span class="settings-reset"></span></div>
+      <textarea id="mapcode-input" class="mapcode-input" rows="14" spellcheck="false" placeholder="${escapeAttr(t('settings.preview.placeholder'))}"></textarea>
+      <div id="settings-preview-status" class="settings-preview-status"></div>
+      <div class="settings-preview-actions">
+        <button class="small" id="settings-preview-go">${t('mapcode.preview')}</button>
+        <button class="small" id="settings-preview-copy">${t('settings.preview.copy')}</button>
+      </div>
+    </div>`;
+  }
+  // The parser's verdict on the box, drawn under it: its problems, or a one-line
+  // summary of what the code builds.
+  function checkPreviewCode() {
+    const box = bodyEl.querySelector('#settings-preview-status');
+    if (!box) return null;
+    const text = previewCode;
+    if (!text.trim()) { box.className = 'settings-preview-status'; box.textContent = ''; return null; }
+    const recipe = recipeFromCode(text, config);
+    if (recipe.errors.length) {
+      box.className = 'settings-preview-status mapcode-errors';
+      box.textContent = recipe.errors.join('\n');
+      return null;
+    }
+    box.className = 'settings-preview-status muted';
+    box.textContent = t('settings.preview.summary', {
+      id: recipe.id, title: recipe.title, radius: recipe.radius,
+      tiles: Object.keys(recipe.tiles).length,
+      enemies: recipe.enemyTypeIds.length,
+      npcs: recipe.spawns?.npcs?.length ?? 0,
+    });
+    return recipe;
+  }
+  function wirePreviewBlock() {
+    const sel = bodyEl.querySelector('#settings-preview-map');
+    const ta = bodyEl.querySelector('#mapcode-input');
+    const go = bodyEl.querySelector('#settings-preview-go');
+    const copy = bodyEl.querySelector('#settings-preview-copy');
+    if (!sel || !ta || !go || !copy) return;
+    ta.value = previewCode;
+    checkPreviewCode();
+    // Picking a map fills the box with that map's code, exactly as the config
+    // holds it. "(paste your own)" clears nothing: the box keeps what it has.
+    sel.addEventListener('change', () => {
+      previewPick = sel.value;
+      const m = previewMaps().find((x) => x.id === sel.value);
+      if (!m) return;
+      previewCode = m.code;
+      ta.value = previewCode;
+      checkPreviewCode();
+    });
+    ta.addEventListener('input', () => {
+      previewCode = ta.value;
+      clearTimeout(previewTimer);
+      previewTimer = setTimeout(checkPreviewCode, 150);
+    });
+    go.addEventListener('click', () => {
+      const recipe = checkPreviewCode();
+      const box = bodyEl.querySelector('#settings-preview-status');
+      if (!recipe) {
+        if (box && !previewCode.trim()) { box.className = 'settings-preview-status mapcode-errors'; box.textContent = t('settings.preview.empty'); }
+        return;
+      }
+      const problem = onPreviewMap ? onPreviewMap(recipe, previewCode) : t('mapcode.error.busy');
+      if (problem) { if (box) { box.className = 'settings-preview-status mapcode-errors'; box.textContent = problem; } return; }
+      close();
+    });
+    copy.addEventListener('click', async () => {
+      const ok = await copyToClipboard(previewCode);
+      copy.textContent = t(ok ? 'settings.preview.copied' : 'settings.preview.copyFailed');
+      setTimeout(() => { copy.textContent = t('settings.preview.copy'); }, 1500);
+    });
   }
 
   // ----- the Units tab's event wiring --------------------------------------
@@ -806,7 +935,16 @@ export function createSettings({ config, defaults, onChange, getUiScale, getUiSc
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ v: 2, overrides, removed })); } catch { /* private mode etc. */ }
   }
 
-  return { open, close, isOpen, refresh, hasOverrides: () => Object.keys(overrides).length > 0 };
+  // The Preview section's code box, readable and writable from outside: the
+  // floating editor shown during a preview (main.js) edits the same text, so
+  // what was typed over the arena is what the box shows afterwards.
+  function setPreviewCode(text) {
+    previewCode = String(text ?? '');
+    const ta = bodyEl.querySelector('#mapcode-input');
+    if (ta && ta.value !== previewCode) { ta.value = previewCode; checkPreviewCode(); }
+  }
+  return { open, close, isOpen, refresh, hasOverrides: () => Object.keys(overrides).length > 0,
+           setPreviewCode, getPreviewCode: () => previewCode };
 }
 
 // Merges a SAVED value over today's default so a snapshot taken against an older

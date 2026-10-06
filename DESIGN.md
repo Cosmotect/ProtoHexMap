@@ -629,9 +629,36 @@ statement.
 * **Engine support**: `createBattle` takes `wallKeys`, `etherKeys` (impassable to
   walking and flying; wall crashes a shove, ether kills one) and `startTags`
   (pre-placed permanent tile tags), all built from the recipe.
-* **Preview tool**: Menu -> Preview map code pastes any code, validates it, and
-  flies the camera into the built arena with its enemies standing as inert
-  mannequins - no battle bound, no game state touched.
+* **Preview tool** (Settings > Encounters > Preview; since 2026-10-06 - until
+  then a window off the Menu): a dropdown of every map the config holds (the
+  combat maps grouped by the Battles-table row that lists them, any combat code
+  no row names, then the shop maps) fills a paste box with that map's code
+  exactly as config/encounters.js holds it; the box can be edited or replaced by
+  a pasted code, and is checked on every keystroke by the same `recipeFromCode`
+  the game calls - its problems listed under the box, or a one-line summary (id,
+  title, radius, authored tiles, enemies, npcs) when it is clean. Preview closes
+  the window and flies the camera into the current tile's arena built from the
+  box: enemies stand as inert mannequins, a shop map's `@shopkeeper` tile gets
+  the keeper's body (`createShopView` with a click that does nothing), no battle
+  bound, no game state touched; the floating Exit button or Esc flies back and
+  takes the mannequin down. **During the preview** a floating editor
+  (`#preview-editor`, top-left of the arena) holds the same code, checked as you
+  type, and **Apply rebuilds the arena in place** - `LocalMapView.build` again
+  with the same options and world bearing, controls handed back, the camera put
+  back exactly where it was turned - so a map is edited against the arena it
+  builds without flying out and in; what is typed there is written back into the
+  settings box (`settings.setPreviewCode`), so Exit then Settings shows the
+  edited code, ready to Copy. Every tile wears its **"q,r" index as a flat decal**
+  on its top meanwhile (`setTileLabels`: one cached canvas texture per key, the
+  plates turned to the camera every frame so they read upright), walls and
+  ether included. Copy code (in both places) puts the code on the clipboard -
+  the intended loop is pick, edit, Apply until it looks right, Copy, paste over
+  the code in the config. The box and the pick survive table edits (which
+  redraw the tab) and the window being closed and reopened. The section is
+  `previewBlock` / `wirePreviewBlock` in settings.js; main.js owns the dive,
+  the editor and the rebuild (`previewMapCode` -> `startMapPreview`,
+  `rebuildPreview`, handed in as `onPreviewMap`). Typing in any text box never
+  triggers a keyboard shortcut (ui.js skips textareas as it skips inputs).
 
 ### The Hack terminal (config.hack)
 
@@ -910,9 +937,9 @@ soft-lock a fight.
 ## Roadmap (suggested order)
 
 1. Combat content: more abilities and unit kits, more handcrafted map codes (the
-   format, walls/ether/tags/pinned enemies and the preview tool are all live - see
-   "Handcrafted local maps"); more shop maps (one ships); still open: set dressing
-   and lighting.
+   format, walls/ether/tags/pinned enemies and the preview tool in Settings >
+   Encounters > Preview are all live - see "Handcrafted local maps"); more shop
+   maps (one ships); still open: set dressing and lighting.
 2. Rebuild some form of automated playtesting to re-balance the difficulty ladder
    against interactive combat, now that the old tooling is gone.
 3. Path preview on hover (total cost to reach a tile).

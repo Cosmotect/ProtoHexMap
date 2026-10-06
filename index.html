@@ -51,7 +51,6 @@
             <div class="menu-title" data-i18n="menu.section.tuning">Tuning</div>
             <div class="menu-row">
               <button id="btn-settings" data-i18n="menu.settings" data-i18n-title="menu.settings.title">Settings</button>
-              <button id="btn-mapcode" data-i18n="menu.mapcode" data-i18n-title="menu.mapcode.title">Preview map code</button>
             </div>
           </div>
           <div class="menu-section">
@@ -80,6 +79,18 @@
       <!-- Debug: shown only while a pasted map code is being previewed in the
            arena (Menu -> Preview map code). Click (or Esc) flies back out. -->
       <button id="preview-exit" class="panel preview-exit hidden" data-i18n="mapcode.exit">Exit preview</button>
+      <!-- The map code preview's floating editor (main.js): the code the arena
+           on screen was built from, checked as you type; Apply rebuilds the
+           arena in place, Copy puts the code on the clipboard. -->
+      <div id="preview-editor" class="panel preview-editor hidden">
+        <div class="preview-editor-title" data-i18n="mapcode.editor.title">Map code - edit and apply</div>
+        <textarea id="preview-editor-input" class="mapcode-input" rows="12" spellcheck="false"></textarea>
+        <div id="preview-editor-status" class="settings-preview-status"></div>
+        <div class="settings-preview-actions">
+          <button class="small" id="preview-editor-apply" data-i18n="mapcode.editor.apply">Apply</button>
+          <button class="small" id="preview-editor-copy" data-i18n="settings.preview.copy">Copy code</button>
+        </div>
+      </div>
       <button id="shop-exit" class="panel preview-exit hidden" data-i18n="shop.exit">Leave the shop</button>
 
       <div class="panel right-mid local-info hidden" id="local-info">

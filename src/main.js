@@ -13,11 +13,11 @@ import { createSettings, deepClone } from './settings.js';
 import { createCombatCinematic } from './local/transition.js';
 import { createBattle } from './local/battle/engine.js';
 import { COMBAT_CONFIG } from './config/localmap.js';
-import { resolvedAbilitiesFor, availableUpgrades, triggersFor, resolveUnitStats } from './upgrades.js';
-import { recipeFromCode } from './local/mapcode.js';
+import { resolvedAbilitiesFor, availableUpgrades, triggersFor } from './upgrades.js';
 import { buildHackRecipe } from './local/localmap.js';
 import { createHackRules } from './local/battle/engine.js';
 import { HackNode, HackMine, Shopkeeper } from './local/battle/entity.js';
+import { recipeFromCode } from './local/mapcode.js';
 import { createHackView, createShopView } from './local/localview.js';
 import { makeEnemyOfType } from './battle.js';
 import { t, tn, initLanguage, applyStaticTexts, onLanguageChange } from './i18n.js';
@@ -109,6 +109,9 @@ const settings = createSettings({
     if (game) ui.update(game);
   },
   onClose: () => ui.updateBlur(),
+  // Settings > Encounters > Preview: dive into a map code's arena (see the
+  // map code preview section below).
+  onPreviewMap: (recipe, code) => previewMapCode(recipe, code),
 });
 // A language change re-renders everything that shows text.
 onLanguageChange(() => { applyStaticTexts(); ui.buildLegend(); ui.buildFatigueBar(); if (game) { ui.update(game); ui.renderLog(game); } });
@@ -295,7 +298,7 @@ function beginInteractiveBattle(ctx, placementOverride = null) {
     // right now - unlocked upgrade nodes, a carried relic, a world-map aura it was
     // standing in. Deriving it per fight rather than storing it on the unit is what
     // makes a trigger go away by itself when its source does (src/upgrades.js).
-    .map((u, i) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.maxHp, partyIndex: i, alive: u.alive, ...resolveUnitStats(u), abilityDefs: resolvedAbilitiesFor(u), triggers: triggersFor(u) }))
+    .map((u, i) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.maxHp, partyIndex: i, alive: u.alive, abilityDefs: resolvedAbilitiesFor(u), triggers: triggersFor(u) }))
     .filter((u) => u.alive && u.hp > 0);
   // shape and colour ride along from the bestiary entry (src/battle.js) so the
   // arena can build the right body for each enemy.
@@ -472,7 +475,7 @@ function beginHack(ctx, recipe, partyKeys = null) {
   const H = CONFIG.hack;
   const view = cinematic.localView;
   const partyDefs = game.state.party
-    .map((u, i) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.maxHp, partyIndex: i, alive: u.alive, ...resolveUnitStats(u), abilityDefs: resolvedAbilitiesFor(u), triggers: triggersFor(u) }))
+    .map((u, i) => ({ name: u.name, icon: u.icon, hp: u.hp, maxHp: u.maxHp, partyIndex: i, alive: u.alive, abilityDefs: resolvedAbilitiesFor(u), triggers: triggersFor(u) }))
     .filter((u) => u.alive && u.hp > 0);
   const placement = partyKeys
     ? view.placeUnitsAt(partyDefs, [], partyKeys, [])
@@ -817,62 +820,179 @@ function deployAllowed(recipe) {
 }
 
 // ----- map code preview (debug tool) ----------------------------------------
-// Menu -> Preview map code: paste a handcrafted map code (src/local/mapcode.js)
-// and the camera dives into the CURRENT tile's arena built from it - the same
-// fly-in a fight uses, with the code's enemies standing as mannequins and no
-// battle bound. The floating button (or Esc) flies back out. Purely a debug
-// tool: no game state is touched, the world continues exactly where it was.
+// Settings > Encounters > Preview (since 2026-10-06; it was a Menu window
+// before): pick one of the config's maps from the dropdown or paste a code
+// (src/local/mapcode.js), and Preview dives the camera into the CURRENT
+// tile's arena built from it - the same fly-in a fight uses, with the code's
+// enemies standing as mannequins (and a shop map's keeper on its pinned
+// tile) and no battle bound. The floating button (or Esc) flies back out.
+// Purely a debug tool: no game state is touched, the world continues exactly
+// where it was. The section itself (the dropdown, the paste box, the live
+// parse errors) lives in settings.js; this file owns the dive and the
+// FLOATING EDITOR shown over the arena during a preview (#preview-editor,
+// since 2026-10-06 too): the same code in a box at the top of the screen,
+// checked as you type, and Apply rebuilds the arena IN PLACE - no fly-out,
+// no fly-in, the camera stays where you turned it - so a map is edited
+// against the arena it builds. Every tile wears its "q,r" as a decal
+// meanwhile (LocalMapView.setTileLabels). What is typed here is written back
+// into the settings box, so leaving the preview and reopening Settings shows
+// the edited code, ready to Copy.
 let mapPreview = false;
-let lastMapCode = '';
+let previewKeeper = null;   // the shop-map mannequin's view, disposed on the way out
+let previewCtx = null;      // { hex, worldAzimuth } of the arena on screen, for in-place rebuilds
+let previewCode = '';       // the code the arena on screen was built from (the editor's text)
+let previewEditTimer = 0;
 
-function openMapCodeDialog(errorText = '') {
-  ui.openDialog({
-    title: t('mapcode.title'),
-    html: `<p>${t('mapcode.text')}</p>
-      <textarea id="mapcode-input" class="mapcode-input" rows="12" spellcheck="false"></textarea>
-      ${errorText ? `<div class="effect mapcode-errors">${escapeHtml(errorText)}</div>` : ''}`,
-    actions: [
-      { label: t('mapcode.preview'), onClick: () => {
-        const text = document.getElementById('mapcode-input')?.value ?? '';
-        lastMapCode = text;   // survives an error round-trip and a reopen
-        const recipe = recipeFromCode(text, CONFIG);
-        if (recipe.errors.length) { openMapCodeDialog(recipe.errors.join('\n')); return; }
-        if (cinematic.isActive() || startScreen) { openMapCodeDialog(t('mapcode.error.busy')); return; }
-        ui.closeDialog();
-        startMapPreview(recipe);
-      } },
-      { label: t('mapcode.cancel'), onClick: () => ui.closeDialog() },
-    ],
-  });
-  const ta = document.getElementById('mapcode-input');
-  if (ta) { ta.value = lastMapCode; ta.placeholder = 'id: my-arena\nradius: 4\n0,0: ground 4\n1,0: wall\n2,0: ether\n1,-1: ground 2 fire\n0,1: ground 3 !Husk'; }
+// The Preview button's hook (settings.js previewBlock): takes a recipe that
+// already parsed clean and the code it came from, returns null when the dive
+// started or the reason it could not (a readable sentence the section shows
+// under the box).
+function previewMapCode(recipe, code = '') {
+  if (!game) return t('mapcode.error.busy');
+  if (cinematic.isActive() || startScreen) return t('mapcode.error.busy');
+  previewCode = code;
+  startMapPreview(recipe);
+  return null;
 }
 
 function startMapPreview(recipe) {
   const hex = game.state.position;
-  const enemies = recipe.enemyTypeIds.map((id) => makeEnemyOfType(CONFIG.battle, id)).filter(Boolean);
   mapPreview = true;
   document.getElementById('preview-exit')?.classList.remove('hidden');
-  cinematic.flyIn({
+  const started = cinematic.flyIn({
+    ...previewBuildOpts(hex, recipe),
+    onSwap: () => {},
+    onArrived: () => {},
+  });
+  if (!started) return;
+  previewCtx = { hex, worldAzimuth: cinematic.localView.worldAzimuth ?? 0 };
+  dressPreview(recipe);
+  openPreviewEditor();
+}
+
+// What the arena is built from, shared by the dive and the in-place rebuild.
+function previewBuildOpts(hex, recipe) {
+  return {
     worldHex: hex,
     baseColor: renderer.targetColorFor(hex).getHex(),
     party: [],
-    enemies,
+    enemies: recipe.enemyTypeIds.map((id) => makeEnemyOfType(CONFIG.battle, id)).filter(Boolean),
     seed: game.seed,
     recipe,
     neighbors: worldNeighborsFor(hex),
     edges: worldEdgesFor(hex),
     deployParty: false,
-    onSwap: () => {},
-    onArrived: () => {},
-  });
+  };
+}
+
+// The preview's dressing on a freshly built arena: the tile index decals, and
+// a shop map's keeper. A shop map pins its keeper with `@shopkeeper`: stand
+// the same body the shop flow uses on that tile, as a mannequin (a click on
+// it does nothing), so a shop code previews the way it plays. flyIn (and
+// build) make the arena before they return, so the view is there to draw on.
+function dressPreview(recipe) {
+  const view = cinematic.localView;
+  view.setTileLabels(true);
+  const pinned = (recipe.spawns?.npcs ?? []).find((n) => n.id === 'shopkeeper');
+  if (pinned) {
+    const K = CONFIG.shop.keeper ?? {};
+    const keeper = new Shopkeeper({ pos: pinned.key, name: t('shop.keeper.name'), icon: K.icon, color: K.color });
+    previewKeeper = createShopView({ view, keeper, onClick: () => {} });
+  }
+}
+
+// Apply in the floating editor: rebuild the arena on screen from a recipe,
+// keeping the camera exactly where the player turned it. The view is rebuilt
+// the way flyIn builds it (same options, same world bearing), then handed
+// its controls back; the old arena's dressing goes with the old scene.
+function rebuildPreview(recipe) {
+  if (!mapPreview || !previewCtx || cinematic.mode() !== 'local') return false;
+  const view = cinematic.localView;
+  const cam = view.camera ? { position: view.camera.position.clone(), target: view.controls?.target.clone() ?? null } : null;
+  dropPreviewKeeper();
+  view.build({ ...previewBuildOpts(previewCtx.hex, recipe), worldAzimuth: previewCtx.worldAzimuth });
+  view.activate();
+  if (cam) {
+    view.camera.position.copy(cam.position);
+    if (cam.target && view.controls) { view.controls.target.copy(cam.target); view.controls.update(); }
+    else view.camera.lookAt(cam.target ?? view.finalCameraPose().target);
+  }
+  dressPreview(recipe);
+  return true;
 }
 
 function endMapPreview() {
   if (!mapPreview) return;
   mapPreview = false;
+  dropPreviewKeeper();
+  closePreviewEditor();
+  previewCtx = null;
   document.getElementById('preview-exit')?.classList.add('hidden');
   cinematic.flyOut({});
+}
+
+// ----- the floating editor ---------------------------------------------------
+// #preview-editor (index.html): the code box over the arena, its status line
+// (the parser's verdict, as in the settings section), Apply and Copy. It
+// shares its text with the settings box through settings.setPreviewCode, so
+// the two are always the same code.
+function openPreviewEditor() {
+  const el = document.getElementById('preview-editor');
+  const ta = document.getElementById('preview-editor-input');
+  if (!el || !ta) return;
+  ta.value = previewCode;
+  checkPreviewEditor();
+  el.classList.remove('hidden');
+}
+function closePreviewEditor() {
+  clearTimeout(previewEditTimer);
+  document.getElementById('preview-editor')?.classList.add('hidden');
+}
+// The parser's verdict under the box: problems, or a one-line summary.
+// Returns the recipe when the code is clean.
+function checkPreviewEditor() {
+  const box = document.getElementById('preview-editor-status');
+  const ta = document.getElementById('preview-editor-input');
+  if (!box || !ta) return null;
+  const text = ta.value;
+  if (!text.trim()) { box.className = 'settings-preview-status mapcode-errors'; box.textContent = t('settings.preview.empty'); return null; }
+  const recipe = recipeFromCode(text, CONFIG);
+  if (recipe.errors.length) { box.className = 'settings-preview-status mapcode-errors'; box.textContent = recipe.errors.join('\n'); return null; }
+  box.className = 'settings-preview-status muted';
+  box.textContent = t('settings.preview.summary', {
+    id: recipe.id, title: recipe.title, radius: recipe.radius,
+    tiles: Object.keys(recipe.tiles).length, enemies: recipe.enemyTypeIds.length, npcs: recipe.spawns?.npcs?.length ?? 0,
+  });
+  return recipe;
+}
+{
+  const ta = document.getElementById('preview-editor-input');
+  ta?.addEventListener('input', () => {
+    previewCode = ta.value;
+    settings.setPreviewCode(previewCode);   // the settings box follows the editor
+    clearTimeout(previewEditTimer);
+    previewEditTimer = setTimeout(checkPreviewEditor, 150);
+  });
+  document.getElementById('preview-editor-apply')?.addEventListener('click', () => {
+    const recipe = checkPreviewEditor();
+    if (!recipe) return;
+    if (!rebuildPreview(recipe)) {
+      const box = document.getElementById('preview-editor-status');
+      if (box) { box.className = 'settings-preview-status mapcode-errors'; box.textContent = t('mapcode.error.landing'); }
+    }
+  });
+  document.getElementById('preview-editor-copy')?.addEventListener('click', async () => {
+    const btn = document.getElementById('preview-editor-copy');
+    let ok = false;
+    try { await navigator.clipboard.writeText(previewCode); ok = true; } catch { ok = false; }
+    if (btn) { btn.textContent = t(ok ? 'settings.preview.copied' : 'settings.preview.copyFailed'); setTimeout(() => { btn.textContent = t('settings.preview.copy'); }, 1500); }
+  });
+}
+
+function dropPreviewKeeper() {
+  if (!previewKeeper) return;
+  previewKeeper.dispose();
+  previewKeeper = null;
 }
 
 // The party view (TAB). It reads the run and the fight through the two getters
@@ -898,7 +1018,6 @@ ui = createUI(CONFIG, {
   // body into screen space, and only the local view knows where the bodies are.
   getLocalView: () => (cinematic.isActive() ? cinematic.localView : null),
   onOpenSettings: () => { settings.open(); ui.updateBlur(); },
-  onMapCodePreview: () => openMapCodeDialog(),
   onEscape: () => {
     if (mapPreview) { endMapPreview(); return; }
     // In a shop: Esc closes the window first, a second Esc leaves.
@@ -1074,9 +1193,13 @@ function startRun(seed, opts = {}) {
   pendingEnd = false;
   startScreen = false;
   ui.setStartScreen(false);
-  // A restart mid-preview: the arena goes with the run, so the flag and the
-  // floating exit button must not survive it.
+  // A restart mid-preview: the arena goes with the run, so the flag, the
+  // keeper mannequin, the floating editor and the exit button must not
+  // survive it.
   mapPreview = false;
+  dropPreviewKeeper();
+  closePreviewEditor();
+  previewCtx = null;
   document.getElementById('preview-exit')?.classList.add('hidden');
   abortBattle();
   cinematic.abort();

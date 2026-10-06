@@ -3039,8 +3039,9 @@ body.in-combat .party-battle-only {
 }
 
 /* ----- map code preview (debug tool) ------------------------------------------
-   The paste box inside the Menu -> Preview map code window, and the floating
-   exit button shown while the pasted arena is on screen. */
+   The paste box of Settings > Encounters > Preview (it was a Menu window until
+   2026-10-06), its status line, and the floating exit button shown while the
+   pasted arena is on screen. */
 .mapcode-input {
   width: 100%;
   box-sizing: border-box;
@@ -3059,6 +3060,69 @@ body.in-combat .party-battle-only {
 .mapcode-errors {
   white-space: pre-line;
   color: #ff8d9d;
+}
+
+/* The Preview section: the map dropdown sits in an ordinary settings row, the
+   box takes the full width under it, then the parser's verdict and the two
+   buttons. The dropdown is wider than a number box: map titles are words. */
+.settings-preview .settings-preview-pick select {
+  min-width: 320px;
+  max-width: 100%;
+}
+
+.settings-preview .mapcode-input {
+  margin-top: 10px;
+  min-height: 160px;
+}
+
+.settings-preview-status {
+  min-height: 1.4em;
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-line;
+}
+
+.settings-preview-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* The map code preview's floating editor (index.html #preview-editor): a
+   panel in the top-left corner of the arena with the code box, the parser's
+   verdict and Apply / Copy. Narrow enough to leave the arena in view; the box
+   scrolls inside it. */
+.preview-editor {
+  position: absolute;
+  left: 16px;
+  top: 64px;
+  width: 400px;
+  max-height: calc(100vh - 160px);
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px 12px;
+  z-index: 30;
+}
+
+.preview-editor-title {
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+
+.preview-editor .mapcode-input {
+  margin-top: 0;
+  flex: 1 1 auto;
+  min-height: 140px;
+  font-size: 11.5px;
+}
+
+.preview-editor .settings-preview-status {
+  max-height: 6em;
+  overflow-y: auto;
 }
 
 /* The floating exit button of the map code preview and of the shop's arena

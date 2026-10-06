@@ -114,8 +114,7 @@ export function createUI(config, handlers) {
   $('btn-enter').addEventListener('click', () => handlers.onEnter());
   $('btn-menu').addEventListener('click', () => toggleMenu());
   $('btn-settings').addEventListener('click', () => { closeMenu(); handlers.onOpenSettings(); });
-  // Debug: paste a handcrafted map code and walk around the arena it builds.
-  $('btn-mapcode').addEventListener('click', () => { closeMenu(); handlers.onMapCodePreview && handlers.onMapCodePreview(); });
+  // (The map code preview moved into Settings > Encounters > Preview, 2026-10-06.)
   // The tutorial: the first unfinished hand-authored map of the chain.
   $('btn-tutorial').addEventListener('click', () => { closeMenu(); handlers.onStartTutorial && handlers.onStartTutorial(); });
   function toggleMenu() { els.menu.classList.toggle('hidden'); updateBlur(); }
@@ -152,7 +151,8 @@ export function createUI(config, handlers) {
   });
 
   window.addEventListener('keydown', (e) => {
-    if (e.target instanceof HTMLInputElement) return;
+    // Typing in a box is never a shortcut (the seed box, the map code boxes).
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     // The menu is the one thing that always answers; everything else waits while input is blocked.
     if (e.key === 'm' || e.key === 'M') { toggleMenu(); return; }
     if (handlers.isInputBlocked && handlers.isInputBlocked()) return;

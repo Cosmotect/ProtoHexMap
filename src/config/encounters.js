@@ -262,26 +262,37 @@ radius: 4
 -2,2: ground 1
 -3,3: ground 1`,
         `# A road lined with still-burning braziers runs straight through the field.
+# A road lined with still-burning braziers runs straight through the field.
 # A husk and a drifter loiter at the far end; the fires punish a careless shove.
 id: ash-road
 title: Ash Road
 radius: 4
--2,-2: ground 3
-0,-2: ground 3
+4,-2: ground 3
+3,-2: ground 4
 2,-2: ground 3
+1,-2: ground 4
+0,-2: ground 3
+-1,-2: ground 4
+-2,-2: ground 3
 -3,-1: ground 2 fire
 -1,-1: ground 2 fire
 1,-1: ground 2 fire
 3,-1: ground 2 fire
 4,-1: ground 2 !drifter
 3,0: ground 2 !husk
+-4,1: ground 2
 -3,1: ground 2 fire
+-2,1: ground 2
 -1,1: ground 2 fire
 1,1: ground 2 fire
 3,1: ground 2 fire
--2,2: ground 3
-0,2: ground 3
-2,2: ground 3`,
+-4,2: ground 4
+-3,2: ground 3
+-2,2: ground 4
+-1,2: ground 3
+0,2: ground 4
+1,2: ground 3
+2,2: ground 4`,
         `# Flat ground pocked with two sinkholes into the ether. The beasts here charge:
 # a stag and a hammerhead - stand next to a hole and one of you goes in.
 id: sinkhole-flats
