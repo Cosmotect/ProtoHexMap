@@ -560,7 +560,7 @@ export const en = {
   'battle.ui.stacks.title': 'Stacks: built each turn (+{gen}), spent by abilities that consume them',
   'battle.ui.moveLeft.title': 'Movement points left this round (after walking and ability costs)',
   'battle.ui.supplies.title': 'The run\'s supplies - some abilities cost them',
-  'battle.ui.nobody': 'Nobody selected - click a unit to pick it up, or an enemy to see its reach.',
+  'battle.ui.nobody': 'Nobody selected - click a unit to pick it up. Hover an enemy card to see its reach, or one of its abilities to see what it can hit.',
   'battle.ui.enemyPhase': 'Enemy turn...',
   'battle.ui.over': 'The fight is over.',
   'battle.ui.dmg': '{n} damage',

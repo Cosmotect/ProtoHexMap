@@ -7,7 +7,13 @@ const base = new URL('../src/', import.meta.url).href;
 const { CONFIG } = await import(base + 'config.js');
 const { createBattle } = await import(base + 'local/battle/engine.js');
 const { K } = await import(base + 'local/battle/bhex.js');
+const { ABILITIES } = await import(base + 'config/abilities.js');
 
+// A Strike that also lays Slug 2 for a turn (test-only def, for the threat preview).
+globalThis.__slugStrike = { name: 'Slug Strike', effects: [
+  { id: 'hit', kind: 'damage', zone: [[0, 0]], amount: 1, times: 1, multiplier: 1, overlapGrant: 1, targets: 'any', anchor: 'aim' },
+  { id: 'status', kind: 'status', status: 'slug', amount: 2, turns: 2, repeat: 1, targets: 'any', anchor: 'aim', zone: [[0, 0]] },
+] };
 const problems = [];
 let checks = 0;
 const check = (ok, msg) => { checks++; if (!ok) problems.push(msg); };
@@ -41,7 +47,8 @@ const E = (b, i) => b.state.units.filter((u) => u.isEnemy)[i];
   // The medic cannot walk onto the body's tile.
   b.selectUnit(m.uid);
   const reach = b.reachFor();
-  check(reach && reach.d[K(0, 0)] === undefined, 'a downed body should block walking onto its tile');
+  // (Since 2026-10-07 a body can be walked THROUGH, never stopped on.)
+  check(reach && (reach.d[K(0, 0)] === undefined || reach.occ.has(K(0, 0))), 'a downed body should not be a tile one can stop on');
   // Mend it back up: medic walks next to it, aims Mend at it, ends the turn.
   b.clickTile(K(-1, 0));
   check(m.pos === K(-1, 0), 'medic should have walked next to the body, is on ' + m.pos);
@@ -184,6 +191,56 @@ const E = (b, i) => b.state.units.filter((u) => u.isEnemy)[i];
   check(b.state.activeUid === P(b, 1).uid && !b.state.selAb, 'selectUnit should switch the unit and drop the aimed ability');
   P(b, 0).hp = 0;
   check(!b.selectUnit(P(b, 0).uid), 'a downed unit cannot be selected');
+}
+
+// 9. Walking THROUGH a downed body (either side's), never stopping on it.
+{
+  const b = arena({
+    party: [{ name: 'Vanguard', abilityIds: ['strike'], speed: 2 }, { name: 'Medic', abilityIds: ['strike'] }],
+    enemies: [{ name: 'Husk', abilityIds: ['strike'] }, { name: 'Husk', abilityIds: ['strike'] }],
+    // A corridor: the radius-4 board, the walker at 0,0, an ally body at 1,0 and an enemy body at 2,0.
+    partyKeys: [K(0, 0), K(1, 0)], enemyKeys: [K(2, 0), K(-4, 4)],
+  });
+  P(b, 1).hp = 0; E(b, 0).hp = 0;
+  b.cancel(); b.selectUnit(P(b, 0).uid);   // re-select so the reach is measured afresh
+  const r = b.reachFor();
+  check(r.occ.has(K(1, 0)) && r.d[K(1, 0)] === 1, 'an ally body is passable but no stopping tile');
+  check(r.d[K(2, 0)] === 2 && r.occ.has(K(2, 0)), 'an enemy body is passable too ');
+}
+
+// 10. The enemy threat preview: reach on hover, hits on an ability, and it
+// reads the board the SELECTED unit finds (an earlier Slug shrinks the reach).
+{
+  const b = arena({
+    party: [
+      { name: 'Vanguard', abilityIds: ['strike'], abilityDefs: { strike: { ...ABILITIES.strike, ...globalThis.__slugStrike } } },
+      { name: 'Medic', abilityIds: ['strike'] },
+    ],
+    enemies: [{ name: 'Husk', abilityIds: ['strike'], speed: 4 }],
+    partyKeys: [K(0, 0), K(-3, 0)], enemyKeys: [K(1, 0)],
+  });
+  const e = E(b, 0), v = P(b, 0), m = P(b, 1);
+  // The enemy is no longer selectable: a click on it with nothing aimed does nothing.
+  b.cancel(); b.cancel();
+  b.clickTile(K(1, 0));
+  check(b.state.inspectUid == null && b.state.activeUid == null, 'clicking an enemy should not select or inspect it');
+  b.selectUnit(m.uid);
+  b.previewEnemy(e.uid);
+  const full = Object.keys(b.state.inspectReach.d).length;
+  check(b.state.inspectUid === e.uid && full > 10 && !b.state.inspectHits, `hovering the card previews the reach (${full} tiles)`);
+  b.previewEnemy(e.uid, 'strike');
+  const hits = b.state.inspectHits || [];
+  check(hits.length > full / 2 && !b.state.inspectReach, `hovering an ability previews its hits (${hits.length} tiles)`);
+  b.clearEnemyPreview();
+  check(b.state.inspectUid == null, 'leaving the roster clears the preview');
+  // Vanguard (first in the order) locks a slugging strike on the enemy.
+  b.selectUnit(v.uid); b.selectAbility('strike'); b.clickTile(K(1, 0));
+  check(!!v.lock, 'setup: the slug strike is locked');
+  b.selectUnit(m.uid);   // fires after Vanguard: sees the Slug
+  const slowed = Object.keys(b.enemyThreat(e.uid).reach.d).length;
+  b.selectUnit(v.uid);   // the slugger itself: before its own cast, no Slug yet
+  const own = Object.keys(b.enemyThreat(e.uid).reach.d).length;
+  check(slowed < own && own === full, `a Slug from an earlier lock should shrink the reach (${own} -> ${slowed})`);
 }
 
 console.log(`${checks} checks, ${problems.length} problem(s)`);

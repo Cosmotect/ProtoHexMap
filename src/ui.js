@@ -765,19 +765,32 @@ export function createUI(config, handlers) {
     });
     root.addEventListener('pointerleave', () => setHovered(null));
   }
-  // Clicking an enemy's CARD does what clicking its body in the arena does:
-  // inspects it, which draws where it could walk. The card and the token are two
-  // views of one creature, so they had better answer the same click - and the
-  // strip is often the easier of the two to hit. The engine's own guards are
-  // mirrored here, so a click during the enemy phase or mid-animation is ignored
-  // just as it is on the board.
-  els.enemyRoster.addEventListener('click', (e) => {
-    const card = e.target.closest('.unit[data-enemy]');
-    if (!card || !battleRef) return;
+  // THE ENEMY THREAT PREVIEW (since 2026-10-07 - enemies are no longer
+  // selectable, neither here nor on the board). Hovering an enemy's CARD shows
+  // where it could walk on its turn; hovering one of its ABILITY slots shows
+  // every tile that ability could hit from anywhere it could walk to. The engine
+  // measures both on the board the selected party unit will find (an earlier
+  // lock's Slug or shove already counted) - see previewEnemy in engine.js.
+  // `threatKey` keeps the panel's redraws (which every emit causes, the
+  // preview's own included) from recomputing a preview that has not changed.
+  let threatKey = null;
+  function setThreat(uid, abId) {
+    const key = uid ? `${uid}|${abId ?? ''}` : null;
+    if (key === threatKey) return;
+    threatKey = key;
+    if (!battleRef) return;
+    if (!key) { battleRef.clearEnemyPreview?.(); return; }
+    battleRef.previewEnemy?.(uid, abId);
+  }
+  els.enemyRoster.addEventListener('pointerover', (e) => {
+    if (!battleRef) return;
     const sb = battleRef.state;
-    if (sb.over || sb.busy || sb.phase !== 'player') return;
-    battleRef.inspect(card.getAttribute('data-enemy'));
+    const card = e.target.closest('.unit[data-enemy]');
+    if (!card || sb.over || sb.phase !== 'player') { setThreat(null); return; }
+    const slot = e.target.closest('.u-slot[data-ab]');
+    setThreat(card.getAttribute('data-enemy'), slot ? slot.getAttribute('data-ab') : null);
   });
+  els.enemyRoster.addEventListener('pointerleave', () => setThreat(null));
   function setHovered(next) {
     if (next?.kind === hovered?.kind && next?.id === hovered?.id) return;
     hovered = next;
@@ -890,7 +903,7 @@ export function createUI(config, handlers) {
       // an empty socket would promise loot that is not there.
       const slots = (u.abilityIds ?? []).map((id) => {
         const ab = battleRef.abilityById(id);
-        return ab ? slotBox('ab', ab.icon, abilityTip(id, ab)) : slotBox('ab', null, t('slot.ability.empty'));
+        return ab ? slotBox('ab', ab.icon, abilityTip(id, ab), id) : slotBox('ab', null, t('slot.ability.empty'));
       });
       while (slots.length < 2) slots.push(slotBox('ab', null, t('slot.ability.empty')));
       // The initial stands in for a portrait: enemies carry no emoji.
@@ -1016,6 +1029,9 @@ export function createUI(config, handlers) {
 
   function updateBattle() {
     if (!battleRef) return;
+    // The engine dropped the threat preview (a new phase, the board moved):
+    // forget it here too, so the next hover over the same card draws it afresh.
+    if (battleRef.state.inspectUid == null) threatKey = null;
     renderEnemyRoster();
     renderPartyPanel();
     const sb = battleRef.state;
@@ -1338,8 +1354,10 @@ function resolveValue(v) {
 const STATUS_SLOTS = 7;
 
 // One square slot. `filled` is the glyph, or null for a vacant socket.
-function slotBox(cls, filled, tip) {
-  const title = tip ? ` title="${escapeAttr(tip)}"` : '';
+// `abId` (optional) tags an ability slot, so a hover can tell which one it is
+// over (the enemy roster's threat preview).
+function slotBox(cls, filled, tip, abId = null) {
+  const title = (tip ? ` title="${escapeAttr(tip)}"` : '') + (abId ? ` data-ab="${escapeAttr(abId)}"` : '');
   return filled
     ? `<span class="u-slot ${cls}"${title}>${filled}</span>`
     : `<span class="u-slot ${cls} empty"${title}></span>`;

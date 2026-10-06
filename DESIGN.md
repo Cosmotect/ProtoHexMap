@@ -373,6 +373,20 @@ Combat therefore reads as the units acting one after another, as they originally
 did - except that the player lays the whole turn out first, sees its result, and
 can rearrange it before committing.
 
+**Enemies are not selectable; the roster previews them** (since 2026-10-07). A
+click on an enemy's body or card does nothing (unless an ability is being aimed at
+it). Hovering an enemy's CARD in the roster shows where it could walk on its turn
+(red dots); hovering one of its ABILITY slots shows every tile that ability could
+hit from anywhere it could walk to (a red wash). Both are worked out by the
+engine's `enemyThreat(uid, abId)` on the board AS THE SELECTED UNIT WILL FIND IT -
+the standing locks of the units before it in the firing order played out on a copy
+(`boardBeforeSelected`), the same "before" the overhead cards use - so a Slug, a
+stun, a root or a shove an earlier unit lands is already counted (a stunned or
+disarmed enemy shows no hits; a stunned or rooted one no walk). Nobody selected:
+the board after the whole volley. `previewEnemy` / `clearEnemyPreview` put it on
+the board (`sb.inspectUid`, `inspectReach`, `inspectHits`, `inspectFrom`); no rule
+reads it.
+
 **The overlap bonus is ordered.** A damaging ability gets `combat.stack
 .bonusPerOverlap` (1) extra BASE damage on every hex that an earlier ability of the
 same volley already hit, once per such ability: the first blow on a hex gets
@@ -555,8 +569,9 @@ derived: 0 hp, not `fled`, not `gone`). It lies on its tile, its token tipped 90
 degrees onto its side (`LocalMapView.setTokenDowned`), shows no overhead card, and
 can do nothing. A downed body takes no damage and no status, but it CAN be shoved
 like anyone (a collision hurts only the other party to it; over the edge it is
-gone for good). It is an obstacle: walkers route around it (fliers may pass over,
-not stop), a charge stops in front of it, a solid tag cannot be placed on it.
+gone for good). Anyone may walk THROUGH a body, either side's, but nobody may stop
+on it (since 2026-10-07; it used to be a wall to walkers); a charge still stops in
+front of it, and a solid tag cannot be placed on it.
 A heal landing on it REVIVES it (`sRevive`): the heal becomes its hp, its statuses
 are cleared, and it acts from its side's next phase. The enemy AI values getting an
 ally back up as much as putting a party member down. Only a shove into the void

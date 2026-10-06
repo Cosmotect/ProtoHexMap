@@ -181,7 +181,9 @@ export const CONFIG = {
     aimRaiseFill: 0x9a5cff,    // the ground here changes height
     aimTagFill: 0xff9950,      // a tile tag is left here
     aimDashFill: 0x7fe0f0,     // the caster ends up here
-    enemyReachRing: 0xd0455f,  // ...and where a clicked ENEMY could walk (a readout, not a target)
+    enemyReachRing: 0xd0455f,  // ...where a hovered ENEMY could walk (the roster's threat preview, a readout)
+    enemyHitTile: 0xff5d3a,    // ...and every tile its hovered ability could hit from anywhere it can walk to
+    enemyHitOpacity: 0.32,     // that hit wash's strength (a filled tile, not a dot)
     hoverRing: 0xffffff,
     player: 0xfff1c1,
     playerGlow: 0xffd166,

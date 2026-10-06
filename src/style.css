@@ -2511,6 +2511,16 @@ body.in-combat .party-battle-only {
   left: 14px;
 }
 
+/* THE THREAT PREVIEW (since 2026-10-07): an enemy card is hovered, not
+   clicked - the card shows where it can walk, an ability slot what it can hit.
+   The slot under the cursor lights up in the enemy red so it reads as the
+   thing being previewed. */
+.enemy-roster .unit { cursor: default; }
+.enemy-roster .u-slot[data-ab]:hover {
+  border-color: #ff5d3a;
+  background: rgba(255, 93, 58, 0.22);
+}
+
 .enemy-roster .unit.active {
   box-shadow: 0 0 0 1px var(--accent);
 }

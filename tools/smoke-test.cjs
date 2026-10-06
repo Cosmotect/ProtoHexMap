@@ -260,10 +260,11 @@ fs.mkdirSync(OUT, { recursive: true });
   if (knobShape.legacy.length) problems.push('statuses still carry amountIs / amountSign: ' + knobShape.legacy.join(', '));
   if (!(knobShape.slowSpeed < 0 && knobShape.hasteSpeed > 0)) problems.push('slow / haste no longer write their own sign: ' + JSON.stringify(knobShape));
 
-  // ----- clicking an enemy CARD inspects it ----------------------------------
-  // The card in the strip and the body in the arena are two views of one creature,
-  // so they answer the same click: it shows where that enemy could walk.
-  const cardClick = await page.evaluate(async () => {
+  // ----- HOVERING an enemy card previews it (since 2026-10-07) ----------------
+  // Enemies are not selectable: a click on the card or the body does nothing;
+  // hovering the card shows where it could walk, hovering one of its ability
+  // slots every tile that ability could hit.
+  const cardHover = await page.evaluate(async () => {
     const bt = window.__battle, sb = bt.state;
     bt.cancel();
     const card = document.querySelector('#enemy-roster .unit[data-enemy]');
@@ -271,13 +272,21 @@ fs.mkdirSync(OUT, { recursive: true });
     const want = card.getAttribute('data-enemy');
     card.click();
     await new Promise((r) => setTimeout(r, 150));
-    const after = { uid: sb.inspectUid, reach: !!sb.inspectReach, tiles: sb.inspectReach ? Object.keys(sb.inspectReach.d).length : 0 };
-    bt.cancel();
-    return { want, after };
+    const clicked = sb.inspectUid;
+    card.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 150));
+    const reach = { uid: sb.inspectUid, tiles: sb.inspectReach ? Object.keys(sb.inspectReach.d).length : 0 };
+    const slot = card.querySelector('.u-slot[data-ab]');
+    if (slot) slot.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 150));
+    const hits = sb.inspectHits ? sb.inspectHits.length : 0;
+    document.getElementById('enemy-roster').dispatchEvent(new PointerEvent('pointerleave'));
+    await new Promise((r) => setTimeout(r, 100));
+    return { want, clicked, reach, hits, slot: !!slot, cleared: sb.inspectUid == null };
   });
-  if (cardClick.skipped) problems.push('enemy card click check skipped: ' + cardClick.skipped);
-  else if (cardClick.after.uid !== cardClick.want || !cardClick.after.reach || cardClick.after.tiles < 1) {
-    problems.push('clicking an enemy card did not inspect it: ' + JSON.stringify(cardClick));
+  if (cardHover.skipped) problems.push('enemy card hover check skipped: ' + cardHover.skipped);
+  else if (cardHover.clicked != null || cardHover.reach.uid !== cardHover.want || cardHover.reach.tiles < 1 || (cardHover.slot && cardHover.hits < 1) || !cardHover.cleared) {
+    problems.push('the enemy card threat preview misbehaved: ' + JSON.stringify(cardHover));
   }
 
   // ----- a character's story comes from its roster row ------------------------

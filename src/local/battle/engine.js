@@ -1257,22 +1257,27 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   // `cap` overrides the budget (Infinity = every reachable tile, used by walked()).
   // ROOTED: a status with agency 'rooted', or a rooting tile tag under the
   // unit (a web). No walking at all this activation.
-  const rooted = (u) => !!agencyLost(u, 'rooted') || !!(sb.tags[u.pos] && sb.tags[u.pos].roots && !(sb.tags[u.pos].hp > 0));
-  function reach(u, fromK = u.pos, cap) {
+  // `B` is the board to read (default the real one): the enemy threat preview
+  // (enemyThreat) measures on a simulated board, the one the selected unit
+  // will find once the locks before it in the order have fired.
+  const rooted = (u, B = sb) => !!agencyLost(u, 'rooted') || !!(B.tags[u.pos] && B.tags[u.pos].roots && !(B.tags[u.pos].hp > 0));
+  function reach(u, fromK = u.pos, cap, B = sb) {
     const fly = flies(u);
     const hard = new Set(), soft = new Set();
-    if (cap === undefined && rooted(u) && fromK === u.pos) return { d: { [fromK]: 0 }, prev: {}, occ: soft };
-    for (const o of sb.units) {
-      if (o === u) continue;
-      // A downed body: a wall to a walker, a no-stopping tile to a flier.
-      if (o.downed) { (fly ? soft : hard).add(o.pos); continue; }
+    if (cap === undefined && rooted(u, B) && fromK === u.pos) return { d: { [fromK]: 0 }, prev: {}, occ: soft };
+    for (const o of B.units) {
+      if (o === u || o.uid === u.uid) continue;
+      // A downed body can be walked THROUGH by anyone, either side's body,
+      // but not stopped on (since 2026-10-07; until then it was a wall to a walker).
+      if (o.downed) { soft.add(o.pos); continue; }
       if (o.hp <= 0) continue;
       ((!fly && o.isEnemy !== u.isEnemy) ? hard : soft).add(o.pos);
     }
-    for (const k in sb.tags) { if (sb.tags[k].hp > 0) (fly ? soft : hard).add(k); }
+    for (const k in B.tags) { if (B.tags[k].hp > 0) (fly ? soft : hard).add(k); }
     // An object that blocks stands like a barrier: a wall to a walker, a
     // no-stopping tile to a flier.
-    for (const o of sb.objects) { if (o.blocks(u)) (fly ? soft : hard).add(o.pos); }
+    for (const o of B.objects) { if (o.blocks(u)) (fly ? soft : hard).add(o.pos); }
+    const sbH = (k) => B.heights[k] ?? 0;
     const spd = cap !== undefined ? cap : moveBudget(u);
     const d = { [fromK]: 0 }, prev = {};
     const pq = [[0, fromK]];
@@ -1298,7 +1303,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     if (!fly) {
       for (const k in sb.tags) if (sb.tags[k].hp > 0) hard.add(k);
       for (const o of sb.objects) if (o.blocks(u)) hard.add(o.pos);
-      for (const o of sb.units) if (o.downed) hard.add(o.pos);
+      // (Downed bodies are walked through, so they are no wall here either.)
     }
     const d = {}, pq = [];
     // Towards the party - or, under a Taunt, towards whoever taunted it.
@@ -1517,7 +1522,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   function startPlayerPhase() {
     blog('- ROUND ' + sb.round + ' -');
     sb.phase = 'player'; sb.selAb = null; sb.aimMap = null; sb.activeUid = null;
-    sb.inspectUid = null; sb.inspectReach = null;   // a new round, a fresh board
+    clearInspect();   // a new round, a fresh board
     for (const u of sb.units) if (!u.isEnemy && u.hp > 0) {
       u.done = false; u.moveLocked = false; u.startPos = u.pos; u.tagTicked = false; u.movePaid = 0; u.lock = null; u.steps = 0; u.extraAttacks = 0;
     }
@@ -1552,19 +1557,87 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     emit();
   }
 
-  // ----- inspecting an enemy ---------------------------------------------
-  // Shows where a creature could walk. It is a readout only: no rule reads
-  // inspectUid, and the party's own selection is left exactly as it was.
-  function inspect(uid) {
-    const e = sb.units.find((u) => u.uid === uid && u.isEnemy && u.hp > 0);
-    if (!e) return;
-    sb.inspectUid = e.uid;
-    sb.inspectReach = reach(e, e.pos);
-    emit();
+  // ----- the ENEMY THREAT preview (hovering the enemy roster) -------------
+  // Enemies are not selectable (since 2026-10-07). Hovering an enemy's card
+  // shows where it could walk on its turn; hovering one of its abilities shows
+  // every tile that ability could hit from anywhere it could walk to. Both are
+  // measured on the board AS THE SELECTED UNIT WILL FIND IT - the standing
+  // locks of the units before it in the firing order played out on a copy, as
+  // the overhead cards are (simulateVolley's `before`) - so a Slug, a stun or a
+  // shove an earlier unit lands is already in it. Nobody selected: after the
+  // whole volley. A readout only: no rule reads it, the selection is untouched.
+  //   sb.inspectUid    the enemy previewed
+  //   sb.inspectReach  { d, occ } on that board (null when its ability is hovered)
+  //   sb.inspectFrom   the tile it stands on there
+  //   sb.inspectHits   [tiles] the hovered ability could hit (null for the card)
+  function boardBeforeSelected() {
+    const st = simSt(null);
+    if (!CFG.lockedAim) return st;
+    st.overlap = {};
+    const c = curP();
+    for (const u of orderedParty()) {
+      if (c && u.uid === c.uid) break;
+      if (u.hp <= 0 || !u.lock) continue;
+      const ab = abFor(u, u.lock.abId);
+      const se = st.units.find((x) => x.uid === u.uid);
+      if (!ab || !se || se.hp <= 0) continue;
+      resolveCast(st, se, ab, u.lock.anchors);
+      flushDeaths(st);
+    }
+    return st;
   }
+  // { from, reach: { d, occ }, stops: [tiles], hits: [tiles] | null } or null
+  // when the enemy is not standing on that board (down, gone, fled).
+  function enemyThreat(uid, abId = null) {
+    const st = boardBeforeSelected();
+    const se = st.units.find((u) => u.uid === uid && u.isEnemy);
+    if (!se || se.hp <= 0) return null;
+    // Its own fresh activation: the whole speed (statuses included), nothing
+    // paid yet. A stun or a root keeps it where it is; a stun or a disarm
+    // means it casts nothing.
+    const stunned = !!agencyLost(se, 'stunned');
+    const cap = stunned || rooted(se, st) ? 0 : effSpeed(se);
+    const res = reach(se, se.pos, cap, st);
+    const stops = Object.keys(res.d).filter((k) => k === se.pos || !res.occ.has(k));
+    let hits = null;
+    if (abId) {
+      hits = [];
+      const ab = abFor(se, abId);
+      const silenced = stunned || !!agencyLost(se, 'disarmed') || (ab?.tags ?? []).some((tg) => statusListed(se, 'forbids', tg));
+      if (ab && !silenced) {
+        const moveCost = costOf(se, ab).move || 0;
+        const seen = new Set();
+        for (const startK of stops) {
+          if (moveCost > 0 && (res.d[startK] || 0) + moveCost > cap) continue;
+          if (ab.castAny && startK !== se.pos) continue;
+          const anchors = ab.castAny ? activeTiles() : ab.castZone.map((off) => addK(startK, off));
+          for (const t of anchors) {
+            if (!inMap(t)) continue;
+            for (const k of zoneTiles(ab, startK, [t]).tiles) seen.add(k);
+          }
+        }
+        hits = [...seen];
+      }
+    }
+    return { from: se.pos, reach: res, stops, hits };
+  }
+  // The roster's hover lands here. `abId` null = the card itself (movement).
+  function previewEnemy(uid, abId = null) {
+    if (sb.over || sb.phase !== 'player') return false;
+    const th = enemyThreat(uid, abId);
+    if (!th) { if (clearInspect()) emit(); return false; }
+    sb.inspectUid = uid;
+    sb.inspectFrom = th.from;
+    sb.inspectReach = abId ? null : th.reach;
+    sb.inspectHits = abId ? th.hits : null;
+    sb.inspectAb = abId;
+    emit();
+    return true;
+  }
+  function clearEnemyPreview() { if (clearInspect()) emit(); }
   function clearInspect() {
     if (sb.inspectUid == null) return false;
-    sb.inspectUid = null; sb.inspectReach = null;
+    sb.inspectUid = null; sb.inspectReach = null; sb.inspectHits = null; sb.inspectFrom = null; sb.inspectAb = null;
     return true;
   }
 
@@ -1590,7 +1663,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     c.done = true;
     for (const u of sb.units) if (!u.isEnemy && u.hp > 0 && u.pos !== u.startPos) u.moveLocked = true;
     sb.selAb = null; sb.aimMap = null; sb.reach = null;
-    sb.inspectUid = null; sb.inspectReach = null;   // the board moved; the readout is stale
+    clearInspect();   // the board moved; the readout is stale
     if (sb.over) return;
     const next = sb.units.find((x) => !x.isEnemy && x.hp > 0 && !x.done);
     if (next) select(next);
@@ -1611,7 +1684,7 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     // statuses go (see endActivation).
     for (const u of sb.units) if (!u.isEnemy && u.hp > 0) endActivation(u);
     sb.phase = 'enemy'; sb.activeUid = null; sb.selAb = null; sb.aimMap = null; sb.reach = null;
-    sb.inspectUid = null; sb.inspectReach = null;
+    clearInspect();
     sb.enemyQ = sb.units.filter((u) => u.isEnemy && u.hp > 0).sort((a, b) => b.init - a.init || a.idx - b.idx);
     // An enemy's movement budget is its own each activation, exactly as a party
     // member's is each round (startPlayerPhase). `startPos` is where the walk is
@@ -1997,15 +2070,15 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
     const uu = unitAt(k);
     const c = curP();
     // Nothing selected (the player cancelled their way out): a click picks a
-    // unit back up, or inspects an enemy.
+    // unit back up. Enemies are not selectable (since 2026-10-07): the roster's
+    // hover previews them instead (previewEnemy).
     if (!c) {
       if (uu && !uu.isEnemy && !uu.done) { clearInspect(); select(uu); }
-      else if (uu && uu.isEnemy) inspect(uu.uid);
       return;
     }
-    // An enemy is a readout, never a move target - unless an ability is aimed
-    // at it, which the aim map below handles.
-    if (!sb.selAb && uu && uu.isEnemy) { inspect(uu.uid); return; }
+    // An enemy is never a move target - unless an ability is aimed at it,
+    // which the aim map below handles. Without one, a click on it does nothing.
+    if (!sb.selAb && uu && uu.isEnemy) return;
     if (!sb.selAb && uu && !uu.isEnemy && uu.uid !== c.uid && !uu.done) { clearInspect(); select(uu); return; }
     if (sb.selAb) {
       const ab = abFor(c, sb.selAb);
@@ -2453,7 +2526,11 @@ export function createBattle({ config, radius, heights, party, enemies, partyKey
   return {
     state: sb,
     start,
-    clickTile, selectAbility, endTurn, inspect, cancel, resetParty,
+    clickTile, selectAbility, endTurn, cancel, resetParty,
+    // The enemy threat preview (the roster's hover): previewEnemy(uid, abId?)
+    // draws it, clearEnemyPreview() takes it down, enemyThreat() just reports.
+    // `inspect` is the old name, kept for the tools.
+    previewEnemy, clearEnemyPreview, enemyThreat, inspect: (uid) => previewEnemy(uid),
     selectUnit, activate: selectUnit,
     abilityById: abById,
     aimPreview,

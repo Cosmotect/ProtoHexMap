@@ -395,6 +395,9 @@ export class LocalMapView {
     // Reach / castable tiles: a small hex dot in the centre of the tile.
     this.moveDotGeo = new THREE.CircleGeometry(tileRadius * 0.2, 6, ringStart);
     this.moveDotGeo.rotateX(-Math.PI / 2);
+    // The enemy threat preview's hit wash: nearly the whole tile, same corners.
+    this.hitFillGeo = new THREE.CircleGeometry(tileRadius * 0.9, 6, ringStart);
+    this.hitFillGeo.rotateX(-Math.PI / 2);
     // Aim outlines, one per party slot, each nested inside the previous
     // (slot 0 outermost). Built on demand, see lockRingGeo().
     this.tileRadius = tileRadius;
@@ -1878,19 +1881,37 @@ export class LocalMapView {
       this.highlights.push(ring);
       this.hlTiles.set(k, { ring, color: new THREE.Color(color), opacity, tile });
     };
-    if (sb.selAb && sb.aimMap) {
+    // THE ENEMY THREAT PREVIEW (hovering the enemy roster - the engine's
+    // previewEnemy) wins over everything: the pointer is on the panel, not on
+    // the board. Measured on the board the selected unit will find, so `from`
+    // may not be where the enemy stands right now (an earlier lock shoves it).
+    if (sb.inspectUid != null && (sb.inspectReach || sb.inspectHits)) {
+      if (sb.inspectHits) {
+        // Its hovered ability: every tile it could hit, as a filled wash.
+        const op = cc.enemyHitOpacity ?? 0.32;
+        for (const k of sb.inspectHits) {
+          const tile = this.map.hexes.get(k);
+          if (!tile) continue;
+          const m = new THREE.Mesh(
+            this.hitFillGeo,
+            new THREE.MeshBasicMaterial({ color: cc.enemyHitTile ?? 0xff5d3a, transparent: true, opacity: op, depthWrite: false, side: THREE.DoubleSide }));
+          m.position.set(tile.x, tile.top + 0.025, -tile.y);
+          this.scene.add(m);
+          this.highlights.push(m);
+        }
+      } else {
+        // The card: where it could walk, in its own red. Gold is the party's
+        // colour, so the two readings can never be confused.
+        const { d, occ } = sb.inspectReach;
+        for (const k of Object.keys(d)) {
+          if (occ.has(k) || k === sb.inspectFrom) continue;
+          add(k, cc.enemyReachRing, 0.45);
+        }
+      }
+    } else if (sb.selAb && sb.aimMap) {
       // Castable tiles use the same faint dot as movement: the colour lives in
       // the aim outlines (the hovered aim and the standing locks).
       for (const k of Object.keys(sb.aimMap)) add(k, cc.moveDot ?? 0x000000);
-    } else if (sb.inspectReach) {
-      // A clicked ENEMY: where it could walk, in its own red. Gold is the
-      // party's colour, so the two readings can never be confused.
-      const { d, occ } = sb.inspectReach;
-      const e = sb.units.find((u) => u.uid === sb.inspectUid);
-      for (const k of Object.keys(d)) {
-        if (occ.has(k) || (e && k === e.pos)) continue;
-        add(k, cc.enemyReachRing, 0.45);
-      }
     } else if (sb.reach) {
       const { d, occ } = sb.reach;
       const cur = battle.curPlayer();
@@ -2515,6 +2536,7 @@ export class LocalMapView {
     if (this.hlRingBackGeo) { this.hlRingBackGeo.dispose(); this.hlRingBackGeo = null; }
     if (this.aimFillGeo) { this.aimFillGeo.dispose(); this.aimFillGeo = null; }
     if (this.moveDotGeo) { this.moveDotGeo.dispose(); this.moveDotGeo = null; }
+    if (this.hitFillGeo) { this.hitFillGeo.dispose(); this.hitFillGeo = null; }
     for (const g of this.lockRingGeos ?? []) g?.dispose();
     this.lockRingGeos = [];
     if (this.scene) {
