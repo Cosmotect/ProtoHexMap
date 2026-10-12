@@ -5,26 +5,29 @@
 //  the whole of what a node can do is the four fields below.
 //
 //  Node format:
-//    name / icon / desc / lore   what the reward card shows (desc = the
-//                 mechanical one-liner; lore = optional flavour)
-//  ----- prerequisites -----
-//    requires     [nodeIds] ALL of them must be unlocked first
-//    requiresAny  [nodeIds] at least ONE of them must be unlocked first
-//                 (both empty = a root, open from the start)
-//    auto         { count: n } - not picked: owned by itself once the unit has
-//                 n picked nodes in this tree (the shape milestones)
 //  ----- what it changes -----
-//    unit         { maxHp, speed, stackMax, stackGen } summed onto the unit's
-//                 own stats (maxHp also raises its current hp when unlocked)
-//    tune         { <effectId>: { <field>: delta } } - ADDS to an effect's
-//                 field: a number or terms onto a quantity (see rules.js),
-//                 offsets onto a zone. The id 'cast' is the ability itself:
-//                 tune: { cast: { castZone: [...], cost: { hp: 1 }, aims: 1 } }
-//    set          { <effectId>: { <field>: value } } - REPLACES a field;
-//                 a value with a `kind` replaces the whole effect, null removes it
-//    effects      [effect, ...] appended to the ability (rules.js). An effect
-//                 with no zone of its own covers every tile the main hit does,
-//                 whatever shape the hit has been given.
+//--Effects--      
+//[effect, ...] appended to the ability(rules.js).An effect
+//with no zone of its own covers every tile the main hit does,
+//whatever shape the hit has been given.
+//--Consume - {id: 'consume', kind: 'consume', resource: 'stacks', max: <quantity>, if: <condition> }
+//kind must be 'consume'.
+//id is an optional name. Give it one if later upgrades should change or delete it with set/tune. By convention, use 'consume'.
+//                    resource can only be 'stacks' today, and that's the default if you leave it out. Any other value gets a warning on the console and the effect is dropped. RESOURCES in rules.js is the list to extend.
+//                    max caps how many stacks are taken. If you leave it out, all of the caster's stacks are taken. It accepts any quantity:
+//                      a plain number: max: 2
+//                      a term: {n: 2 }
+//                      a term over a fact: {per: 'hp', every: 3, mul: 1, min: 1, max: 4 }
+//                      a list of terms, which are summed: [{n: 1 }, {per: 'adjacentAllies' }]
+//                    Any term can carry its own if.
+//     if is a condition on the whole effect. If it fails, nothing is consumed. Conditions are an object of fact → test, and all tests must hold. A test can be:
+//     true or false
+//     an exact number
+//     {min, max} (inclusive)
+//     {any: [...] } or {not: {...} }
+//     The facts you can test: tilesTravelled, moveSpent, moveLeft, didNotMove, hp, maxHp, hpFrac, stacks, consumed, castsThisBattle, adjacentAllies, adjacentEnemies, onTag:<id>, distance, maxRange, atMaxRange, elevationDiff, elevationClimb, elevationDrop, targetHp, targetMaxHp, targetHpFrac, targetHas:<status>, targetOnTag:<id>, targetAdjacentAllies, unitsWith:<status>, amount:<effectId> and round.
+//       if: {stacks: {min: 2 } } makes the consume happen only with at least 2 stacks.
+//       zone, anchor, targets have no effect on consume. It always acts on the caster, and it never gets an automatic zone.
 //    triggers     [trigger, ...] the UNIT gets (rules.js) - a passive
 //  Upgrades fold in the order the tree lists them, so the result never depends
 //  on the order they were unlocked in.
@@ -35,9 +38,66 @@
 import { ringOffsets, lineOffsets } from '../local/battle/bhex.js';
 
 const U = (o) => Object.assign({
+  // What the reward card shows (desc = the mechanical one-liner; lore = optional flavour)
   name: '', icon: '⭐', desc: '', lore: '',
-  requires: [], requiresAny: [], auto: null,
-  unit: {}, tune: {}, set: {}, effects: [], triggers: [],
+
+  // Node unlock requirements. Both empty means its a root node, open from the start.
+  // All nodes that must be unlocked for this node to be available. [nodeIds]
+  requires: [],
+  // Any node from this list unlocked makes this node available. [nodeIds]
+  requiresAny: [],
+  // Nodes that are unlocked automatically when a certain number of other nodes is unlocked. { count: n }
+  auto: null,
+
+  // Unit stat changes summed onto the unit's own stats. (maxHp also raises its current hp when unlocked). { maxHp, speed, stackMax, stackGen }
+  unit: {},
+
+  // For an existing effect on the ability, this allows tuning of its fields. { < effectId >: { < field >: delta } }
+  // Example:   tune: { cast: { castZone: [...], cost: { hp: 1 }, aims: 1 } }
+  tune: {},
+  // Unlike tune, set replaces a field. Setting a field to "null", removes it. { <effectId>: { <field>: value } }
+  set: {},
+
+  // Effects are.. The new effects that the ability upgrade bolts onto the ability. Its fields are:
+  // 1. 'kind' - No default, must pick one.
+  //    a. damage - adds a damage instance to the ability
+  //    b. heal
+  //    c. status
+  //    d. push
+  //    e. throw
+  //    f. swap
+  //    g. height
+  //    h. tag
+  //    i. dash
+  //    j. consume
+  //    k. gain
+  //    l. extraAttack
+  // 2. "id" - A unique identifier that can be used by tune and set in later upgrades. "None" by default.
+  // 3. "zone" - [[q,r], ...] list of tiles the effect hits, if not specified, hits same tiles as the ability itself.
+  // 4. "anchor" - The tile from which the effect's zone is calculated based on the list of offsets provided in the "Zone" field.
+  //    a. aim - The tile that was clicked by the player. The default when not specified.
+  //    b. caster - the tile the casting unit was on when the cast began.
+  //    c. landing - the tile the casting unit ends up on as a result of position changing effects like a dash, or a teleport.
+  // 5. "targets" - targeting based on specific units or groups:
+  //    a. any - All entity tiles. (Intersection with the Zone)
+  //    b. enemies - Units that are not in the party. (Intersection with the Zone)
+  //    c. allies - Units in the party, excluding the caster. (Intersection with the Zone)
+  //    d. party - Units in the party, including the caster. (Intersection with the Zone)
+  //    e. self - The caster. (Zone is ignored)
+  //    f. source - Whoever applied this status. (Zone is ignored)
+  //    g. killer - Whoever was the status holder's killer. (Zone is ignored)
+  // 6. "if" - conditions that must be met for the effect to go off. Example: { didNotMove: true, targetHpFrac: { min: 0.8 } }.
+  // 7. "when" - turns the effects into a trigger:
+  //    a. battleStart
+  //    b. activationStart
+  //    c. activationEnd
+  //    d. hit
+  //    e. kill
+  //    f. death
+  //    g. moved
+  effects: [],
+
+  triggers: [],
 }, o);
 // The green stat stickers, one helper each (they are nodes like any other).
 const HP = (n, pre = {}) => U({ name: `Vitality +${n}`, icon: '❤️', desc: `+${n} max hp`, unit: { maxHp: n }, ...pre });
@@ -53,6 +113,113 @@ const CONSUME = { kind: 'consume', resource: 'stacks' };
 const self = (status, extra = {}) => ({ kind: 'status', targets: 'self', status, ...extra });
 // -------------------------------------TABLE-------------------------------------
 export const ABILITY_UPGRADES = {
+
+  // =========================== CLAW SWIPE (Gorm) ============================
+  clawSwipe: {
+    // ----- Bleed path -----
+    //level 0
+    bl0: DMG(1),
+    //level 1
+    bl1a: U({
+      requires: ['bl0'],
+      name: 'Rending', icon: '🩸', desc: 'applies Bleed 2',
+      effects: [{ kind: 'status', status: 'bleed', amount: 2 }]
+    }),
+    bl1b: SHAPE(CLEAVE, { name: 'Wide Swipe', desc: 'the swipe also reaches the tiles beside the target', requires: ['bl0'] }),
+    //level 2
+    bl2a: HP(3, { requiresAny: ['bl1a', 'bl1b'] }),
+    bl2b: SMAX(1, { requiresAny: ['bl1a', 'bl1b'] }),
+    bl2c: DMG(1, { requiresAny: ['bl1a', 'bl1b'] }),
+    bl2d: MV(1, { requiresAny: ['bl1a', 'bl1b'] }),
+    //level 3
+    bl3a: U({
+      requiresAny: ['bl2a', 'bl2b'],
+      name: 'Restorative Conviction', icon: '💊', desc: 'Consume all stacks, gain same amount of regeneration.',
+      effects: [CONSUME, self('regen', { amount: { per: 'consumed', every: 1 } })]
+    }),
+    bl3b: U({
+      requiresAny: ['bl2a', 'bl2c'],
+      name: 'Cornered', icon: '😬', desc: 'When under 50% helth, gain 1 Strength (+1 base damage).',
+      triggers: [{
+        when: 'activationStart', if: { hpFrac: { max: 0.5 } },
+        kind: 'status', status: 'strong', amount: 1, turns: 1
+      }]
+    }),
+    bl3c: U({
+      requiresAny: ['bl2c', 'bl2d'],
+      name: 'Raging Entry', icon: '😡', desc: 'starts each battle enraged',
+      triggers: [{ when: 'battleStart', kind: 'status', status: 'enraged', amount: 1, turns: 1 }]
+    }),
+    bl3d: U({
+      requiresAny: ['bl2c', 'bl2d'],
+      name: 'Flurry', icon: '🌀', desc: '-2 damage, one more hit',
+      tune: { hit: { amount: -2, times: 1 } }
+    }),
+    //level 4
+    bl4a: HP(3, { requiresAny: ['bl3a', 'bl3c', 'bl3d'] }),
+    bl4b: SMAX(1, { requiresAny: ['bl3a', 'bl3c', 'bl3d'] }),
+    bl4c: MV(1, { requiresAny: ['bl3a', 'bl3c', 'bl3d'] }),
+    //level 5
+    bl5a: U({
+      requiresAny: ['bl2a'],
+      name: 'Empty', icon: '❓', desc: 'Not implemented',
+    }),
+    bl5b: U({
+      requiresAny: ['bl2a', 'bl2b'],
+      name: 'War Cry', icon: '📣', desc: 'allies start each battle Enraged 1',
+      triggers: [{ when: 'battleStart', kind: 'status', targets: 'allies', status: 'enraged', amount: 1, turns: 1 }]
+    }),
+    bl5c: U({
+      requiresAny: ['bl2a', 'bl2b', 'bl2c'],
+      name: 'Empty', icon: '❓', desc: 'Not implemented',
+    }),
+    bl5d: U({
+      requiresAny: ['bl2b', 'bl2c'],
+      name: 'Finish him', icon: '😵', desc: 'Hitting a stunned enemy does double damage',
+      tune: { hit: { multiplier: { n: 1, if: { 'targetHas: stun': true } } } }
+      //effects: { kind: 'damage', multiplier: '2', if: { targetHas: 'stunned' } }
+    }),
+    bl5e: U({
+      requiresAny: ['bl2c'],
+      name: 'Empty', icon: '❓', desc: 'Not implemented',
+    }),
+    //level 6
+    bl6a: HP(4, { requiresAny: ['bl4a', 'bl4b', 'bl4c'] }),
+    bl6b: SGEN(1, { requiresAny: ['bl4a', 'bl4b', 'bl4c'] }),
+    bl6c: MV(1, { requiresAny: ['bl4a', 'bl4b', 'bl4c'] }),
+    bl6d: DMG(2, { requiresAny: ['bl4a', 'bl4b', 'bl4c'] }),
+
+    // // ----- Damage path -----
+    // dmg1: U({ name: 'Coiled', icon: '🔶', desc: 'unspent movement becomes stacks next turn',
+    //   triggers: [{ when: 'activationEnd', kind: 'gain', resource: 'stacks', amount: { per: 'moveLeft' } }] }),
+
+    // ----- Lifesteal path -----
+    ls0: HP(2),
+    ls1a: U({ name: 'Leech Claws', icon: '🖤', desc: '+1 lifesteal', requires: ['ls0'], tune: { hit: { lifesteal: 1 } } }),
+    ls1b: U({
+      name: 'Blood Bond', icon: '🔗', desc: 'the target gets Lifelink: Gorm heals 1 whenever it is damaged', requires: ['ls0'],
+      effects: [{ kind: 'status', status: 'lifelink', turns: 2 }]
+    }),
+    ls2a: HP(3, { requiresAny: ['ls1a', 'ls1b'] }),
+    ls2b: SMAX(1, { requiresAny: ['ls1a', 'ls1b'] }),
+    ls2c: DMG(1, { requiresAny: ['ls1a', 'ls1b'] }),
+    ls2d: MV(1, { requiresAny: ['ls1a', 'ls1b'] }),
+    ls3a: U({
+      name: 'Spite', icon: '🖤', desc: 'when hit: +1 lifesteal until the end of the turn', requires: ['ls2a', 'ls2b'],
+      triggers: [{ when: 'hit', kind: 'status', status: 'lifesteal', amount: 1, turns: 1 }]
+    }),
+    ls3c: U({
+      name: 'Hunger', icon: '🔶', desc: 'consume all stacks: +1 lifesteal per 2 consumed until the end of the turn', requires: ['ls2c', 'ls2d'],
+      effects: [CONSUME, self('lifesteal', { amount: { per: 'consumed', every: 2 }, turns: 1 })]
+    }),
+    ls4a: HP(3, { requiresAny: ['ls3a', 'ls3c'] }),
+    ls4b: SMAX(1, { requiresAny: ['ls3a', 'ls3c'] }),
+    ls4c: MV(1, { requiresAny: ['ls3a', 'ls3c'] }),
+    ls6a: HP(4, { requiresAny: ['ls4a', 'ls4b', 'ls4c'] }),
+    ls6b: SGEN(1, { requiresAny: ['ls4a', 'ls4b', 'ls4c'] }),
+    ls6c: MV(1, { requiresAny: ['ls4a', 'ls4b', 'ls4c'] }),
+    ls6d: DMG(2, { requiresAny: ['ls4a', 'ls4b', 'ls4c'] }),
+  },
 
   // =========================== RAM (Gorm) ===================================
   ram: {
@@ -100,7 +267,7 @@ export const ABILITY_UPGRADES = {
     cc5c: SHAPE(CLEAVE, { name: 'Sweeping Horns', desc: 'the ram becomes a cleave', requires: ['cc4a', 'cc4b', 'cc4c'] }),
     cc5d: U({
       name: 'Concussion', icon: '💫', desc: 'the target is stunned', requires: ['cc4b', 'cc4c'],
-      effects: [{ kind: 'status', status: 'stun', turns: 1 }]
+      effects: [{ kind: 'status', status: 'stun', turns: 2 }]
     }),
     cc5e: U({
       name: 'Rattle the Skull', icon: '❓', desc: 'consume all stacks: Confused 1 per stack consumed', requires: ['cc4c'],
@@ -190,7 +357,10 @@ export const ABILITY_UPGRADES = {
     }),
     tk5d: U({
       name: 'Full Tilt', icon: '🏃', desc: 'after 4 or more tiles: +1 damage and push 1 tile further', requires: ['tk4b', 'tk4c'],
-      tune: { hit: { amount: { n: 1, if: { tilesTravelled: { min: 4 } } } }, push: { dist: { n: 1, if: { tilesTravelled: { min: 4 } } } } }
+      tune: {
+        hit: { amount: { n: 1, if: { tilesTravelled: { min: 4 } } } },
+        push: { dist: { n: 1, if: { tilesTravelled: { min: 4 } } } }
+      }
     }),
     tk5e: U({
       name: 'Mountain Goat', icon: '🏔️', desc: 'ramming uphill: Shielded by the climb; downhill: +1 damage', requires: ['tk4c'],
@@ -201,71 +371,6 @@ export const ABILITY_UPGRADES = {
     tk6b: SGEN(1, { requiresAny: ['tk5a', 'tk5b', 'tk5c', 'tk5d', 'tk5e'] }),
     tk6c: MV(1, { requiresAny: ['tk5a', 'tk5b', 'tk5c', 'tk5d', 'tk5e'] }),
     tk6d: DMG(2, { requiresAny: ['tk5a', 'tk5b', 'tk5c', 'tk5d', 'tk5e'] }),
-  },
-
-  // =========================== CLAW SWIPE (Gorm) ============================
-  clawSwipe: {
-    // ----- Bleed path -----
-    bl0: DMG(1),
-    bl1a: U({
-      name: 'Rending', icon: '🩸', desc: 'applies Bleed 2', requires: ['bl0'],
-      effects: [{ kind: 'status', status: 'bleed', amount: 2 }]
-    }),
-    bl1b: SHAPE(CLEAVE, { name: 'Wide Swipe', desc: 'the swipe also reaches the tiles beside the target', requires: ['bl0'] }),
-    bl2a: HP(3, { requiresAny: ['bl1a', 'bl1b'] }),
-    bl2b: SMAX(1, { requiresAny: ['bl1a', 'bl1b'] }),
-    bl2c: DMG(1, { requiresAny: ['bl1a', 'bl1b'] }),
-    bl2d: MV(1, { requiresAny: ['bl1a', 'bl1b'] }),
-    bl3a: U({
-      name: 'War Cry', icon: '📣', desc: 'allies start each battle Enraged 1', requires: ['bl2a', 'bl2b'],
-      triggers: [{ when: 'battleStart', kind: 'status', targets: 'allies', status: 'enraged', amount: 1, turns: 1 }]
-    }),
-    bl3c: U({
-      name: 'Raging Entry', icon: '😡', desc: 'starts each battle enraged', requires: ['bl2c', 'bl2d'],
-      triggers: [{ when: 'battleStart', kind: 'status', status: 'enraged', amount: 1, turns: 1 }]
-    }),
-    bl3d: U({
-      name: 'Flurry', icon: '🌀', desc: '-2 damage, one more hit', requires: ['bl2c', 'bl2d'],
-      tune: { hit: { amount: -2, times: 1 } }
-    }),
-    bl4a: HP(3, { requiresAny: ['bl3a', 'bl3c', 'bl3d'] }),
-    bl4b: SMAX(1, { requiresAny: ['bl3a', 'bl3c', 'bl3d'] }),
-    bl4c: MV(1, { requiresAny: ['bl3a', 'bl3c', 'bl3d'] }),
-    bl6a: HP(4, { requiresAny: ['bl4a', 'bl4b', 'bl4c'] }),
-    bl6b: SGEN(1, { requiresAny: ['bl4a', 'bl4b', 'bl4c'] }),
-    bl6c: MV(1, { requiresAny: ['bl4a', 'bl4b', 'bl4c'] }),
-    bl6d: DMG(2, { requiresAny: ['bl4a', 'bl4b', 'bl4c'] }),
-
-    // // ----- Damage path -----
-    // dmg1: U({ name: 'Coiled', icon: '🔶', desc: 'unspent movement becomes stacks next turn',
-    //   triggers: [{ when: 'activationEnd', kind: 'gain', resource: 'stacks', amount: { per: 'moveLeft' } }] }),
-
-    // ----- Lifesteal path -----
-    ls0: HP(2),
-    ls1a: U({ name: 'Leech Claws', icon: '🖤', desc: '+1 lifesteal', requires: ['ls0'], tune: { hit: { lifesteal: 1 } } }),
-    ls1b: U({
-      name: 'Blood Bond', icon: '🔗', desc: 'the target gets Lifelink: Gorm heals 1 whenever it is damaged', requires: ['ls0'],
-      effects: [{ kind: 'status', status: 'lifelink', turns: 2 }]
-    }),
-    ls2a: HP(3, { requiresAny: ['ls1a', 'ls1b'] }),
-    ls2b: SMAX(1, { requiresAny: ['ls1a', 'ls1b'] }),
-    ls2c: DMG(1, { requiresAny: ['ls1a', 'ls1b'] }),
-    ls2d: MV(1, { requiresAny: ['ls1a', 'ls1b'] }),
-    ls3a: U({
-      name: 'Spite', icon: '🖤', desc: 'when hit: +1 lifesteal until the end of the turn', requires: ['ls2a', 'ls2b'],
-      triggers: [{ when: 'hit', kind: 'status', status: 'lifesteal', amount: 1, turns: 1 }]
-    }),
-    ls3c: U({
-      name: 'Hunger', icon: '🔶', desc: 'consume all stacks: +1 lifesteal per 2 consumed until the end of the turn', requires: ['ls2c', 'ls2d'],
-      effects: [CONSUME, self('lifesteal', { amount: { per: 'consumed', every: 2 }, turns: 1 })]
-    }),
-    ls4a: HP(3, { requiresAny: ['ls3a', 'ls3c'] }),
-    ls4b: SMAX(1, { requiresAny: ['ls3a', 'ls3c'] }),
-    ls4c: MV(1, { requiresAny: ['ls3a', 'ls3c'] }),
-    ls6a: HP(4, { requiresAny: ['ls4a', 'ls4b', 'ls4c'] }),
-    ls6b: SGEN(1, { requiresAny: ['ls4a', 'ls4b', 'ls4c'] }),
-    ls6c: MV(1, { requiresAny: ['ls4a', 'ls4b', 'ls4c'] }),
-    ls6d: DMG(2, { requiresAny: ['ls4a', 'ls4b', 'ls4c'] }),
   },
 
   // =========================== SPIKE SHOT (Viridi) ==========================
