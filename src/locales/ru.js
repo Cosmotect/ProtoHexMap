@@ -71,6 +71,7 @@ export const ru = {
   'partyview.moment.moved': 'после ходьбы',
   'partyview.stacks': '{n} зарядов, +{gen} за ход',
   'partyview.auto': 'даётся за {n} улучшений',
+  'partyview.reach': 'Нажмите, чтобы взять вместе со всем необходимым',
   'battle.cost.short.forbidden': 'статус запрещает этот вид способности',
   'partyview.source': 'от: {list}',
   'partyview.source.relic': 'реликвия',

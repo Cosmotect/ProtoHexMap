@@ -8,7 +8,9 @@
 //    abilities   one section per ability: what it does, its numbers as this
 //                unit has them (upgrades folded in), the cost, and its upgrade
 //                tree in miniature (src/upgradetree.js) - owned, open and
-//                locked nodes in their parent-child layout
+//                locked nodes in their parent-child layout; outside a fight
+//                any open OR locked node can be clicked to take it (a locked
+//                one brings its prerequisites along)
 //    relic       the relic slot (empty until relics exist)
 //    passives    everything the unit's TRIGGERS give it (config/abilities.js),
 //                with WHERE each came from (a node, a relic, an aura) and WHEN
@@ -34,7 +36,7 @@ import { ABILITY_UPGRADES } from './config/upgrades.js';
 import { STATUSES } from './config/statuses.js';
 import { COMBAT_TAGS } from './config/entities.js';
 import { checkTrigger } from './local/battle/rules.js';
-import { unitAbilityIds, upgradeInfo, abilityDesc, resolveAbility, resolveUnitStats, ownedNodes, triggersFor, unlockUpgrade, abilitySummary } from './upgrades.js';
+import { unitAbilityIds, upgradeInfo, abilityDesc, resolveAbility, resolveUnitStats, ownedNodes, triggersFor, unlockUpgrade, unlockUpgradePath, abilitySummary } from './upgrades.js';
 import { abilityTreeHtml } from './upgradetree.js';
 import { statusesFor, statusInfo, badgeNumber } from './status.js';
 import { makePartyBody } from './local/localview.js';
@@ -114,7 +116,8 @@ export function createPartyView({ config, getGame, getBattle, onClose, onUnitCha
     const nums = abilityNumbers(ab);
     // The whole tree in miniature, the unit's unlocked nodes lit - the same
     // drawing the roster window uses, so the shape reads the same everywhere.
-    const tree = abilityTreeHtml(id, new Set(unit.upgrades ?? []), 'mini');
+    // Here the locked cards stay pressable too (see the click handler below).
+    const tree = abilityTreeHtml(id, new Set(unit.upgrades ?? []), 'mini', { reachLocked: true });
     return `<div class="pv-section pv-ability">
       <div class="pv-sec-head"><span class="pv-sec-icon">${ab.icon}</span><b>${escapeHtml(ab.name)}</b></div>
       <div class="pv-sec-desc">${escapeHtml(abilityDesc(id, config))}</div>
@@ -304,8 +307,12 @@ export function createPartyView({ config, getGame, getBattle, onClose, onUnitCha
   document.getElementById('pv-close')?.addEventListener('click', close);
 
   // Pressing an available (gold) card in a mini tree takes that upgrade for the
-  // column's own unit. Only `open` cards are enabled buttons and unlockUpgrade
-  // re-checks the prerequisites, so nothing gated can be handed out here.
+  // column's own unit. Pressing a LOCKED one takes it too, together with one
+  // way of reaching it - every `requires`, one branch of each `requiresAny`,
+  // the cheapest - so the party can be built up to any node in a click
+  // (unlockUpgradePath; it goes through unlockUpgrade for each step, so the
+  // gating still holds at every one). Owned cards and auto milestones are
+  // disabled buttons and never get here.
   // NOT during a fight: a combat unit is built from its abilities when the
   // fight starts, so a node taken mid-battle would change the card and not the
   // creature - better to refuse it than to lie about it.
@@ -315,7 +322,9 @@ export function createPartyView({ config, getGame, getBattle, onClose, onUnitCha
     if (getBattle()) return;
     const col = card.closest('.pv-member');
     const unit = getGame()?.state?.party?.[Number(col?.dataset.i)];
-    if (!unit || !unlockUpgrade(unit, card.dataset.ref)) return;
+    if (!unit) return;
+    const ok = card.classList.contains('locked') ? unlockUpgradePath(unit, card.dataset.ref).length > 0 : unlockUpgrade(unit, card.dataset.ref);
+    if (!ok) return;
     render(true);
     if (onUnitChanged) onUnitChanged(unit);
   });

@@ -2343,6 +2343,18 @@ button.small {
   opacity: 0.45;
 }
 
+/* A gated card the window lets you reach anyway (the party view): pressable,
+   and it wakes up under the pointer so it reads as such. */
+.ut-card.locked.reach {
+  cursor: pointer;
+}
+
+.ut-card.locked.reach:hover {
+  opacity: 0.85;
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
 /* Ability chips in the party panel (where the power rating used to sit) */
 .ab-chips {
   display: flex;

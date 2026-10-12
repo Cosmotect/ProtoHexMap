@@ -73,6 +73,7 @@ export const en = {
   'partyview.moment.moved': 'after walking',
   'partyview.stacks': '{n} stacks, +{gen} per turn',
   'partyview.auto': 'earned at {n} picks',
+  'partyview.reach': 'Click to take it along with what it needs',
   'partyview.source': 'from {list}',
   'partyview.source.relic': 'relic',
   'partyview.source.aura': 'world-map aura',

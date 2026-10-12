@@ -10,7 +10,7 @@ const base = new URL('../src/', import.meta.url).href;
 const { CONFIG } = await import(base + 'config.js');
 const { createBattle } = await import(base + 'local/battle/engine.js');
 const { K } = await import(base + 'local/battle/bhex.js');
-const { resolveAbility, resolvedAbilitiesFor, resolveUnitStats, triggersFor, ownedNodes, availableUpgrades, unlockUpgrade, auditUpgrades } = await import(base + 'upgrades.js');
+const { resolveAbility, resolvedAbilitiesFor, resolveUnitStats, triggersFor, ownedNodes, availableUpgrades, unlockUpgrade, upgradePath, unlockUpgradePath, auditUpgrades } = await import(base + 'upgrades.js');
 const { ABILITY_UPGRADES } = await import(base + 'config/upgrades.js');
 
 // An ability that does nothing, for enemies that must stand still and take it.
@@ -423,6 +423,42 @@ function volley(b, u, abId, tiles) {
   eq(amount(g, 'weak'), 1, 'Weak 1 applied');
   volley(b, g, 'clawSwipe', K(1, 0));
   eq(E(b, 0).hp, 20 - (3 - 1), 'claw 3 -1 Weak');
+}
+
+// ----- 21. reaching a gated node in one click: upgradePath / unlockUpgradePath ---
+// The party view lets a LOCKED card be pressed; the node comes with the
+// cheapest way of reaching it (all of `requires`, one branch per `requiresAny`).
+{
+  const fresh = () => ({ name: 'Feren', hp: 5, maxHp: 5, upgrades: [], alive: true });
+  // From nothing to the sixth row: ag6a needs one of ag5a-d; ag5a (just ag4a)
+  // is the cheapest of those, ag4a needs one of ag3b-d, ag3c (just ag2c) the
+  // cheapest of THOSE, and so on down to the root.
+  const u = fresh();
+  const path = upgradePath(u, 'glaive:ag6a');
+  eq(JSON.stringify(path), JSON.stringify(['glaive:ag0', 'glaive:ag1b', 'glaive:ag2c', 'glaive:ag3c', 'glaive:ag4a', 'glaive:ag5a', 'glaive:ag6a']), 'the cheapest path, prerequisites first, the node last');
+  const taken = unlockUpgradePath(u, 'glaive:ag6a');
+  eq(taken.length, 7, 'every step of it was taken');
+  check(ownedNodes(u.upgrades, 'glaive').has('ag6a'), 'the target is owned');
+  eq(u.maxHp, 5 + 2 + 3 + 4, 'the HP nodes on the way raised max hp (ag2c +2, ag4a +3, ag6a +4)');
+  eq(u.hp, u.maxHp, '...and current hp with it');
+  check(ownedNodes(u.upgrades, 'glaive').has('shape4'), 'the milestone at 4 picks was earned on the way');
+  // An owned branch of a requiresAny is reused rather than a new one bought.
+  const v = fresh();
+  v.upgrades = ['glaive:ag0', 'glaive:ag1b', 'glaive:ag2a', 'glaive:ag2b', 'glaive:ag3b'];
+  eq(JSON.stringify(upgradePath(v, 'glaive:ag4a')), JSON.stringify(['glaive:ag4a']), 'ag4a is open through the owned ag3b: nothing else to buy');
+  eq(JSON.stringify(upgradePath(v, 'glaive:ag5b')), JSON.stringify(['glaive:ag4a', 'glaive:ag4b', 'glaive:ag5b']), 'ag5b needs both ag4a and ag4b (requires), both reachable through ag3b');
+  // An open node is a path of one; an owned node is no path at all.
+  eq(JSON.stringify(upgradePath(fresh(), 'glaive:ag0')), JSON.stringify(['glaive:ag0']), 'a root is a path of itself');
+  eq(JSON.stringify(unlockUpgradePath(fresh(), 'glaive:ag0')), JSON.stringify(['glaive:ag0']), '...and taking it takes just that');
+  eq(JSON.stringify(upgradePath(v, 'glaive:ag3b')), '[]', 'an owned node needs nothing');
+  eq(unlockUpgradePath(v, 'glaive:ag3b').length, 0, '...and taking it again does nothing');
+  // Auto milestones are earned, never picked - not even through a path.
+  const w = fresh();
+  eq(upgradePath(w, 'glaive:shape8'), null, 'no path to a milestone');
+  eq(unlockUpgradePath(w, 'glaive:shape8').length, 0, '...so nothing is taken');
+  eq(w.upgrades.length, 0, '...and the unit is untouched');
+  eq(upgradePath(w, 'glaive:nope'), null, 'no path to a node that does not exist');
+  eq(upgradePath(w, 'nope:ag0'), null, 'nor to a tree that does not exist');
 }
 
 console.log(`${checks} checks, ${problems.length} problem(s)`);

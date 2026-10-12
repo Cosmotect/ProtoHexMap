@@ -241,6 +241,62 @@ export function unlockUpgrade(unit, ref) {
   return true;
 }
 
+// ----- reaching a gated node in one go ----------------------------------------
+// The shortest list of nodes that would have to be picked, in order, for
+// `ref` to be owned: its `requires` (all of them), ONE branch of each
+// `requiresAny` (an already-owned one if there is one, else the branch that
+// costs the fewest new picks), their own prerequisites before them, and the
+// node itself last. Nodes already owned are left out. null when there is no
+// way to pick it - an auto milestone on the way (those are earned, never
+// picked), a prerequisite that is not in the tree, or a cycle.
+export function upgradePath(unit, ref) {
+  const { abilityId, nodeId } = parseRef(ref);
+  const tree = ABILITY_UPGRADES[abilityId];
+  if (!tree || !tree[nodeId]) return null;
+  const owned = ownedNodes(unit?.upgrades ?? [], abilityId);
+  const plan = [];
+  const walk = (n, stack) => {
+    if (owned.has(n) || plan.includes(n)) return true;
+    const node = tree[n];
+    if (!node || node.auto || stack.has(n)) return false;
+    stack.add(n);
+    const ok = prerequisites(node, stack);
+    stack.delete(n);
+    if (ok) plan.push(n);
+    return ok;
+  };
+  const prerequisites = (node, stack) => {
+    for (const r of node.requires ?? []) if (!walk(r, stack)) return false;
+    const any = node.requiresAny ?? [];
+    if (!any.length || any.some((r) => owned.has(r) || plan.includes(r))) return true;
+    // Try each branch on the end of the plan; keep the one that adds least.
+    let best = null;
+    for (const r of any) {
+      const mark = plan.length;
+      const added = walk(r, stack) ? plan.splice(mark) : (plan.splice(mark), null);
+      if (added && (!best || added.length < best.length)) best = added;
+    }
+    if (!best) return false;
+    plan.push(...best);
+    return true;
+  };
+  return walk(nodeId, new Set()) ? plan.map((n) => upgradeRef(abilityId, n)) : null;
+}
+
+// Takes `ref` and whatever it needs first (upgradePath), each through
+// unlockUpgrade so the usual checks and the maxHp bump apply to every step.
+// Rehearsed on a copy first: either the whole path goes through or nothing
+// is touched. Returns the refs it added, in order ([] when it could not).
+export function unlockUpgradePath(unit, ref) {
+  const path = upgradePath(unit, ref);
+  if (!path || !path.length) return [];
+  const ghost = { ...unit, upgrades: [...(unit.upgrades ?? [])] };
+  for (const r of path) if (!unlockUpgrade(ghost, r)) return [];
+  const taken = [];
+  for (const r of path) if (unlockUpgrade(unit, r)) taken.push(r);
+  return taken;
+}
+
 export function upgradeCount(unit) {
   return (unit.upgrades ?? []).length;
 }

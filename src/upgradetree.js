@@ -20,6 +20,9 @@
 //  `open` one is enabled. Clicking it takes the upgrade - the windows that own
 //  a real unit (the roster's detail pane, the party view) listen for that and
 //  call unlockUpgrade; a window with nobody to grant it to just does not listen.
+//  With `reachLocked`, a `locked` card is enabled too: the window that asked
+//  for it takes the node WITH its prerequisites (unlockUpgradePath). The
+//  party view does; the roster window shows locked cards as they are.
 // =====================================================================
 import { upgradeTree, treeLayout, upgradeRef, upgradeInfo, ownedNodes } from './upgrades.js';
 import { t } from './i18n.js';
@@ -33,8 +36,9 @@ const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&
 const escapeAttr = escapeHtml;
 
 // `unlocked` is a Set of node refs ("<abilityId>:<nodeId>"). Returns '' for an
-// ability with no tree.
-export function abilityTreeHtml(abilityId, unlocked, size = 'full') {
+// ability with no tree. `reachLocked` leaves the locked cards pressable (see
+// the header); the hint for them is `partyview.reach`.
+export function abilityTreeHtml(abilityId, unlocked, size = 'full', { reachLocked = false } = {}) {
   const tree = upgradeTree(abilityId);
   if (!tree) return '';
   const T = SIZES[size] ?? SIZES.full;
@@ -71,9 +75,10 @@ export function abilityTreeHtml(abilityId, unlocked, size = 'full') {
     return `<path class="ut-edge${on}${any}" d="M${x1} ${y1} C${mid} ${y1} ${mid} ${y2} ${x2} ${y2}"></path>`;
   }).join('');
   // Every card is a BUTTON, carrying its own node reference. Only an `open`
-  // one is enabled, so the browser itself refuses a click on an owned or a
-  // still-gated node and whoever wired the window only has to listen for
-  // `.ut-card` clicks and read data-ref. A window that grants nothing (a
+  // one is enabled (and, with `reachLocked`, a `locked` one that is not an
+  // auto milestone), so the browser itself refuses a click on anything else
+  // and whoever wired the window only has to listen for `.ut-card` clicks,
+  // read data-ref and look at the class. A window that grants nothing (a
   // preview of a character who is not in the party) simply does not listen.
   const cards = Object.keys(tree).map((n) => {
     const p = pos[n];
@@ -81,9 +86,11 @@ export function abilityTreeHtml(abilityId, unlocked, size = 'full') {
     const cls = owned.has(n) ? 'owned' : isOpen(n) ? 'open' : 'locked';
     const { name, desc, lore, icon } = upgradeInfo(abilityId, n);
     const note = tree[n].auto ? ` (${t('partyview.auto', { n: tree[n].auto.count })})` : '';
+    const reach = reachLocked && cls === 'locked' && !tree[n].auto;
+    const hint = reach ? `\n${t('partyview.reach')}` : '';
     const style = `left:${p.x}px;top:${p.y}px;width:${T.cardW}px;height:${T.cardH}px`;
-    const attrs = `type="button" class="ut-card ${size === 'mini' ? 'mini ' : ''}${cls}${tree[n].auto ? ' auto' : ''}" style="${style}"`
-      + ` data-ref="${escapeAttr(ref)}" title="${escapeAttr(`${name}${note} - ${lore || desc}`)}"${cls === 'open' ? '' : ' disabled'}`;
+    const attrs = `type="button" class="ut-card ${size === 'mini' ? 'mini ' : ''}${cls}${tree[n].auto ? ' auto' : ''}${reach ? ' reach' : ''}" style="${style}"`
+      + ` data-ref="${escapeAttr(ref)}" title="${escapeAttr(`${name}${note} - ${lore || desc}${hint}`)}"${cls === 'open' || reach ? '' : ' disabled'}`;
     if (size === 'mini') {
       return `<button ${attrs}>
         <span class="ut-text"><b>${escapeHtml(name)}</b><i>${escapeHtml(desc)}</i></span>

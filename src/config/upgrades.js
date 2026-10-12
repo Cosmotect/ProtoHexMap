@@ -146,7 +146,7 @@ export const ABILITY_UPGRADES = {
       }]
     }),
     bl3c: U({
-      requiresAny: ['bl2c', 'bl2d'],
+      requiresAny: ['bl2b', 'bl2d'],
       name: 'Raging Entry', icon: '😡', desc: 'starts each battle enraged',
       triggers: [{ when: 'battleStart', kind: 'status', status: 'enraged', amount: 1, turns: 1 }]
     }),
@@ -156,9 +156,9 @@ export const ABILITY_UPGRADES = {
       tune: { hit: { amount: -2, times: 1 } }
     }),
     //level 4
-    bl4a: HP(3, { requiresAny: ['bl3a', 'bl3c', 'bl3d'] }),
-    bl4b: SMAX(1, { requiresAny: ['bl3a', 'bl3c', 'bl3d'] }),
-    bl4c: MV(1, { requiresAny: ['bl3a', 'bl3c', 'bl3d'] }),
+    bl4a: HP(3, { requiresAny: ['bl3a', 'bl3b', 'bl3c', 'bl3d'] }),
+    bl4b: SMAX(1, { requiresAny: ['bl3a', 'bl3b', 'bl3c', 'bl3d'] }),
+    bl4c: MV(1, { requiresAny: ['bl3a', 'bl3b', 'bl3c', 'bl3d'] }),
     //level 5
     bl5a: U({
       requiresAny: ['bl2a'],
